@@ -1209,3 +1209,86 @@ def hsl_secondary(rgb: np.ndarray, hsl: dict | None) -> np.ndarray:
     g2 = (Y - KR * r2 - KB * b2) / (1 - KR - KB)
     out = np.stack([r2, g2, b2], -1)
     return np.clip(x + w[..., None] * (out - x), 0.0, 1.0)
+
+
+# ------------------------------------------- Lumetri › Vignette (redesign wave 15, VIGNETTE)
+#
+# Premiere's last Lumetri section, after HSL Secondary: Amount, Midpoint, Roundness,
+# Feather. They are four numbers of the segment's `controls` (server.py `clean_controls`
+# validates them in CONTROL_RANGES; their keyframes ride `controls.keys` under the same
+# names, as Motion's do):
+#
+#   "vignette_amount"     -5..5    0  (off)   < 0 darkens the edges, > 0 lightens them
+#   "vignette_midpoint"    0..100  50         lower reaches further into the picture
+#   "vignette_roundness" -100..100  0         + toward a circle, − toward the frame's rectangle
+#   "vignette_feather"     0..100  50         0 a hard edge, 100 the softest falloff
+#
+# THE formula, per pixel on RGB 0..1, last of Lumetri (after HSL Secondary's clamp). A
+# pixel centre (x, y) of a W × H frame is at u = (2x + 1)/W − 1, v = (2y + 1)/H − 1 (−1..1
+# across and down). With R = roundness/100, m = midpoint/100, f = feather/100, a = amount:
+#
+#   shape     sx = 1 + max(R, 0)·(W/H − 1)      R → 1: a circle of the frame's height
+#             p  = 2 + 8·max(−R, 0)             R → −1: a superellipse near the rectangle
+#             d  = (|sx·u|^p + |v|^p)^(1/p) / (sx^p + 1)^(1/p)    0 at the centre, 1 at a corner
+#   falloff   c  = 0.25 + 0.75·m                the edge (half strength), as d
+#             h  = max(0.5·c·f, 0.0005)         half the feather's width
+#             w  = smoothstep(c − h, c + h, d)  smoothstep(e0, e1, x) = t²(3 − 2t),
+#                                               t = clamp((x − e0)/(e1 − e0), 0, 1)
+#   picture   s  = |a|/5 · w
+#             y' = y·(1 − s) + s·[a > 0]        toward black (a < 0) or white (a > 0)
+#
+# The centre is never touched: d < c − h ≥ c/2 ≥ 0.125 there. app/static/grade.js's
+# shader (`vignette()` in CREATIVE) is the same formula, step for step, at the Program's
+# own frame; the export (research/tools/assemble.py `vignette_graph`) draws `vignette_mask`
+# below as a signed mask and applies the last line in Y'CbCr, where it is the same affine
+# map: Y' = 16 + (Y − 16)(1 − s) + 219·s·[a > 0], C' = 128 + (C − 128)(1 − s).
+
+VIGNETTE_FIELDS = {          # control: (lo, hi, default), the panel's own units
+    "vignette_amount": (-5.0, 5.0, 0.0),
+    "vignette_midpoint": (0.0, 100.0, 50.0),
+    "vignette_roundness": (-100.0, 100.0, 0.0),
+    "vignette_feather": (0.0, 100.0, 50.0),
+}
+VIGNETTE_PARTS = ("amount", "midpoint", "roundness", "feather")
+
+
+def vignette_values(controls: dict | None) -> tuple[float, float, float, float]:
+    """(amount, midpoint, roundness, feather): the static values, defaults filled in."""
+    c = controls or {}
+    return tuple(float(c[k]) if c.get(k) is not None else d
+                 for k, (_, _, d) in VIGNETTE_FIELDS.items())
+
+
+def vignette_weight(u, v, aspect: float, midpoint: float, roundness: float,
+                    feather: float) -> np.ndarray:
+    """w at (u, v) (−1..1 across and down) of a frame `aspect` = W/H wide: 0 untouched,
+    1 the whole Amount (THE formula's shape and falloff)."""
+    R = max(-1.0, min(1.0, float(roundness) / 100.0))
+    sx = 1.0 + max(R, 0.0) * (float(aspect) - 1.0)
+    p = 2.0 + 8.0 * max(-R, 0.0)
+    u, v = np.asarray(u, np.float64), np.asarray(v, np.float64)
+    d = (np.abs(sx * u) ** p + np.abs(v) ** p) ** (1.0 / p) / (sx ** p + 1.0) ** (1.0 / p)
+    c = 0.25 + 0.75 * float(midpoint) / 100.0
+    h = max(0.5 * c * float(feather) / 100.0, 0.0005)
+    return _smoothstep(c - h, c + h, d)
+
+
+def vignette_mask(width: int, height: int, midpoint: float, roundness: float,
+                  feather: float) -> np.ndarray:
+    """w at every pixel centre of a width × height frame, (height, width) float."""
+    u = (2.0 * (np.arange(width) + 0.5) / width - 1.0)[None, :]
+    v = (2.0 * (np.arange(height) + 0.5) / height - 1.0)[:, None]
+    return vignette_weight(u, v, width / height, midpoint, roundness, feather)
+
+
+def vignette_apply(rgb: np.ndarray, amount: float, w: np.ndarray) -> np.ndarray:
+    """THE formula's last line on (..., 3) RGB 0..1 with the weight `w` (broadcast)."""
+    x = np.asarray(rgb, np.float64)
+    s = abs(float(amount)) / 5.0 * np.asarray(w, np.float64)[..., None]
+    return x * (1.0 - s) + (s if amount > 0 else 0.0)
+
+
+def vignette_on(controls: dict | None) -> bool:
+    """The vignette draws: its Amount is not 0, or is keyed."""
+    c = controls or {}
+    return bool(c.get("vignette_amount")) or bool((c.get("keys") or {}).get("vignette_amount"))

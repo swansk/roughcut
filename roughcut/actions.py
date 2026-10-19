@@ -58,7 +58,8 @@ THE OPS (each maps to the human path named after the arrow)
                                                  / Right / Bottom %, feather px), transform
                                                  (posx / posy px, scale %, rotation °,
                                                  opacity %), gaussian_blur (blurriness px,
-                                                 dimensions both|horizontal|vertical)
+                                                 dimensions both|horizontal|vertical),
+                                                 sharpen (amount: Sharpen Amount 0..500)
   Lumetri Color
     curve         {id, channel, points}      → effects.curve  channel master|r|g|b;
                                                  points [[x, y], …] on 0..1, x increasing
@@ -72,6 +73,13 @@ THE OPS (each maps to the human path named after the arrow)
     match         {ids, to: previous|reference, reference?}  Color Match: to the shot
                                                  before, or to the reference shot (`reference`
                                                  makes that shot the reference first)
+    vignette      {id, amount?, midpoint?, roundness?, feather?}  → Lumetri › Vignette
+                                                 (wave 15): each value typed in its row
+                                                 (effects.set vignette_*); amount -5..5
+                                                 (− darker edges, + lighter), midpoint 0..100,
+                                                 roundness -100..100, feather 0..100. Their
+                                                 stopwatches are the `keys` op's
+                                                 vignette_amount … vignette_feather
   Transitions (the Effects bin's seven)
     transition    {a, b, kind, dur?}         → tl.addTransition  centred on the edit
                                                  between shot a and the next shot b
@@ -115,7 +123,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
     "timeline": ("insert", "overwrite", "append", "move", "razor", "ripple_delete", "trim",
                  "roll", "slip", "speed", "marker", "in_out", "track_add", "overlay"),
     "effect_controls": ("set", "keys", "effect"),
-    "lumetri": ("curve", "wheel", "look", "match"),
+    "lumetri": ("curve", "wheel", "look", "match", "vignette"),
     "transitions": ("transition", "fade"),
     "designed_effects": ("design_effect",),
     "export": ("export",),
@@ -158,9 +166,16 @@ SET_PROPS: dict[str, tuple[str, float, float, str]] = {
     "hsl_saturation": ("HSL saturation", 0.0, 200.0, ""),
     "hsl_temperature": ("HSL temperature", -100.0, 100.0, ""),
     "hsl_tint": ("HSL tint", -100.0, 100.0, ""),
+    # Lumetri › Vignette (wave 15, VIGNETTE; roughcut/colour.py has THE formula)
+    "vignette_amount": ("Vignette Amount", -5.0, 5.0, ""),
+    "vignette_midpoint": ("Vignette Midpoint", 0.0, 100.0, ""),
+    "vignette_roundness": ("Vignette Roundness", -100.0, 100.0, ""),
+    "vignette_feather": ("Vignette Feather", 0.0, 100.0, ""),
 }
 # the stopwatch's properties (keyframes); a V2+ clip takes these and nothing else
-KEY_PROPS = ("posx", "posy", "scale", "rotation", "opacity", "volume_db")
+KEY_PROPS = ("posx", "posy", "scale", "rotation", "opacity", "volume_db",
+             "vignette_amount", "vignette_midpoint", "vignette_roundness", "vignette_feather")
+VIGNETTE_PARTS = ("amount", "midpoint", "roundness", "feather")
 OVERLAY_PROPS = ("posx", "posy", "scale", "rotation", "opacity")
 CURVE_CHANNELS = {"master": "RGB master", "r": "red", "g": "green", "b": "blue"}
 
@@ -241,6 +256,7 @@ Lumetri Color
   {{"op":"wheel","id","range":"shadows"|"midtones"|"highlights","x","y","level"?}}   the puck inside the unit circle (x toward blue, y toward red, ~0.05–0.2 is a visible push); level -100..100
   {{"op":"look","ids":[…] or "all","name","strength"?}}   a look from the library, "none" for no look, "film" for a shot to take the film's; strength 0..1
   {{"op":"match","ids":[…],"to":"previous"|"reference","reference"?}}   Color Match to the shot before, or to the reference shot
+  {{"op":"vignette","id","amount","midpoint"?,"roundness"?,"feather"?}}   Lumetri › Vignette, Premiere's: amount -5..5 (− darkens the edges, + lightens them; -1 to -2 is a soft dark one), midpoint 0..100 (50; lower reaches further in), roundness -100..100 (0; + rounder, − squarer), feather 0..100 (50; higher is softer). The centre of the picture is never touched
 Transitions
   {{"op":"transition","a","b","kind","dur"?}}    centred on the edit between shot a and the next shot b; kinds: {kinds}; dur {TRANSITION_MIN_S:g}–{TRANSITION_MAX_S:g} s (default 1)
   {{"op":"fade","id","edge":"start"|"end","kind","dur"?}}   one-sided at a shot's first or last frames (a fade from / to black is dip_to_black)
@@ -329,8 +345,10 @@ def _num_text(prop: str, v: float) -> str:
     label, lo, hi, unit = SET_PROPS[prop]
     if prop == "exposure":
         return _signed(v, 2)
+    if prop == "vignette_amount":
+        return _signed(v, 1) if v else "0.0"
     if prop in ("temperature", "tint", "contrast", "highlights", "shadows", "whites",
-                "blacks", "hsl_shift", "hsl_temperature", "hsl_tint") and v != 0:
+                "blacks", "hsl_shift", "hsl_temperature", "hsl_tint", "vignette_roundness") and v != 0:
         return _signed(v, 1 if abs(v) < 10 and v != int(v) else 0) + unit
     if prop == "volume_db":
         return _signed(v, 1, " dB") if v else "0 dB"
@@ -911,7 +929,7 @@ def _c_keys(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
         raise Refused(f"{prop!r} has no stopwatch (keyframes go on {', '.join(KEY_PROPS)})")
     sid, seg, ov = _target(raw, sim, overlay_ok=True)
     if ov and prop not in OVERLAY_PROPS:
-        raise Refused("a clip on V2+ has no Volume")
+        raise Refused(f"a clip on V2+ takes Motion and Opacity only, not {SET_PROPS[prop][0]}")
     keys = raw.get("keys")
     if not isinstance(keys, list) or not keys:
         raise Refused("needs `keys`: [[t, value], …]")
@@ -936,6 +954,10 @@ def _c_keys(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
             raise Refused(f"two keys on the frame at {tg:.2f} s")
         clean.append([tg, _r(v, 3)])
     clean.sort(key=lambda x: x[0])
+    if prop.startswith("vignette_") and not ov:
+        # the cut the ops after it meet: a keyed Amount is a vignette a `vignette` op may shape
+        c0 = seg.get("controls") or {}
+        seg["controls"] = {**c0, "keys": {**(c0.get("keys") or {}), prop: clean}}
     vals = " → ".join(_num_text(prop, c[1]) for c in clean[:4]) + (" …" if len(clean) > 4 else "")
     span = f" over {clean[-1][0] - clean[0][0]:.2f} s" if len(clean) > 1 else f" at {clean[0][0]:.2f} s"
     line = f"{_who(sim, sid, ov)}: {label} keyframes {vals}{span} ({len(clean)} key{'s' if len(clean) != 1 else ''})"
@@ -1084,6 +1106,36 @@ def _c_wheel(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
         words += f", lightness {_signed(lv, 0)}"
     line = f"{_cap(sim.label(seg['id']))}: Lumetri {WHEELS[rng]} wheel {words}"
     return clean, line
+
+
+def _c_vignette(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
+    """Lumetri › Vignette on a V1 shot: the values given, each as its row would be typed."""
+    sid = raw.get("id")
+    if sid is not None and str(sid) in sim.overlays:
+        raise Refused("Lumetri Color applies to shots on V1: a clip on V2+ renders as shot")
+    seg = sim.shot(sid)
+    extra = set(raw) - {"op", "id", *VIGNETTE_PARTS}
+    if extra:
+        raise Refused(f"a vignette has no {sorted(extra)[0]!r} (it has {', '.join(VIGNETTE_PARTS)})")
+    clean: dict = {"op": "vignette", "id": seg["id"]}
+    words: list[str] = []
+    for part in VIGNETTE_PARTS:
+        if raw.get(part) is None:
+            continue
+        prop = f"vignette_{part}"
+        label, lo, hi, unit = SET_PROPS[prop]
+        v = _r(_number(raw, part, lo, hi, label, unit), 3)
+        clean[part] = v
+        words.append(f"{part.capitalize()} {_num_text(prop, v)}")
+    have = (seg.get("controls") or {}).get("vignette_amount") \
+        or ((seg.get("controls") or {}).get("keys") or {}).get("vignette_amount")
+    if not words:
+        raise Refused("say the vignette's values: amount -5..5 (−1 to −2 is a soft dark one)")
+    if clean.get("amount") is None and not have:
+        raise Refused("a vignette needs its amount (-5..5; −1 to −2 is a soft dark one): 0 draws nothing")
+    seg["controls"] = {**(seg.get("controls") or {}),
+                       **{f"vignette_{k}": clean[k] for k in VIGNETTE_PARTS if k in clean}}
+    return clean, f"{_cap(sim.label(seg['id']))}: Lumetri Vignette — {', '.join(words)}"
 
 
 def _c_look(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
@@ -1265,7 +1317,7 @@ CHECK = {
     "slip": _c_slip, "speed": _c_speed, "marker": _c_marker, "in_out": _c_in_out,
     "track_add": _c_track_add, "overlay": _c_overlay, "set": _c_set, "keys": _c_keys,
     "effect": _c_effect,
-    "curve": _c_curve, "wheel": _c_wheel, "look": _c_look, "match": _c_match,
+    "curve": _c_curve, "wheel": _c_wheel, "look": _c_look, "match": _c_match, "vignette": _c_vignette,
     "transition": _c_transition, "fade": _c_fade, "design_effect": _c_design_effect,
     "export": _c_export,
 }

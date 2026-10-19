@@ -193,7 +193,7 @@ def norm(edl: dict) -> dict:
 UNDO_WORDS = set("""AI: + more edit edits insert inserts overwrite overwrites move moves razor cut cuts
 ripple delete deletes trim trims roll rolls slip slips speed changes change marker markers In/Out
 new track tracks overlay overlays keyframes keyframe sets colour transition transitions fade fades
-effect effects export exports opacity volume motion video""".split())
+effect effects export exports opacity volume motion video vignette vignettes""".split())
 
 
 def check_undo_title(title: str) -> str:
@@ -420,6 +420,68 @@ def test_a_video_effect_shows_on_the_program_before_accept_and_reject_writes_not
         p.wait_for_function("!rcActions.open")
         assert p.evaluate("effects.vfx(tl.byId('shot-a'))") == []
         p.wait_for_function("getComputedStyle(liveVideo()).clipPath === 'none'")
+        p.wait_for_timeout(900)
+        assert b.raw() == before
+    finally:
+        b.close()
+
+
+def test_lumetri_vignette_and_sharpen(browser, live_server, project):
+    """Wave 15, VIGNETTE (verdict 11 punch 7): "put a soft vignette on this shot" is Lumetri ›
+    Vignette — the `vignette` op types each value in its row; a keyed Amount is the `keys`
+    op on its stopwatch, and a later `vignette` op shapes it; Sharpen is the `effect` op's
+    kind. The AI's accept and the same edits by hand land the same EDL, one Ctrl+Z back."""
+    ops = [{"op": "vignette", "id": "shot-a", "amount": -1.5, "midpoint": 45, "feather": 70},
+           {"op": "keys", "id": "shot-b", "prop": "vignette_amount", "keys": [[0.0, 0], [1.5, -3]]},
+           {"op": "vignette", "id": "shot-b", "roundness": 40},
+           {"op": "effect", "id": "shot-c", "kind": "sharpen", "params": {"amount": 80}}]
+    hand = """() => {
+      const seg = (id) => tl.byId(id);
+      effects.set('vignette_amount', -1.5, seg('shot-a'));              // Lumetri › Vignette, typed
+      effects.set('vignette_midpoint', 45, seg('shot-a'));
+      effects.set('vignette_feather', 70, seg('shot-a'));
+      // the stopwatch: select the shot, playhead on the frame, stopwatch, type the value
+      tl.select(['shot-b'], {source: 'click'});
+      const s = tl.filmStart('shot-b');
+      tl.seek(s + 0.0); effects.animate('vignette_amount'); effects.set('vignette_amount', 0, seg('shot-b'));
+      tl.seek(s + 1.5); effects.set('vignette_amount', -3, seg('shot-b'));
+      effects.set('vignette_roundness', 40, seg('shot-b'));
+      effects.vfxAdd('sharpen', ['shot-c']);                              // dropped from the bin
+      effects.set('amount@sharpen', 80, seg('shot-c'));                   // typed in its section
+    }"""
+    ai, h, _ = ai_then_hand(browser, live_server, project, ops, hand)
+    assert ai == h
+    a, b, c = (ai["segments"][i]["controls"] for i in range(3))
+    assert a == {"vignette_amount": -1.5, "vignette_midpoint": 45, "vignette_feather": 70}
+    assert b == {"vignette_roundness": 40, "keys": {"vignette_amount": [[0.0, 0.0], [1.5, -3.0]]}}
+    assert c == {"vfx": [{"id": "sharpen", "kind": "sharpen", "params": {"amount": 80.0}}]}
+
+
+def test_a_vignette_shows_on_the_program_before_accept_and_reject_writes_nothing(browser, live_server, project):
+    """Dimension 15: a `vignette` op under review is on the Program before it lands (the
+    shader's vignette on the shot, After), ◐ shows it without (Before), nothing is saved,
+    and Reject all puts the shot back as it was."""
+    b = Board(browser, live_server, project)
+    try:
+        b.settle()
+        time.sleep(0.3)
+        before = b.raw()
+        b.review(b.ask([{"op": "vignette", "id": "shot-a", "amount": -3, "feather": 60}]))
+        p = b.page
+        p.wait_for_function("rcActions.previewing")
+        assert p.locator("[data-testid=ai-op-row]").inner_text().count("Lumetri Vignette") == 1
+        p.wait_for_function("grade.shot === 'shot-a' && grade.adjust && grade.adjust.vig"
+                            " && grade.adjust.vig[0] === -3 && grade.adjust.vig[3] === 60")
+        p.locator("[data-testid=ai-before-after]").click()             # Before
+        p.wait_for_function("!grade.adjust || !grade.adjust.vig")
+        p.locator("[data-testid=ai-before-after]").click()             # After again
+        p.wait_for_function("grade.adjust && grade.adjust.vig && grade.adjust.vig[0] === -3")
+        p.wait_for_timeout(900)                                        # past any autosave
+        assert b.raw() == before
+        p.locator("[data-testid=ai-reject-all]").click()
+        p.wait_for_function("!rcActions.open")
+        p.wait_for_function("!grade.adjust || !grade.adjust.vig")
+        assert p.evaluate("tl.byId('shot-a').controls || null") is None
         p.wait_for_timeout(900)
         assert b.raw() == before
     finally:

@@ -27,7 +27,8 @@
  *   tl.setSpeed; marker → tl.addMarker; in_out → tl.setSeqIn / setSeqOut; track_add →
  *   tl.addTrack; overlay → tl.addOverlay; set → effects.set; keys → the stopwatch
  *   (effects.animate) and a value typed with the playhead on each key (effects.set);
- *   curve / wheel → effects.curve / effects.wheel; look / match → app.js colourEdit, as
+ *   curve / wheel → effects.curve / effects.wheel; vignette → each Lumetri › Vignette
+ *   value typed in its row (effects.set vignette_*); look / match → app.js colourEdit, as
  *   the colour pane's selects and buttons; transition / fade → tl.addTransition /
  *   tl.addFade; design_effect → the Designed Effects tool on that shot, its Design
  *   pressed (its own proposal and review follow); export → the Export dialog, filled in
@@ -82,17 +83,21 @@
   };
   /* eslint-enable no-undef */
 
-  const KEY_GROUP = { posx: 'pos', posy: 'pos', scale: 'scale', rotation: 'rotation', opacity: 'opacity', volume_db: 'volume_db' };
-  const KEY_PROP = { posx: 'position_x', posy: 'position_y', scale: 'scale', rotation: 'rotation', opacity: 'opacity', volume_db: 'volume_db' };
+  // Lumetri › Vignette's four numbers (wave 15, VIGNETTE): each its own stopwatch, as Premiere's
+  const VIG_PROPS = ['vignette_amount', 'vignette_midpoint', 'vignette_roundness', 'vignette_feather'];
+  const KEY_GROUP = { posx: 'pos', posy: 'pos', scale: 'scale', rotation: 'rotation', opacity: 'opacity', volume_db: 'volume_db',
+                      ...Object.fromEntries(VIG_PROPS.map((k) => [k, k])) };
+  const KEY_PROP = { posx: 'position_x', posy: 'position_y', scale: 'scale', rotation: 'rotation', opacity: 'opacity', volume_db: 'volume_db',
+                     ...Object.fromEntries(VIG_PROPS.map((k) => [k, k])) };
   const CUT_OPS = new Set(['insert', 'overwrite', 'append', 'move', 'razor', 'ripple_delete', 'trim', 'roll', 'slip', 'speed']);
-  const LOOK_OPS = new Set(['set', 'keys', 'effect', 'curve', 'wheel', 'look', 'match']);   // shown on the Program
+  const LOOK_OPS = new Set(['set', 'keys', 'effect', 'curve', 'wheel', 'vignette', 'look', 'match']);   // shown on the Program
   const TX_OPS = new Set(['transition', 'fade']);                                // drawn on the timeline
   const FAMILY = {
     insert: 'timeline', overwrite: 'timeline', append: 'timeline', move: 'timeline', razor: 'timeline',
     ripple_delete: 'timeline', trim: 'timeline', roll: 'timeline', slip: 'timeline', speed: 'timeline',
     marker: 'timeline', in_out: 'timeline', track_add: 'timeline', overlay: 'timeline',
     set: 'effect_controls', keys: 'effect_controls', effect: 'effect_controls',
-    curve: 'lumetri', wheel: 'lumetri', look: 'lumetri', match: 'lumetri',
+    curve: 'lumetri', wheel: 'lumetri', vignette: 'lumetri', look: 'lumetri', match: 'lumetri',
     transition: 'transitions', fade: 'transitions', design_effect: 'designed_effects', export: 'export',
   };
   const FAMILY_NAME = { timeline: 'Timeline', effect_controls: 'Effect Controls', lumetri: 'Lumetri Color',
@@ -282,6 +287,19 @@
       const level = op.level == null ? cur[2] : Number(op.level);
       if (!fx || !fx.wheel(op.range, [Number(op.x) || 0, Number(op.y) || 0, level], seg)) refuse('Lumetri refused the wheel');
     },
+    // Lumetri › Vignette (wave 15): each value typed in its row, Amount first, as the hand
+    vignette(op, c) {
+      const { seg, ov } = c.target(op.id);
+      if (ov) refuse('Lumetri Color applies to clips on V1');
+      const fx = FX();
+      ['amount', 'midpoint', 'roundness', 'feather'].forEach((k) => {
+        if (op[k] == null) return;
+        const prop = `vignette_${k}`;
+        if (fx && Math.abs(Number(fx.value(prop, c.target(op.id).seg)) - Number(op[k])) < 1e-9) return;
+        if (!fx || !fx.set(prop, Number(op[k]), c.target(op.id).seg)) refuse(`Lumetri refused the vignette's ${k}`);
+      });
+      void seg;
+    },
     look(op, c) {
       const name = String(op.name);
       const strength = op.strength == null ? null : Number(op.strength);
@@ -376,7 +394,7 @@
    * that the header's "undo: … (Ctrl+Z)" stays within 40 characters, and shortened only
    * by whole items ("AI: trim + move + 2 more"), never inside a word. */
   const LABEL_MAX = 25;              // 40 − "undo: " − " (Ctrl+Z)"
-  const COLOUR_PROP = /^(temperature|tint|exposure|contrast|highlights|shadows|whites|blacks|saturation|hsl_)/;
+  const COLOUR_PROP = /^(temperature|tint|exposure|contrast|highlights|shadows|whites|blacks|saturation|hsl_|vignette_)/;
   const NOUN = {
     insert: ['insert', 'inserts'], overwrite: ['overwrite', 'overwrites'], append: ['insert', 'inserts'],
     move: ['move', 'moves'], razor: ['razor cut', 'razor cuts'], ripple_delete: ['ripple delete', 'ripple deletes'],
@@ -388,6 +406,7 @@
     transition: ['transition', 'transitions'], fade: ['fade', 'fades'],
     design_effect: ['effect', 'effects'], export: ['export', 'exports'],
     effect: ['video effect', 'video effects'],
+    vignette: ['vignette', 'vignettes'],
   };
   function nounOf(op) {
     if (op.op !== 'set') return NOUN[op.op] || ['edit', 'edits'];
@@ -525,6 +544,7 @@
       case 'effect': return `${Shot(op.id)}: ${op.remove ? 'clear ' : ''}${((FX() && FX().VFX) || {})[op.kind] ? FX().VFX[op.kind].name : op.kind}`;
       case 'curve': return `${Shot(op.id)}: Lumetri ${op.channel || 'master'} curve`;
       case 'wheel': return `${Shot(op.id)}: Lumetri ${op.range} wheel`;
+      case 'vignette': return `${Shot(op.id)}: Lumetri Vignette`;
       case 'look': return `${op.ids === 'all' ? 'The film' : (op.ids || []).map(Shot).join(', ')}: look ${op.name}`;
       case 'match': return `${(op.ids || []).map(Shot).join(', ')}: Color Match to the ${op.to === 'previous' ? 'shot before' : 'reference'}`;
       case 'transition': return `${kind(op.kind)} between ${shot(op.a)} and ${shot(op.b)}`;

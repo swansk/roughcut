@@ -64,7 +64,8 @@ def _seg_controls(seg: dict) -> str:
     c = seg.get("controls") if isinstance(seg.get("controls"), dict) else {}
     bits: list[str] = []
     for k in ("scale", "rotation", "opacity", "volume_db", "contrast", "highlights", "shadows",
-              "whites", "blacks", "saturation"):
+              "whites", "blacks", "saturation", "vignette_amount", "vignette_midpoint",
+              "vignette_roundness", "vignette_feather"):
         if k in c:
             bits.append(f"{k} {c[k]:g}" if isinstance(c[k], (int, float)) else k)
     if isinstance(c.get("position"), list):
@@ -75,6 +76,9 @@ def _seg_controls(seg: dict) -> str:
     for k in ("curves", "wheels", "hsl"):
         if c.get(k):
             bits.append(f"lumetri {k}")
+    vfx = [e.get("kind") for e in c.get("vfx") or [] if isinstance(e, dict)]
+    if vfx:
+        bits.append("video effects " + "/".join(str(k) for k in vfx))
     if c.get("fx_off"):
         bits.append("designed effects bypassed")
     return ", ".join(bits)
@@ -274,7 +278,13 @@ Export presets: {presets}
   razor; take out → ripple_delete; swap or reorder → move.
 - a dissolve between two shots → transition cross_dissolve (audio_crossfade for the sound);
   fade in / out → fade with dip_to_black at the start / end.
-- a title, a graphic, hit markers, an arrow → design_effect with a note saying what and where.
+- a vignette (darker or lighter edges or corners, "draw the eye to the middle") → vignette,
+  Lumetri's own: amount −1 to −2 with feather 60 to 80 for a soft one, −3 or less for a
+  heavy one; never a design_effect.
+- sharper / crisper → effect sharpen (amount 50 to 150); softer / dreamy → effect
+  gaussian_blur; crop the edges → effect crop.
+- a title, a graphic, hit markers, an arrow → design_effect with a note saying what and where
+  (only what no tool above draws).
 - a review copy, a file to upload, the final file → export with quick, youtube or master.
 
 ## What to answer

@@ -160,8 +160,10 @@ def mean_luma(page, clip: dict) -> float:
 def test_every_animatable_property_has_a_stopwatch_and_a_lane(page):
     select_first(page)
     groups = page.locator("#inspector .ec-sw").evaluate_all("els => els.map(e => e.dataset.sw)")
-    assert groups == ["pos", "scale", "rotation", "opacity", "volume_db"], groups
-    assert page.locator("#inspector .ec-lane").count() == 5
+    # Motion, Opacity, Volume, and Lumetri › Vignette's four (wave 15, VIGNETTE)
+    assert groups == ["pos", "scale", "rotation", "opacity", "volume_db", "vignette_amount",
+                      "vignette_midpoint", "vignette_roundness", "vignette_feather"], groups
+    assert page.locator("#inspector .ec-lane").count() == 9
     # not animated: no ◀ ◆ ▶, no diamonds; the lane shows the playhead at the shot's start
     assert page.locator("#inspector .ec-anim.animated").count() == 0
     assert page.locator("#inspector .ec-kf").count() == 0
@@ -171,7 +173,7 @@ def test_every_animatable_property_has_a_stopwatch_and_a_lane(page):
     assert left == "0%", left
     # the lanes line up in one column, on the right of the panel
     xs = page.locator("#inspector .ec-lane").evaluate_all(
-        "els => els.map(e => Math.round(e.getBoundingClientRect().right))")
+        "els => els.filter(e => e.offsetParent).map(e => Math.round(e.getBoundingClientRect().right))")
     assert len(set(xs)) == 1, xs
 
 

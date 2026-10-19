@@ -1450,6 +1450,9 @@ CONTROL_RANGES = {
     # Lumetri Basic Correction's tone (wave 6): grade.js's shader documents the formula
     "highlights": (-100.0, 100.0, 0.0), "shadows": (-100.0, 100.0, 0.0),
     "whites": (-100.0, 100.0, 0.0), "blacks": (-100.0, 100.0, 0.0),
+    # Lumetri › Vignette (wave 15, VIGNETTE): roughcut/colour.py has THE formula
+    "vignette_amount": (-5.0, 5.0, 0.0), "vignette_midpoint": (0.0, 100.0, 50.0),
+    "vignette_roundness": (-100.0, 100.0, 0.0), "vignette_feather": (0.0, 100.0, 50.0),
 }
 
 # Keyframes (wave 6, verdict 5 punch 4; schema in judge/LOOP.md): `controls.keys` is
@@ -1461,6 +1464,9 @@ KEY_RANGES = {
     "position_x": (-10.0, 10.0), "position_y": (-10.0, 10.0),
     "scale": (0.0, 1000.0), "rotation": (-3600.0, 3600.0),
     "opacity": (0.0, 100.0), "volume_db": (-60.0, 6.0),
+    # Lumetri › Vignette's four numbers each have a stopwatch (wave 15, VIGNETTE)
+    "vignette_amount": (-5.0, 5.0), "vignette_midpoint": (0.0, 100.0),
+    "vignette_roundness": (-100.0, 100.0), "vignette_feather": (0.0, 100.0),
 }
 KEYS_MAX = 64
 KEY_T_MAX = 24 * 3600.0
@@ -1536,7 +1542,9 @@ def clean_controls(raw, overlay: bool = False) -> dict | None:
         - set(LUMETRI_CREATIVE)
     if extra:
         raise ValueError(f"unknown control {sorted(extra)[0]!r}")
-    if overlay and any(raw.get(k) is not None for k in LUMETRI_CREATIVE):
+    raw_keys0 = raw.get("keys") if isinstance(raw.get("keys"), dict) else {}
+    if overlay and (any(raw.get(k) is not None for k in (*LUMETRI_CREATIVE, *colourmod.VIGNETTE_FIELDS))
+                    or any(k in raw_keys0 for k in colourmod.VIGNETTE_FIELDS)):
         raise ValueError("Lumetri Color applies to V1 shots: a clip on V2+ renders as shot")
     if overlay and raw.get("vfx"):
         raise ValueError("video effects apply to V1 shots: a clip on V2+ renders as shot")

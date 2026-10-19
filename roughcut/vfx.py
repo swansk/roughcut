@@ -3,6 +3,7 @@
 Premiere's standard effects, in its folders and with its parameters:
 
   Blur & Sharpen › Gaussian Blur   Blurriness, Blur Dimensions
+  Blur & Sharpen › Sharpen         Sharpen Amount (wave 15, VIGNETTE; verdict 11 punch 7)
   Distort › Transform              Position, Scale, Rotation, Opacity (its own, apart from
                                    Motion, as Premiere has both)
   Transform › Crop                 Left, Top, Right, Bottom (%), Edge Feather
@@ -47,6 +48,14 @@ research/tools/assemble.py `vfx_graph` are both these):
   Blur       a Gaussian of σ = Blurriness·W/1920 px across, down or both (Blur
              Dimensions); outside the frame reads black (Premiere's default, Repeat Edge
              Pixels off: the edges soften toward black).
+  Sharpen    an unsharp mask on the frame's own pixels: with a = Sharpen Amount/100 and B
+             the 3 × 3 binomial blur ([1 2 1]ᵀ[1 2 1]/16), out = x + a·(x − B∗x), per
+             channel, the frame's edge pixels repeated past it — one 3 × 3 kernel,
+             (1 + a)·δ − a·B: corners −a/16, sides −2a/16, centre 1 + 12a/16
+             (`sharpen_kernel`). The Program runs it as an SVG feConvolveMatrix on R'G'B';
+             the export as `convolution` on each Y'CbCr plane (the same linear map; the
+             chroma at its own 4:2:0 size). On the frame's own pixel grid, as Premiere's
+             is: the Program's monitor, smaller than the frame, shows it a little coarser.
 """
 
 from __future__ import annotations
@@ -89,6 +98,10 @@ KINDS: dict[str, Kind] = {
         (Param("blurriness", "Blurriness", 0.0, 500.0, 0.0, " px", 3),),
         {"dimensions": ("both", "horizontal", "vertical")},
         "softens the picture: a Gaussian blur, across, down or both"),
+    "sharpen": Kind(
+        "sharpen", "Sharpen", "Blur & Sharpen",
+        (Param("amount", "Sharpen Amount", 0.0, 500.0, 0.0, "", 3),),
+        {}, "crispens the picture's edges: an unsharp mask, Sharpen Amount 100 adds the detail once more"),
     "transform": Kind(
         "transform", "Transform", "Distort",
         (Param("position_x", "Position X", -10.0, 10.0, 0.5, "", 6),
@@ -310,3 +323,10 @@ def describe(controls: dict | None) -> str:
         bits.append(f"{k.name}{' (off)' if e.get('off') else ''}"
                     + (f" {', '.join(vals)}" if vals else ""))
     return "; ".join(bits)
+
+
+def sharpen_kernel(amount: float) -> list[float]:
+    """Sharpen's 3 × 3 kernel, row by row, for a Sharpen Amount (THE formula above)."""
+    a = max(0.0, float(amount)) / 100.0
+    c, e = -a / 16.0, -2.0 * a / 16.0
+    return [c, e, c, e, 1.0 + 12.0 * a / 16.0, e, c, e, c]

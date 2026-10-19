@@ -152,10 +152,14 @@ def test_the_bin_lists_premieres_video_effects_and_finds_them(board):
     assert folders == ["Audio Transitions", "Crossfade", "Video Effects", "Blur & Sharpen", "Distort",
                        "Transform", "Video Transitions", "Dissolve"], folders
     items = pg.eval_on_selector_all("#fxbin .fxb-item[data-vfx]", "els => els.map(e => [e.dataset.vfx, e.textContent.trim()])")
-    assert items == [["gaussian_blur", "Gaussian Blur"], ["transform", "Transform"], ["crop", "Crop"]]
+    # (Sharpen beside Gaussian Blur: wave 15, VIGNETTE)
+    assert items == [["gaussian_blur", "Gaussian Blur"], ["sharpen", "Sharpen"], ["transform", "Transform"],
+                     ["crop", "Crop"]]
     q = pg.locator("#fxbinQ")
-    q.fill("blur")
+    q.fill("gaussian")
     assert [t.strip() for t in pg.locator("#fxbin .fxb-item .nm").all_inner_texts()] == ["Gaussian Blur"]
+    q.fill("blur")                            # the folder's name matches: all of Blur & Sharpen
+    assert [t.strip() for t in pg.locator("#fxbin .fxb-item .nm").all_inner_texts()] == ["Gaussian Blur", "Sharpen"]
     q.fill("transform")                       # Premiere's: the Transform folder (Crop) and Distort's Transform
     assert [t.strip() for t in pg.locator("#fxbin .fxb-item .nm").all_inner_texts()] == ["Transform", "Crop"]
     q.fill("")

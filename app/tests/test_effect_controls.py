@@ -175,9 +175,10 @@ def test_the_sections_are_premieres_and_the_head_is_timecode(page):
         assert want in rows, (want, rows)
     # Lumetri Color › Basic Correction in Premiere's order: White Balance, Tone, Saturation,
     # each a slider with its number
-    # Lumetri's sections in Premiere's order (Curves, Wheels and HSL: wave 11, LUMETRI)
+    # Lumetri's sections in Premiere's order (Curves, Wheels and HSL: wave 11, LUMETRI;
+    # Vignette: wave 15, VIGNETTE)
     assert page.locator("#inspector [data-sec=lumetri] .ec-subtw span").all_inner_texts() == [
-        "Basic Correction", "Curves", "Color Wheels & Match", "HSL Secondary"]
+        "Basic Correction", "Curves", "Color Wheels & Match", "HSL Secondary", "Vignette"]
     basic = page.locator("#inspector [data-sub=basic] .ec-lum .ec-name").all_inner_texts()
     assert basic == ["Temperature", "Tint", "Exposure", "Contrast", "Highlights", "Shadows",
                      "Whites", "Blacks", "Saturation"], basic
