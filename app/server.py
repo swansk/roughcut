@@ -1622,8 +1622,18 @@ SLOW_MS = 500.0
 LOOP_LAG_MS = 250.0
 SLOW_KEEP = 50
 SLOW: list[dict] = []
-SLOWEST: dict = {"all": None, "api": None}
-_LOOP_WATCH: dict = {"task": None}
+SLOWEST: dict = {"all": None, "api": None, "loop": None}
+_LOOP_WATCH: dict = {"task": None, "beat": None, "tid": None, "sampler": None, "hold": None,
+                     "cpu_base": None}
+# The budget (wave 14, verdict 10 punch 1: "no request > 300 ms and no loop hold > 200
+# ms" during a first pass, an export and an effect check): what is over it is kept apart
+# (`over_budget`, the last 50), each loop hold with `where` the loop was and which threads
+# ran meanwhile (`_loop_sampler`), so a hold names its cause rather than only its length.
+REQUEST_BUDGET_MS = 300.0
+LOOP_BUDGET_MS = 200.0
+OVER_BUDGET: list[dict] = []
+LOOP_TICK_S = 0.05
+LOOP_SAMPLE_S = 0.04
 # Read your own save: a reload sends its keepalive flush and then asks for the page (and
 # the cut) at once, on different connections; the page is served once the saves that
 # had arrived are applied (waiting at most READ_AFTER_SAVE_S), never the cut before it.
@@ -1636,6 +1646,9 @@ def note_request(row: dict) -> None:
         top = SLOWEST[key]
         if top is None or row["ms"] > top["ms"]:
             SLOWEST[key] = row
+    if row["ms"] >= REQUEST_BUDGET_MS:
+        OVER_BUDGET.append(row)
+        del OVER_BUDGET[:-SLOW_KEEP]
     if row["ms"] >= SLOW_MS:
         SLOW.append(row)
         del SLOW[:-SLOW_KEEP]
@@ -1643,18 +1656,120 @@ def note_request(row: dict) -> None:
               f"({row['handler']})", flush=True)
 
 
+_HERE_ROOT = str(HERE.parent)
+
+
+def _stack_words(frame, n: int = 4) -> list[str]:
+    """Where a thread is, said briefly: its innermost frame, then the innermost frames
+    of this repo's code (`file:line func`; not the `main` every request runs under).
+    A loop thread in `select` is idle — `["idle (select)"]`."""
+    words: list[str] = []
+    first = True
+    while frame is not None and len(words) < n:
+        code = frame.f_code
+        name = Path(code.co_filename).name
+        if first and name == "selectors.py":
+            return ["idle (select)"]
+        mine = code.co_filename.startswith(_HERE_ROOT) and code.co_name != "main"
+        if first or mine:
+            words.append(f"{name}:{frame.f_lineno} {code.co_name}")
+        first = False
+        frame = frame.f_back
+    return words
+
+
+def _thread_cpu() -> dict[int, float]:
+    out: dict[int, float] = {}
+    for t in threading.enumerate():
+        try:
+            out[t.ident] = time.clock_gettime(time.pthread_getcpuclockid(t.ident))
+        except (OSError, TypeError, AttributeError, OverflowError):
+            continue
+    return out
+
+
+def _loop_sampler() -> None:
+    """A thread beside the loop. While the loop keeps its beat it notes every thread's
+    CPU time (the baseline a hold is measured from); while the loop has missed its beat
+    by more than a tick it notes where the loop thread is — the loop running sync work
+    shows its own frames, a loop waiting for the GIL shows the selector."""
+    while True:
+        time.sleep(LOOP_SAMPLE_S)
+        beat, tid = _LOOP_WATCH.get("beat"), _LOOP_WATCH.get("tid")
+        now = time.perf_counter()
+        if beat is None or tid is None:
+            continue
+        if now - beat < LOOP_TICK_S * 2:
+            _LOOP_WATCH["cpu_base"] = (beat, _thread_cpu(), time.process_time())
+            continue
+        frames = sys._current_frames()
+        hold = _LOOP_WATCH.get("hold")
+        if hold is None or hold.get("beat") != beat:
+            hold = _LOOP_WATCH["hold"] = {"beat": beat, "loop": {}, "samples": 0}
+        hold["samples"] += 1
+        where = " < ".join(_stack_words(frames.get(tid)))
+        hold["loop"][where] = hold["loop"].get(where, 0) + 1
+
+
+def _hold_where(beat: float) -> dict:
+    """What a hold that began after `beat` was: where the loop was (the sampler's
+    commonest frame, when it ran during the hold), the loop thread's own CPU and the
+    threads that used the most CPU since the last kept beat — a hold with neither is the
+    box starving the process, not the server holding its loop."""
+    out: dict = {"loop": "", "samples": 0}
+    hold = _LOOP_WATCH.get("hold")
+    if hold and hold.get("beat") == beat and hold["loop"]:
+        out["loop"] = max(hold["loop"].items(), key=lambda kv: kv[1])[0]
+        out["samples"] = hold["samples"]
+    base = _LOOP_WATCH.get("cpu_base")
+    if base is None:
+        return out
+    cpu = _thread_cpu()
+    tid = _LOOP_WATCH.get("tid")
+    out["loop_cpu_ms"] = round((cpu.get(tid, 0.0) - base[1].get(tid, cpu.get(tid, 0.0))) * 1000.0, 1)
+    names = {t.ident: t.name for t in threading.enumerate()}
+    frames = sys._current_frames()
+    ran = sorted(((cpu[k] - base[1].get(k, 0.0), k) for k in cpu      # a new thread: all of it
+                  if k != tid and k != (_LOOP_WATCH.get("sampler") or threading).ident),
+                 reverse=True)
+    out["busy"] = [f"{names.get(k, k)} ({dt * 1000.0:.0f} ms cpu): "
+                   + " < ".join(_stack_words(frames.get(k), 3))
+                   for dt, k in ran[:3] if dt * 1000.0 >= 10]
+    out["busy_cpu_ms"] = round(ran[0][0] * 1000.0, 1) if ran else 0.0
+    # the whole process (threads that ended meanwhile, and work beside the GIL too)
+    out["proc_cpu_ms"] = round((time.process_time() - base[2]) * 1000.0, 1)
+    return out
+
+
 async def _loop_lag() -> None:
-    tick = 0.1
+    _LOOP_WATCH["tid"] = threading.get_ident()
+    sampler = _LOOP_WATCH.get("sampler")
+    if sampler is None or not sampler.is_alive():
+        sampler = _LOOP_WATCH["sampler"] = threading.Thread(
+            target=_loop_sampler, name="loop sampler", daemon=True)
+        sampler.start()
+    tick = LOOP_TICK_S
     while True:
         t0 = time.perf_counter()
+        _LOOP_WATCH["beat"] = t0
         await asyncio.sleep(tick)
         lag = (time.perf_counter() - t0 - tick) * 1000.0
-        if lag >= LOOP_LAG_MS:
+        top = SLOWEST["loop"]
+        where = _hold_where(t0) if lag >= 20.0 else None
+        if lag > 0 and (top is None or lag > top["ms"]):
+            SLOWEST["loop"] = {"ms": round(lag, 1), "at": time.time(), "where": where}
+        if lag >= LOOP_BUDGET_MS:
             row = {"method": "LOOP", "path": "(the event loop was held)", "handler": "-",
-                   "ms": round(lag, 1), "status": None, "at": time.time()}
-            SLOW.append(row)
-            del SLOW[:-SLOW_KEEP]
-            print(f"  !! the event loop was held {lag:.0f} ms", flush=True)
+                   "ms": round(lag, 1), "status": None, "at": time.time(), "where": where}
+            OVER_BUDGET.append(row)
+            del OVER_BUDGET[:-SLOW_KEEP]
+            if lag >= LOOP_LAG_MS:
+                SLOW.append(row)
+                del SLOW[:-SLOW_KEEP]
+                w = row["where"] or {}
+                print(f"  !! the event loop was held {lag:.0f} ms"
+                      + (f" — loop at {w.get('loop')}" if w.get("loop") else "")
+                      + (f"; ran: {'; '.join(w['busy'])}" if w.get("busy") else ""), flush=True)
 
 
 def _watch_loop() -> None:
@@ -1686,6 +1801,21 @@ class RequestTiming:
                 first[0], first[1] = time.perf_counter(), msg.get("status")
             await send(msg)
 
+        # The time spent waiting for the client's body is the client's (a 110 MB drop
+        # is its bytes on the wire, not the server's work): kept as `body_ms`, not in
+        # `ms` (wave 14). A request whose body is already here never waits in it.
+        waited = [0.0]
+        raw_receive = receive
+
+        async def body():
+            t = time.perf_counter()
+            msg = await raw_receive()
+            # only a body's bytes, before the reply began (a disconnect listener waits
+            # here for the whole response, and that is nobody's work)
+            if msg.get("type") == "http.request" and first[0] is None:
+                waited[0] += time.perf_counter() - t
+            return msg
+
         if saving:
             SAVES_IN_FLIGHT["n"] += 1
         elif method == "GET" and where in ("/", "/api/project") and SAVES_IN_FLIGHT["n"]:
@@ -1693,7 +1823,7 @@ class RequestTiming:
             while SAVES_IN_FLIGHT["n"] and time.perf_counter() < until:
                 await asyncio.sleep(0.02)
         try:
-            await self.app(scope, receive, timed)
+            await self.app(scope, body, timed)
         finally:
             if saving:
                 SAVES_IN_FLIGHT["n"] -= 1
@@ -1701,10 +1831,14 @@ class RequestTiming:
             if path != "/api/debug/slow":
                 end = first[0] if first[0] is not None else time.perf_counter()
                 ep = scope.get("endpoint")
-                note_request({"method": scope.get("method"), "path": path,
-                              "handler": getattr(ep, "__name__", None) or "-",
-                              "ms": round((end - t0) * 1000.0, 1), "status": first[1],
-                              "at": time.time()})
+                row = {"method": scope.get("method"), "path": path,
+                       "handler": getattr(ep, "__name__", None) or "-",
+                       "ms": round((end - t0 - min(waited[0], end - t0)) * 1000.0, 1),
+                       "status": first[1], "at": time.time()}
+                if waited[0] >= 0.001:
+                    row.update(body_ms=round(waited[0] * 1000.0, 1),
+                               wall_ms=round((end - t0) * 1000.0, 1))
+                note_request(row)
 
 
 app.add_middleware(RequestTiming)
@@ -1713,9 +1847,14 @@ app.add_middleware(RequestTiming)
 @app.get("/api/debug/slow")
 def api_debug_slow() -> JSONResponse:
     """Read-only: the last 50 requests over SLOW_MS (and event-loop holds), and the
-    slowest request (`slowest`) and slowest `/api/` request (`slowest_api`) seen."""
+    slowest request (`slowest`) and slowest `/api/` request (`slowest_api`) seen; the
+    budget (`budget`: a request's first byte within 300 ms, the loop never held 200 ms)
+    with the last 50 over it (`over_budget`, holds with `where`) and the longest hold
+    (`slowest_loop`)."""
     return JSONResponse({"threshold_ms": SLOW_MS, "slowest": SLOWEST["all"],
-                         "slowest_api": SLOWEST["api"], "slow": list(SLOW)})
+                         "slowest_api": SLOWEST["api"], "slowest_loop": SLOWEST["loop"],
+                         "budget": {"request_ms": REQUEST_BUDGET_MS, "loop_ms": LOOP_BUDGET_MS},
+                         "over_budget": list(OVER_BUDGET), "slow": list(SLOW)})
 
 
 @app.post("/api/snap")

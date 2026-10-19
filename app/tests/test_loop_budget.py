@@ -44,6 +44,226 @@ VIGNETTE = {"duration": 2.0, "size": 1.6, "anim": {},
                        for r2 in (0.3, 0.36, 0.42, 0.48, 0.54, 0.6, 0.66, 0.71)]}
 
 
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def _overloaded() -> bool:
+    return os.getloadavg()[0] >= 1.5 * (os.cpu_count() or 1)
+
+
+def _ours(hold: dict) -> bool:
+    """Did the server's own threads run through this hold (or the loop sit in our
+    code)? See the module's docstring."""
+    w = hold.get("where") or {}
+    ran = float(w.get("loop_cpu_ms") or 0) + float(w.get("busy_cpu_ms") or 0)
+    in_code = bool(w.get("loop")) and w["loop"] != "idle (select)"
+    return in_code or ran >= 0.5 * float(hold["ms"])
+
+
+@pytest.fixture
+def live(tmp_path, project, monkeypatch):
+    """The board on a real loop: a copy of the suite's cut, scripted model, stubbed
+    index tools, everything written under tmp_path."""
+    import uvicorn
+    import server
+    from test_firstpass import Scripted, _end_jobs
+    from test_index import _stub_tools
+
+    edl = tmp_path / "edl.json"
+    shutil.copy(project["edl"], edl)
+    work = tmp_path / "work"
+    server.configure(edl, project["footage"], project["sidecars"], work, proxies=False,
+                     visual=tmp_path / "no-visual", assets=project["assets"])
+    _stub_tools(server, monkeypatch, tmp_path)
+    monkeypatch.setattr(server, "FIRSTPASS_POLL_S", 0.05)
+    monkeypatch.setattr(server, "FX_VERIFY_POLL_S", 0.1)
+    server.FIRSTPASS.clear()
+    server.INDEXES.clear()
+    model = Scripted()
+    inference.set_backend(model)
+    inference.reset_spend()
+    for k in ("all", "api", "loop"):
+        server.SLOWEST[k] = None
+    server.SLOW.clear()
+    server.OVER_BUDGET.clear()
+    port = _free_port()
+    srv = uvicorn.Server(uvicorn.Config(server.app, host="127.0.0.1", port=port,
+                                        log_level="error"))
+    th = threading.Thread(target=srv.run, daemon=True)
+    th.start()
+    for _ in range(200):
+        if srv.started:
+            break
+        time.sleep(0.05)
+    base = f"http://127.0.0.1:{port}"
+    httpx.get(base + "/api/jobs", timeout=10)          # the first request starts the watcher
+    try:
+        yield {"base": base, "server": server, "work": work, "tmp": tmp_path}
+    finally:
+        _end_jobs(server, model)
+        srv.should_exit = True
+        th.join(timeout=15)
+        inference.set_backend(None)
+
+
+def _poll(base: str, stop: threading.Event, seen: list) -> None:
+    """The board's own polling, at about its rate: every endpoint a screen reads."""
+    paths = ["/api/jobs", "/api/flow", "/api/firstpass", "/api/status", "/api/backend",
+             "/api/project", "/api/picks", "/api/fx", "/api/clips",
+             "/api/assist/price?text=put%20a%20soft%20vignette%20on%20shot%201"]
+    with httpx.Client(base_url=base, timeout=30) as c:
+        while not stop.is_set():
+            for p in paths:
+                t = time.perf_counter()
+                c.get(p)
+                seen.append((p, (time.perf_counter() - t) * 1000))
+            stop.wait(0.25)
+
+
+def _upload(base: str, path: Path) -> dict:
+    size = path.stat().st_size
+    plan = httpx.post(base + "/api/upload", json={"files": [{"name": path.name, "size": size}]},
+                      timeout=30).json()
+
+    def chunks():
+        with open(path, "rb") as fh:
+            while True:
+                b = fh.read(1 << 20)
+                if not b:
+                    return
+                yield b
+    t = time.perf_counter()
+    r = httpx.put(f"{base}/api/upload/{plan['batch']}/0", content=chunks(), timeout=120)
+    dt = time.perf_counter() - t
+    return {"status": r.status_code, "s": dt, "mbps": size / dt / 1e6, "reply": r.json()}
+
+
+def test_a_first_pass_an_export_and_an_effect_check_stay_inside_the_budget(live):
+    base, server = live["base"], live["server"]
+    # a big real video for the drop: uncompressed, so it is made at once (67 MB)
+    drop = live["tmp"] / "drop" / "KX_DROP.mov"
+    drop.parent.mkdir()
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-f", "lavfi",
+                    "-i", "testsrc2=size=640x360:rate=24:duration=6", "-f", "lavfi",
+                    "-i", "sine=frequency=440:duration=6", "-c:v", "rawvideo",
+                    "-pix_fmt", "uyvy422", "-c:a", "pcm_s16le", str(drop)],
+                   check=True, capture_output=True)
+    # the vignette on shot 1, proposed (a design is a model call; this is its answer)
+    segs = httpx.get(base + "/api/project").json()["segments"]
+    shot = segs[0]
+    e = fx.validate_effect({"id": "fx_vig00001", "shot": shot["id"], "clip": shot["clip"],
+                            "name": "soft edge vignette", "status": "proposed",
+                            "events": [{"t": shot["in"], "x": 0.5, "y": 0.5}],
+                            "overlay": {**VIGNETTE, "duration": shot["out"] - shot["in"]},
+                            "sound": None}, segs)
+    fx.save(server.fx_home(), e)
+
+    stop, seen = threading.Event(), []
+    pollers = [threading.Thread(target=_poll, args=(base, stop, seen), daemon=True)
+               for _ in range(2)]
+    for t in pollers:
+        t.start()
+    try:
+        r = httpx.post(base + "/api/firstpass", json={"mode": "run"}, timeout=30)
+        assert r.status_code == 200, r.text
+        r = httpx.post(base + "/api/render", json={"preset": "quick", "name": "budget",
+                                                    "segments": segs}, timeout=30)
+        assert r.status_code == 200, r.text
+        render = r.json()["job"]
+        check = httpx.post(base + "/api/fx/verify", json={"id": e["id"]}, timeout=30).json()["job"]
+        up = _upload(base, drop)
+        assert up["status"] == 200, up
+        deadline = time.time() + 240
+        while time.time() < deadline:
+            jobs = {j["id"]: j for j in httpx.get(base + "/api/jobs", timeout=30).json()["jobs"]}
+            fp = httpx.get(base + "/api/firstpass", timeout=30).json()
+            done = [jobs.get(j, {}).get("state") in ("done", "failed", None) for j in (render, check)]
+            if all(done) and fp["state"] != "running":
+                break
+            time.sleep(0.5)
+        else:
+            raise AssertionError(f"jobs still running: {jobs}")
+        time.sleep(1.0)
+    finally:
+        stop.set()
+        for t in pollers:
+            t.join(timeout=30)
+    slow = httpx.get(base + "/api/debug/slow").json()
+    assert slow["budget"] == {"request_ms": 300.0, "loop_ms": 200.0}
+    holds = [r for r in slow["over_budget"] if r["method"] == "LOOP"]
+    reqs = [r for r in slow["over_budget"] if r["method"] != "LOOP"]
+    assert slow["slowest_loop"] is not None                         # the watcher ran
+    report = (f"load {os.getloadavg()[0]:.1f}; holds {[(h['ms'], h.get('where')) for h in holds]}; "
+              f"requests {[(r['ms'], r['method'], r['path']) for r in reqs]}")
+    assert not [h for h in holds if _ours(h)], report
+    if not _overloaded():
+        assert not holds and not reqs, report
+    else:
+        assert not [r for r in reqs if r["ms"] > 1000.0], report
+    # the drop's body is the client's time, the server's part of it is the write
+    put = [r for r in [slow["slowest"]] + slow["over_budget"]
+           if r and r["path"].startswith("/api/upload/")]
+    assert all(r.get("body_ms") is not None or r["ms"] < 300 for r in put), put
+    assert up["mbps"] >= 11.0, up                  # 110 MB in under 10 s
+    assert len(seen) > 40
+    assert httpx.get(f"{base}/api/job/{render}").json()["state"] == "done"
+    snap = httpx.get(f"{base}/api/job/{check}").json()
+    assert snap["state"] == "done" and snap["detail"] == "every check passed", snap
+    assert snap.get("check_pid"), "the check did not run in a child process"
+
+
+def test_a_hold_says_where_the_loop_was_and_what_ran(live):
+    """The watcher's account of a hold names its cause: an async handler doing sync
+    work shows its own frame; a thread keeping the GIL (one long C call) shows as the
+    thread that ran; a request's body time is the client's, not the request's."""
+    from fastapi.routing import APIRoute
+    base, server = live["base"], live["server"]
+
+    async def budget_sleeps_on_the_loop():
+        time.sleep(0.35)                               # the bug: sync work on the loop
+        return {"ok": True}
+
+    def budget_hogs_the_gil():
+        def hog():
+            sum(range(60_000_000))                     # one C call: the GIL never drops
+            time.sleep(1.5)                            # a job thread lives on after it
+        threading.Thread(target=hog, name="gil hog", daemon=True).start()
+        return {"ok": True}
+
+    added = [APIRoute("/api/test/sleeps", budget_sleeps_on_the_loop, methods=["GET"]),
+             APIRoute("/api/test/hogs", budget_hogs_the_gil, methods=["GET"])]
+    server.app.router.routes.extend(added)
+    try:
+        httpx.get(base + "/api/test/sleeps", timeout=30)
+        time.sleep(0.3)
+        slow = httpx.get(base + "/api/debug/slow").json()
+        hold = max((r for r in slow["over_budget"] if r["method"] == "LOOP"),
+                   key=lambda r: r["ms"], default=None)
+        assert hold is not None and hold["ms"] >= 250, slow["over_budget"]
+        assert "budget_sleeps_on_the_loop" in hold["where"]["loop"], hold
+        assert _ours(hold)
+        server.OVER_BUDGET.clear()
+
+        t0 = time.perf_counter()
+        sum(range(1_000_000))
+        per = time.perf_counter() - t0
+        if per * 60 < 0.25:
+            pytest.skip(f"this box sums 60M in {per * 60:.2f} s: too fast to hold 200 ms")
+        httpx.get(base + "/api/test/hogs", timeout=30)
+        time.sleep(per * 60 + 1.0)
+        slow = httpx.get(base + "/api/debug/slow").json()
+        holds = [r for r in slow["over_budget"] if r["method"] == "LOOP"]
+        assert holds, slow
+        hold = max(holds, key=lambda r: r["ms"])
+        assert any(b.startswith("gil hog") for b in hold["where"]["busy"]), hold
+        assert hold["where"]["busy_cpu_ms"] >= 0.5 * hold["ms"] and _ours(hold), hold
+    finally:
+        for r in added:
+            server.app.router.routes.remove(r)
+
 
 # ------------------------------------------------------------ the pieces
 
@@ -63,8 +283,6 @@ def test_a_sidecar_is_parsed_once_per_version_and_each_reader_gets_its_own(tmp_p
         server.read_json_file(p)
     with pytest.raises(OSError):
         server.read_json_file(tmp_path / "gone.json")
-
-
 
 
 def test_stale_cli_facts_answer_at_once_and_are_asked_again_behind(monkeypatch):
