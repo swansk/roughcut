@@ -49,6 +49,15 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-19 ~06:00 (box clock): **VERDICT 11 FAIL on `18944d0`** (1:9 2:9 3:9 4:9 5:9 6:8 7:8 8:9 9:8 10:7 11:9 12:9 13:9
+  14:9 15:8 16:9; the judge's gate GREEN: 1720 passed, 1 flaky, journey 24 no retry; perf counted the after-suite pass at
+  load 5.8, the before-suite failed at 7.5). Blockers: dimension 10 at 7 (a Designed Effects accept can't be undone,
+  fx.js:321; 24 requests > 300 ms, thumbnails to 2 s); K2 + K3 open. The K3 walk had no guesses. Rulings: retry -> AMBER
+  honest; SERVERPERF's timing honest (asks the journey line to print the slowest loop hold, RED > 200 ms). Verdict 10's
+  punch: done 2 3 7 8; partly 1 4 5 6 9 10. Rubric log: the speed test's clocks + 5/5 standalone + both gate runs, and
+  the loop watch (stricter). FOR-KARL updated to this rev. **Wave 15** (judge/WAVE15.md) from `4ba5ed1`: FXUNDO (2), PERF5
+  (3, 9), BUDGET (4, 5), RERUN2 (6), VIGNETTE (7), POLISH11 (8, 10). Punch 1 = Karl's look: the 8766 restart from a
+  frozen snapshot still waits for his yes.
 - 2026-10-19 ~04:50 (box clock): **PLAY4 merged** `82d6854` (no `muted` toggles while playing: Chrome's audio clock jumped
   40-80 ms at every prerolled cut; Killington dissolve plays with a hold > 67 ms 24/96 -> 7/144; a fresh import plays from a
   360p head in 6.2-6.6 s, was ~21 s; black past the end; "Media offline" for a missing generated clip). **Lead full gate
