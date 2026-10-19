@@ -8263,7 +8263,8 @@ def ensure_poster(stem: str, t: float, slots: threading.BoundedSemaphore | None 
 PREVIEW_H = 360                 # the preview's short edge
 PREVIEW_GOP_S = 0.5             # a keyframe every half second: a seek decodes ≤ that
 PREVIEW_WAIT_S = 20.0           # (before verdict 8) how long /media/proxy held a request
-PROXY_ANSWER_S = 0.3            # /media/proxy holds a building clip this long (a preview landing in it is served)
+PROXY_ANSWER_S = 0.15           # /media/proxy holds a building clip this long (a preview landing in it is served;
+                                # was 0.3: the whole 300 ms budget, verdict 11 punch 4)
 HOLD_S = 8.0                    # a monitor told "building" keeps that build unpaused this long
 PREVIEW_RATE = {True: 0.25, False: 1.0}   # build s per footage s before one is measured (GPU, CPU)
 PREVIEW_SLOTS = threading.BoundedSemaphore(2)   # one background + one asked-for at once
