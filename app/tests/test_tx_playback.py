@@ -8,8 +8,9 @@ kind of footage (4K 59.94 H.264 with a 1 s GOP and grain, proxied by the server'
 (`prog.tx.in` before the edit, `#pvTxOut` after it), each by `requestVideoFrameCallback`.
 Since wave 11 (CANVAS, verdict 8 punch 3) the incoming follower is the buffer prerolling
 the incoming shot, handed the role from the dissolve's park (one decoder fewer), or
-`#pvTxIn` when that buffer is not at the frame; the test follows whichever element plays
-each half. A dissolve shows both pictures, so a hole in either one is a hitch on screen;
+`#pvTxIn` when that buffer is not at the frame; since wave 14 (PLAY4, verdict 10 punch 5)
+the outgoing half is the live buffer kept playing past the edit, `#pvTxOut` only when it
+cannot be; the test follows whichever element plays each half. A dissolve shows both pictures, so a hole in either one is a hitch on screen;
 the longest gap of each follower inside its half of the mix window must be <= GAP_LIMIT_MS
 (two frame periods at 29.97), with no seek on it. Two variants:
 
@@ -17,7 +18,11 @@ the longest gap of each follower inside its half of the mix window must be <= GA
     buffer — what the judge's Killington cut does
   * graded (a hand balance on both shots): the grade worker draws the follower's frame
     through its own LUT over the live one (grade.setMix); also the canvas's draws, held to
-    the same limit through the dissolve and across a plain graded cut
+    the same limit through the dissolve and across a plain graded cut; and the same through
+    a 0.4 s dissolve (the judge's Ctrl+D on Killington, 0.2 s a side)
+
+(Since wave 14 an ungraded dissolve is drawn by the grade canvas too while it plays,
+through identity tables; paused, its follower is the CSS layer as before.)
 
 And: each follower is decoded and running BEFORE its half starts (no seek, no open at the
 window's edge), the incoming shot's LUT is fetched before the window (the mix never waits
@@ -88,11 +93,11 @@ def _make_source(path: Path, colour: str) -> None:
         check=True, capture_output=True)
 
 
-def _edl(graded: bool) -> dict:
+def _edl(graded: bool, dur: float = DUR) -> dict:
     colour = ({"mode": "auto", "shots": {s["id"]: {"balance": dict(BALANCE)} for s in SEGS}}
               if graded else {"mode": "off"})
     return {"variant": "T", "title": "tx", "orient": "none", "story": "", "target_s": [5, 20],
-            "segments": SEGS, "transitions": [DISSOLVE], "colour": colour}
+            "segments": SEGS, "transitions": [{**DISSOLVE, "dur": dur}], "colour": colour}
 
 
 @pytest.fixture(scope="module")
@@ -305,11 +310,13 @@ def _open(pw, url):
     return browser, page, errors
 
 
-def _play(tx_project, tx_server, graded: bool, runs: int | None = None, plain: bool = False):
-    """Play across the dissolve `runs` times (ROUGHCUT_TX_RUNS, default 1); with `plain`,
-    then across the plain cut s2 -> s3 once, and return (the first dissolve run, the plain)."""
+def _play(tx_project, tx_server, graded: bool, runs: int | None = None, plain: bool = False,
+          dur: float = DUR):
+    """Play across the dissolve (`dur` long) `runs` times (ROUGHCUT_TX_RUNS, default 1); with
+    `plain`, then across the plain cut s2 -> s3 once, and return (the first dissolve run, the
+    plain)."""
     runs = runs or int(os.environ.get("ROUGHCUT_TX_RUNS", "1"))
-    tx_project["edl"].write_text(json.dumps(_edl(graded), indent=1), encoding="utf-8")
+    tx_project["edl"].write_text(json.dumps(_edl(graded, dur), indent=1), encoding="utf-8")
     out = []
     with sync_playwright() as pw:
         browser, page, errors = _open(pw, tx_server)
@@ -323,6 +330,7 @@ def _play(tx_project, tx_server, graded: bool, runs: int | None = None, plain: b
                     rec = measure_dissolve(page)
                     rec["burners"] = b.n
                     rec["graded"] = graded
+                    rec["dur"] = dur
                     rec["busy"] = busy
                     print("\nTXPLAY", json.dumps(rec), flush=True)
                     out.append(rec)
@@ -387,7 +395,29 @@ def test_playing_through_a_graded_dissolve_has_no_hole(tx_project, tx_server):
     rec, plain = _play(tx_project, tx_server, graded=True, plain=True)
     # the incoming shot's LUT was in before the window: none fetched while it played
     assert "s2" in rec["luts_before"] and "s2" not in rec["luts_during"], rec
+    _check(rec, _canvas_check(plain))
 
+
+def test_playing_through_a_short_graded_dissolve_has_no_hole(tx_project, tx_server):
+    """Verdict 10 punch 5: the judge's Ctrl+D Cross Dissolve on Killington is 0.4 s (0.2 s a
+    side), and 4 of 6 graded plays through it held a frame 83-117 ms. There the incoming
+    shot's preroll starts TX_PRE + 0.2 s before the edit: before wave 14 at the same moment
+    as #pvTxOut's play() (TX_PRE_OUT 0.45), two pipelines starting together beside the live
+    one. Now the outgoing half is the live buffer kept playing past the edit (advance,
+    `txKeepsOut`), so nothing starts there but the preroll; and no buffer is muted or unmuted
+    while it plays (`hush`: its clock jumped at the cut). The same limits as the 1 s one."""
+    rec = _play(tx_project, tx_server, graded=True, dur=0.4)[0]
+    assert rec["window_film_s"] == [round(CUT - 0.2, 3), round(CUT + 0.2, 3)], rec["window_film_s"]
+    # the outgoing half was the buffer that played the outgoing shot, not #pvTxOut
+    assert rec["tx_el"].get("pvTxOut") == [rec["cut_log"][-1].get("kept")], (rec["tx_el"], rec["cut_log"])
+    assert rec["tx_el"]["pvTxOut"][0].startswith("pv") and not rec["tx_el"]["pvTxOut"][0].startswith("pvTx")
+    # (the plain graded cut's canvas is the 1 s test's: not measured twice)
+    _check(rec, _canvas_check(None))
+
+
+def _canvas_check(plain):
+    """The graded canvas through the dissolve <= GAP_LIMIT_MS; with `plain`, across that plain
+    graded cut too."""
     def canvas(r):
         # The graded canvas — what the viewer sees through a graded dissolve: the live shot's
         # frame and the follower's, each through its own grade, drawn by the worker — holds
@@ -395,11 +425,13 @@ def test_playing_through_a_graded_dissolve_has_no_hole(tx_project, tx_server):
         # punch 2-3: the worker uploads each frame's planes at the size they are read, so a
         # dissolve's two frames fit where TXHITCH could only ask for "no worse than a plain
         # graded cut + a frame"). And no worse than that plain cut on the same page.
+        was = plain["longest_draw_ms"] if plain else None
         assert r["longest_draw_ms"] is not None and r["longest_draw_ms"] <= GAP_LIMIT_MS, \
-            f"the graded canvas's frames held through the dissolve (plain cut {plain['longest_draw_ms']}): {r}"
-        assert plain["longest_draw_ms"] is not None and plain["longest_draw_ms"] <= GAP_LIMIT_MS, \
-            f"the graded canvas's frames held across the plain cut: {plain}"
-    _check(rec, canvas)
+            f"the graded canvas's frames held through the dissolve (plain cut {was}): {r}"
+        if plain is not None:
+            assert plain["longest_draw_ms"] is not None and plain["longest_draw_ms"] <= GAP_LIMIT_MS, \
+                f"the graded canvas's frames held across the plain cut: {plain}"
+    return canvas
 
 
 # ------------------------------------------------------------------ the picture

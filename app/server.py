@@ -8176,7 +8176,8 @@ def stop_media() -> int:
         MEDIA["walk_gen"] += 1
         sc, MEDIA["scope"] = MEDIA.get("scope"), None
         ask, MEDIA["ask_scope"] = MEDIA.get("ask_scope"), None
-    n = sum(x.kill() for x in (sc, ask) if x is not None)
+        heads = [h["scope"] for h in (MEDIA.get("head_build") or {}).values()]
+    n = sum(x.kill() for x in (sc, ask, *heads) if x is not None)
     MEDIA["stopped"] += n
     return n
 
@@ -8306,7 +8307,10 @@ def yield_tick() -> dict:
     """One look: while the Program plays, pause every background ffmpeg nobody waits on;
     otherwise (and for a build somebody now waits on) let the paused ones run again.
     Every background ffmpeg, a close look's own included, is at nice 19."""
-    play = playing_now()
+    # a head being made (wave 14) is a monitor waiting on a clip right now: the background
+    # encodes give it the GPU's decoder, as they do a playing Program, for its few seconds
+    playing = playing_now()
+    play = playing or heads_building()
     procs = procscope.background_procs()
     waited = _waited_on()
     slot = SLOT_WAIT in waited       # every media build (tagged) runs until the slot frees
@@ -8325,7 +8329,7 @@ def yield_tick() -> dict:
     for pid in set(stopped) - want:
         _signal_pid(pid, signal.SIGCONT)
         stopped.pop(pid, None)
-    return {"playing": play, "stopped": sorted(stopped), "background": [p for p, _ in procs]}
+    return {"playing": playing, "stopped": sorted(stopped), "background": [p for p, _ in procs]}
 
 
 def _yield_loop() -> None:
@@ -8668,9 +8672,16 @@ def preview_gpu() -> bool:
     return bool(MEDIA["gpu"])
 
 
-def build_preview(src: Path, dest: Path, orient: str) -> str:
+def build_preview(src: Path, dest: Path, orient: str,
+                  span: tuple[float, float] | None = None) -> str:
     """A 360p, keyframe-every-half-second h264/aac mp4 of `src` at `dest`; returns the
-    path it took. Fastest first, each falling through on failure: all on the GPU
+    path it took. With `span` (a, b) only those seconds of the picture, on the clip's own
+    timeline: the head of a waited-on clip (`want_head`). Chrome reads a file that starts
+    at a as `a` long and clamps every seek to it (measured: a 10-20 s head played from 10
+    whatever time it was sought to), so the file starts at 0: its first frame (the one at
+    a) is put at 0 and held until the next, the rest keep their times (`setpts`, no frames
+    made between: `-fps_mode passthrough`), and the clip's own sound is copied from 0 to b
+    (no decode: a stream copy), or left out when it cannot be. Fastest first, each falling through on failure: all on the GPU
     (NVDEC + scale_cuda + NVENC; SDR 8-bit, no rotation to apply), the same with the
     frames brought down after the scale for a CPU quarter-turn (a rotation-flagged SDR
     clip: Karl's GoPro bins, flagged −180°), GPU decode with the CPU filters an HDR clip
@@ -8726,6 +8737,27 @@ def build_preview(src: Path, dest: Path, orient: str) -> str:
                                      "-vf", cpu_vf, *nvenc]))
     paths.append(("cpu", [*pre, "-i", str(src), *io, "-vf", cpu_vf, "-c:v", "libx264",
                           "-preset", "ultrafast", "-crf", "30"]))
+    if span is not None:
+        a, b = span
+        # the picture: an input seek (accurate: decoded from the keyframe before, frames
+        # before a dropped); the sound: a second input of the same file, 0 to b, copied
+        cut = ["-ss", f"{a:.3f}", "-t", f"{max(0.1, b - a):.3f}"]
+        snd = ["-ss", "0", "-t", f"{b:.3f}", "-i", str(src)]
+        put = f"setpts=if(eq(N\\,0)\\,0\\,PTS+{a:.3f}/TB)"
+        spans = []
+        for name, args in paths:
+            i, v = args.index("-i"), args.index("-vf")
+            args = [*args[:i], *cut, *args[i:i + 2], *snd, *args[i + 2:]]
+            v = args.index("-vf")
+            args[v + 1] = f"{args[v + 1]},{put}"
+            k = args.index("0:a:0?")
+            with_snd = [*args[:k], "1:a:0?", *args[k + 1:]]
+            no_snd = [x for j, x in enumerate(args) if j not in (k - 1, k)] + ["-an"]
+            spans += [(name, with_snd, ["-c:a", "copy"]), (f"{name}-silent", no_snd, [])]
+        tail_v = ["-g", str(gop), "-bf", "0", "-fps_mode", "passthrough", "-write_tmcd", "0",
+                  "-movflags", "+faststart", "-f", "mp4"]
+        paths = [(name, [*args, *ac, *tail_v]) for name, args, ac in spans]
+        tail = []
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part.mp4")
     err = ""
@@ -8769,6 +8801,8 @@ def _build_claimed(src: Path, dest: Path, orient: str, ev: threading.Event,
     scope = None
     gen = MEDIA["walk_gen"]
     try:
+        if asked:
+            _head_first(dest)
         # An asked-for preview waiting for a slot the walk's paused builds hold: they run
         # again until it has one (a Program playing must not starve the Source monitor).
         with (media_waiting(SLOT_WAIT) if asked else nullcontext()):
@@ -8810,6 +8844,27 @@ def _build_claimed(src: Path, dest: Path, orient: str, ev: threading.Event,
         with MEDIA["lock"]:
             MEDIA["building"].pop(key, None)
         ev.set()
+
+
+def _head_first(dest: Path) -> None:
+    """An asked whole preview gives the head of the same clip the decoder first (wave 14):
+    the board asks for the head a moment after the /media/proxy answer that started this
+    build, and the two encodes side by side took ~twice as long each (the GPU's decoder).
+    It waits HEAD_FIRST_S for that ask, then for the head's encode (HEAD_WAIT_S at most)."""
+    tail = f".{PICTURE_V}.mp4"
+    if not dest.name.endswith(tail):
+        return
+    hk = f"head:{dest.name[:-len(tail)]}"
+    until = time.monotonic() + HEAD_FIRST_S
+    while True:
+        with MEDIA["lock"]:
+            hev = MEDIA["building"].get(hk)
+        if hev is not None:
+            hev.wait(HEAD_WAIT_S)
+            return
+        if time.monotonic() >= until:
+            return
+        time.sleep(0.05)
 
 
 def _failed_recently(key: str) -> bool:
@@ -8912,6 +8967,232 @@ def media_fallback(clip: str, wait_s: float = 0.0) -> tuple[str, str | None]:
     if preview_path(stem).exists():
         return "preview", preview_url(stem)
     return "building", None
+
+
+# ---------------------------------------------------------------- the head of a waited-on clip
+#
+# Verdict 10 punch 6 (wave 14, lane PLAY4): a clip imported mid-session, put in the sequence
+# with `,` and played, first played ~21 s later on a quiet box (judge10 freshplay.log): its
+# 360p preview is the whole clip (KX_10, 40 s of 4K HEVC 59.94: 16 s on the GPU here, a
+# long Killington clip 60-110 s), and nothing played before all of it was made. Premiere
+# plays the original at once. So the clip time the monitor waits at (the board says where:
+# `/media/status/<stem>.mp4?at=<clip s>`, app.js mediaWaitFor) gets a HEAD first: the same
+# 360p encode (build_preview, its GPU paths) of HEAD_PRE_S before it to HEAD_S after, on
+# the clip's own timeline (an input seek, the frames' times put back with
+# `-output_ts_offset`), a few seconds of encode; then the whole preview as before. The
+# head is the board's to play directly (`head: {url, a, b}` in the status, never a
+# /media/proxy redirect: only the board knows whether the time it wants is inside it); the
+# shot plays from it and, past its end, on the film clock as before until the preview
+# lands. One head per clip, the newest; heads go HEAD_KEEP_S after the clip's preview.
+
+HEAD_PRE_S = 2.0         # a head starts this far before the clip time the monitor waits at
+HEAD_S = 12.0            # and runs this far past it (14 s of a 4K GoPro clip: ~4-6 s of GPU encode)
+HEAD_FIRST_S = 2.0       # an asked whole preview waits this long for a head to be asked for first
+HEAD_WAIT_S = 15.0       # ...and then for that head's encode, at most this long
+HEAD_HINT_WAIT_S = 8.0   # the board's `?at=` hint is answered when its head is made, or after this
+HEAD_KEEP_S = 120.0      # a clip's heads outlive its whole preview this long (a buffer may hold one)
+HEAD_SLOTS = threading.BoundedSemaphore(1)    # one head encode at a time (each is seconds)
+HEAD_NAME = re.compile(r"^(?P<stem>[A-Za-z0-9._-]+)\.head(?P<a>\d+)\.(?P<v>[a-z0-9]+)\.mp4$")
+
+
+def head_dir() -> Path:
+    return preview_dir() / "heads"
+
+
+def head_path(stem: str, a: float) -> Path:
+    return head_dir() / f"{stem}.head{int(round(a * 1000))}.{PICTURE_V}.mp4"
+
+
+def head_record(stem: str) -> dict | None:
+    """The newest current head of a clip: its sidecar with `path` and `url`, or None.
+    Current = this PICTURE_V, this project's orient, this version of the source file."""
+    d = head_dir()
+    clip = clip_for_stem(stem)
+    if clip is None or not d.is_dir():
+        return None
+    src_id = _range_src_id(clip_path(clip))
+    best = None
+    for js in d.glob(f"{stem}.head*.json"):
+        try:
+            rec = json.loads(js.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(rec, dict) or rec.get("stem") != stem or rec.get("picture_v") != PICTURE_V:
+            continue
+        if rec.get("orient") != STATE.get("orient", "auto") or rec.get("src") != src_id:
+            continue
+        mp4 = js.with_suffix(".mp4")
+        if not mp4.exists():
+            continue
+        if best is None or float(rec.get("made") or 0) > float(best.get("made") or 0):
+            best = {**rec, "path": mp4, "url": f"/media/head/{mp4.name}"}
+    return best
+
+
+def head_span(clip: str, t: float) -> tuple[float, float]:
+    """The clip seconds a head for clip time `t` holds: HEAD_PRE_S before to HEAD_S after,
+    inside the clip."""
+    dur = clip_duration(clip)
+    end = float(dur) if dur and dur > 0 else math.inf
+    a = max(0.0, min(float(t), end) - HEAD_PRE_S)
+    b = min(end, max(float(t), 0.0) + HEAD_S)
+    if b - a < 0.5:                       # at the very end: the last seconds
+        a = max(0.0, b - HEAD_PRE_S - HEAD_S)
+    return round(a, 3), round(b, 3)
+
+
+def head_covers(rec: dict | None, t: float) -> bool:
+    """A head that plays from clip time t on for a while (2 s, or to its end at the clip's)."""
+    if not rec:
+        return False
+    return _span_holds(str(rec.get("clip") or ""), (float(rec.get("a", 0)), float(rec.get("b", 0))), t)
+
+
+def _span_holds(clip: str, span: tuple[float, float], t: float) -> bool:
+    a, b = span
+    dur = clip_duration(clip) if clip else None
+    tail = min(2.0, max(0.0, (float(dur) if dur else b) - t))
+    return a - 0.05 <= t and t + tail <= b + 0.05
+
+
+def heads_building() -> bool:
+    with MEDIA["lock"]:
+        return any(str(k).startswith("head:") for k in MEDIA["building"])
+
+
+def want_head(clip: str, t: float) -> None:
+    """The monitor waits on `clip` at clip time `t` and nothing plays it yet: make its head
+    there now, in a thread of its own, at the asked previews' priority (never paused while
+    the Program plays, not niced). Nothing when something plays already, when the newest
+    head already holds t, or while one is being made for this clip."""
+    stem = Path(clip).stem
+    try:
+        t = float(t)
+    except (TypeError, ValueError):
+        return
+    if not math.isfinite(t) or t < 0:
+        return
+    if (STATE["proxy_dir"] / f"{stem}.mp4").exists() or preview_path(stem).exists():
+        return
+    src = clip_path(clip)
+    if not src.exists() or browser_playable(src) or range_record(stem) is not None:
+        return
+    with MEDIA["lock"]:
+        MEDIA.setdefault("head_want", {})[stem] = t     # the newest time asked: the next head's
+    if head_covers(head_record(stem), t):
+        return
+    key = f"head:{stem}"
+    if _failed_recently(key):
+        return
+    ev, owner = _claim_preview(key)
+    if not owner:
+        # one is being made: it looks at head_want when it is done; one for a time this one
+        # does not hold (the judge's: the playhead at the clip's end after `,`, then a seek
+        # to 12 s) is stopped, and the next is made for the newest time at once
+        with MEDIA["lock"]:
+            cur = (MEDIA.get("head_build") or {}).get(stem)
+        if cur and not _span_holds(clip, cur["span"], t):
+            threading.Thread(target=cur["scope"].kill, daemon=True).start()
+        return
+    threading.Thread(target=_build_heads, daemon=True, name=f"head-{stem}",
+                     args=(clip, src, STATE.get("orient", "auto"), key, ev)).start()
+    start_yield()                   # the background encodes pause while it is made (yield_tick)
+    try:
+        yield_tick()
+    except Exception as exc:  # noqa: BLE001 — a pause that did not happen costs speed only
+        print(f"  !! yield: {exc}", flush=True)
+
+
+def _build_heads(clip: str, src: Path, orient: str, key: str, ev: threading.Event) -> None:
+    """Heads for `clip` until the newest time asked (`head_want`) is in one, then its whole
+    preview (it may be on its way already: start_preview joins it)."""
+    stem = Path(clip).stem
+    gen = MEDIA["walk_gen"]
+    try:
+        for _ in range(6):
+            with MEDIA["lock"]:
+                t = (MEDIA.get("head_want") or {}).get(stem)
+            if t is None or head_covers(head_record(stem), t) or preview_path(stem).exists():
+                break
+            a, b = head_span(clip, t)
+            got = _build_head(clip, src, head_path(stem, a), (a, b), orient, key)
+            # stopped for a newer time (want_head): the next turn makes that one; a Stop or a
+            # failure ends it
+            if got != "stopped" or MEDIA["walk_gen"] != gen:
+                break
+    finally:
+        with MEDIA["lock"]:
+            MEDIA["building"].pop(key, None)
+        ev.set()
+    if not preview_path(stem).exists():
+        start_preview(clip)
+
+
+def _build_head(clip: str, src: Path, dest: Path, span: tuple[float, float], orient: str,
+                key: str) -> str:
+    """One head: "ok", "stopped" (its scope was killed: a newer time, a Stop) or "failed"."""
+    stem = Path(clip).stem
+    # its own scope (not background: never paused, not niced), so a newer time asked can stop
+    # this one alone (want_head) and a Stop all of them (stop_media)
+    scope = procscope.Scope(f"head {stem}")
+    with MEDIA["lock"]:
+        MEDIA.setdefault("head_build", {})[stem] = {"scope": scope, "span": span}
+    try:
+        with HEAD_SLOTS:
+            t0 = time.monotonic()
+            if scope.cancelled:
+                raise RuntimeError("stopped before it started")
+            with procscope.active(scope), procscope.tagged(str(preview_path(stem))):
+                how = build_preview(src, dest, orient, span=span)
+            took = time.monotonic() - t0
+            meta = {"stem": Path(clip).stem, "clip": clip, "a": span[0], "b": span[1],
+                    "picture_v": PICTURE_V, "orient": orient, "src": _range_src_id(src),
+                    "how": how, "built_s": round(took, 2), "made": time.time()}
+            tmpj = dest.with_suffix(f".{os.getpid()}.part.json")
+            tmpj.write_text(json.dumps(meta), encoding="utf-8")
+            tmpj.replace(dest.with_suffix(".json"))
+            print(f"  head {Path(clip).stem} {span[0]:.1f}-{span[1]:.1f} s ({how}) in {took:.1f}s",
+                  flush=True)
+        MEDIA["failed"].pop(key, None)
+        return "ok"
+    except (RuntimeError, OSError) as exc:
+        if scope.cancelled:
+            MEDIA["failed"].pop(key, None)
+            print(f"  head {stem} {span[0]:.1f}-{span[1]:.1f} s stopped", flush=True)
+            return "stopped"
+        MEDIA["failed"][key] = (time.monotonic(), str(exc)[:300])
+        print(f"  !! head: {exc}", flush=True)
+        return "failed"
+    finally:
+        with MEDIA["lock"]:
+            if (MEDIA.get("head_build") or {}).get(stem, {}).get("scope") is scope:
+                MEDIA["head_build"].pop(stem, None)
+
+
+def prune_heads(stem: str | None = None) -> int:
+    """Heads nobody will be served again: all but the newest of a clip, and every one of a
+    clip whose whole preview has been there HEAD_KEEP_S. Returns how many files went."""
+    d = head_dir()
+    if not d.is_dir():
+        return 0
+    by_stem: dict[str, list[Path]] = {}
+    for mp4 in d.glob("*.mp4"):
+        m = HEAD_NAME.match(mp4.name)
+        if m and (stem is None or m["stem"] == stem):
+            by_stem.setdefault(m["stem"], []).append(mp4)
+    gone = 0
+    now = time.time()
+    for s_, files in by_stem.items():
+        files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        pv = preview_path(s_)
+        old = pv.exists() and now - pv.stat().st_mtime > HEAD_KEEP_S
+        for f in files if old else files[1:]:
+            if not old and now - f.stat().st_mtime < HEAD_KEEP_S:
+                continue                  # a buffer may still be playing it
+            f.unlink(missing_ok=True)
+            f.with_suffix(".json").unlink(missing_ok=True)
+            gone += 1
+    return gone
 
 
 # ---------------------------------------------------------------- range proxies
@@ -9408,6 +9689,7 @@ def _media_walk() -> None:
                 if not ranges_enabled():
                     return
                 prune_ranges()
+                prune_heads()
                 MEDIA["kick"].wait(RANGE_POLL_S)
                 MEDIA["kick"].clear()
                 continue
@@ -9451,22 +9733,35 @@ def media_preview(name: str, request: Request) -> Response:
 
 
 @app.get("/media/status/{name}")
-def media_status(name: str) -> JSONResponse:
+def media_status(name: str, at: float | None = None) -> JSONResponse:
     """What `/media/proxy/<name>` would play now, without waiting — for a board that got
     a 503 and wants to know when to try again. Asking counts as wanting the clip: its
-    preview starts (or keeps going) and its proxy is next."""
+    preview starts (or keeps going) and its proxy is next. `at` (clip seconds) is where the
+    monitor waits on it: while nothing plays it, its head is made there first (`want_head`,
+    wave 14), and `head` says the newest one ({url, a, b}) for the board to play."""
     stem = Path(name).stem
     clip = clip_for_stem(stem)
     if clip is None:
         raise HTTPException(404, f"no such clip: {Path(name).name}")
     want_media(stem)
+    if at is not None:
+        want_head(clip, at)         # before the whole preview takes the decoder
+        # the board's hint waits for that head (seconds), so it plays the moment it is made
+        # rather than at the next of its polls
+        with MEDIA["lock"]:
+            hev = MEDIA["building"].get(f"head:{stem}")
+        if hev is not None:
+            hev.wait(HEAD_HINT_WAIT_S)
     kind, url = media_fallback(clip)
     key = str(preview_path(stem))
     rec = range_record(stem)
     want = range_wanted(clip)
+    head = head_record(stem) if kind == "building" else None
     if kind == "building":
         hold_media(clip)            # asked about while it builds: a monitor waits on it
     return JSONResponse({
+        "head": {"url": head["url"], "a": head["a"], "b": head["b"]} if head else None,
+        "head_building": f"head:{stem}" in MEDIA["building"] if kind == "building" else False,
         "clip": clip, "serves": kind,
         # verdict 8: the board's wait line says how long ("preparing preview… CLIP_09 · ~N s")
         "eta_s": preview_eta(clip) if kind == "building" else None,
@@ -9483,6 +9778,19 @@ def media_status(name: str) -> JSONResponse:
         if want else None,
         "error": (MEDIA["failed"].get(key) or (0, None))[1] if kind == "failed" else None,
         "poster": f"/media/poster/{stem}.jpg"})
+
+
+@app.get("/media/head/{name}")
+def media_head(name: str, request: Request) -> Response:
+    """A clip's head (see "the head of a waited-on clip"): only a current one, by the name
+    `/media/status` gave. A pruned one 404s and the board waits on the clip again."""
+    m = HEAD_NAME.match(Path(name).name)
+    if not m or m["v"] != PICTURE_V:
+        raise HTTPException(404, f"not found: {Path(name).name}")
+    path = head_dir() / m.group(0)
+    if not path.with_suffix(".json").exists():
+        raise HTTPException(404, f"not found: {path.name}")
+    return ranged_file(path, request, mime="video/mp4")
 
 
 @app.get("/media/range/{name}")

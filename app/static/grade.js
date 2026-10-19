@@ -852,7 +852,7 @@ onmessage = (e) => {
   function job(raw) {
     const v = live();
     const adj = raw ? null : adjustNow();
-    const mixGraded = mixIsGraded();
+    const mixGraded = mixDrawn();
     if (!raw && (!G.ok || !G.enabled || !G.lut || (G.lut.identity && !adj && !mixGraded))) return null;
     if (!G.ok || !v || v.readyState < 2) return null;
     const vw = v.videoWidth, vh = v.videoHeight;
@@ -860,7 +860,8 @@ onmessage = (e) => {
     const m = G.mix;
     const mixing = !!(m && m.rec && m.w > 0 && m.video.readyState >= 2 && m.video.videoWidth);
     const playing = (!v.paused && !v.ended) || playerPlaying();
-    const [w, h] = drawSize(vw, vh, playing, mixing);
+    // (near a dissolve the canvas keeps the mix's size: mixNear)
+    const [w, h] = drawSize(vw, vh, playing, mixing || (playing && G.mixZone));
     const rec = raw || G.lut.identity ? IDENTITY_TABLE : G.lut;
     const parked = v.paused && !v.seeking
       ? `${v.id}|${v.currentSrc}|${v.currentTime}|${w}x${h}` : null;
@@ -951,6 +952,10 @@ onmessage = (e) => {
     const m = e.data || {};
     if (m.t === 'drawn') {
       G.inflight = false;
+      if (m.ok && G.showOnDraw) {
+        G.showOnDraw = false;
+        if (G.ok && G.enabled && live() && mixDrawn()) show(true);
+      }
       if (m.ok) {
         G.draws++;
         const r1 = (x) => Math.round(x * 10) / 10;
@@ -1197,9 +1202,17 @@ onmessage = (e) => {
 
   /* Whether the canvas should be visible right now, and make it so. */
   function settle() {
-    const mixGraded = mixIsGraded();
-    const on = !!(G.ok && G.enabled && live()
-      && ((G.lut && (!G.lut.identity || adjustNow())) || (mixGraded && G.lut)));
+    const graded = !!(G.lut && (!G.lut.identity || adjustNow()));
+    const mixGraded = mixDrawn();
+    const on = !!(G.ok && G.enabled && live() && (graded || (mixGraded && G.lut)));
+    // An ungraded shot's dissolve turns the canvas on: its first mixed frame is drawn before
+    // it shows, never the canvas's last picture of some other shot (fromWorker shows it).
+    if (on && !graded && G.worker && G.canvas && !G.canvas.classList.contains('on')) {
+      G.showOnDraw = true;
+      draw();
+      return;
+    }
+    G.showOnDraw = false;
     show(on);
     if (on) draw();
   }
@@ -1388,6 +1401,30 @@ onmessage = (e) => {
     return !!(G.mix && G.mix.w > 0 && G.mix.rec && (!G.mix.rec.identity || mixAdjust()));
   }
 
+  /* Whether the canvas draws the transition's mix: a graded one always; an ungraded one
+   * too while the Program plays (wave 14 PLAY4, verdict 10 punch 5). Shown as its own layer
+   * at CSS opacity over the raw live buffer, the incoming picture was a second video for the
+   * software compositor to convert and blend on every frame: on Killington the ungraded
+   * dissolves held the live shot or the follower 83-100 ms in 10 of 24 plays where the same
+   * dissolves graded (the canvas, through identity tables here) held none over 67 (bin/ab3).
+   * The shader's mix is the CSS one (both blend R'G'B' at the incoming weight), and paused
+   * the layer is shown as before. */
+  /* The player is near a dissolve (app.js programMix: from MIX_ZONE_S before its incoming
+   * follower starts to MIX_ZONE_S after its window): while playing, the canvas is drawn at
+   * the mix's size all that time (drawSize), so it is not resized where the mix begins and
+   * ends. A resize there coincided with the mix's first frames, the cut's work and the park
+   * of the next shot, and held the canvas 80-110 ms and the live frames up to 100 ms on
+   * Killington (wave 14 PLAY4: every canvas hole over 67 ms in a graded dissolve's play sat
+   * on a 640 → 454 or 454 → 640 width change). */
+  function mixNear(on) {
+    G.mixZone = !!on;
+  }
+
+  function mixDrawn() {
+    if (!G.mix || !(G.mix.w > 0) || !G.mix.rec) return false;
+    return mixIsGraded() || playerPlaying();
+  }
+
   /* A transition's other shot (app.js programMix): `{video, id, w}` — that buffer's frame
    * is drawn through its shot's LUT over the live one at weight w — or null. Returns
    * whether the canvas draws the mix (then the page hides that layer; else the page shows
@@ -1546,6 +1583,7 @@ onmessage = (e) => {
     preview,
     get previewing() { return !!G.pcol; },
     setMix,
+    mixNear,
     get mix() { return G.mix ? { id: G.mix.id, w: G.mix.w, graded: mixIsGraded() } : null; },
     draw: settle,
     probe,

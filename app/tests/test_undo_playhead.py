@@ -151,3 +151,43 @@ def test_a_playhead_put_past_the_end_on_purpose_stays_through_an_undo(page):
     pg.keyboard.press("Control+z")
     pg.wait_for_function("Math.abs(tl.total() - 4.0) < 0.01", timeout=3000)
     assert pg.evaluate("tl.state.playhead") == pytest.approx(7.0, abs=0.01)
+
+
+def _screen_mean(pg) -> float:
+    """The mean level of the middle of the Program picture, from a real screenshot."""
+    import subprocess
+    png = pg.locator("#player .screen").screenshot()
+    r = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-f", "png_pipe", "-i", "-",
+                        "-vf", "crop=iw/2:ih/2,scale=16:9", "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+                       input=png, capture_output=True)
+    assert r.returncode == 0 and len(r.stdout) == 16 * 9, r.stderr[-300:]
+    return sum(r.stdout) / len(r.stdout)
+
+
+def test_the_program_is_black_parked_past_the_end(page):
+    """Wave 13 SMALL4's note (wave 14 PLAY4): a click on the ruler past the film's end left
+    the last shot's frame in the Program. Premiere's Program is black past the end; back on
+    the film, the picture is back."""
+    pg = page
+    pg.evaluate("tl.seek(3.0)")                        # on CLIP_B (testsrc2: bright bars)
+    pg.wait_for_function("liveVideo() && liveVideo().readyState >= 2 && !liveVideo().seeking"
+                         " && liveVideo().classList.contains('live')", timeout=15000)
+    pg.wait_for_timeout(700)
+    lit = _screen_mean(pg)
+    # room on the ruler past the end, then a click there
+    pg.evaluate("tl.zoomTo(tl.state.zoom * 0.5, { at: 0, viewX: 0 })")
+    pg.wait_for_timeout(200)
+    end, ruler = pg.locator("#tl .tl-end").bounding_box(), pg.locator("#tl .tl-ruler").bounding_box()
+    x = end["x"] + 60
+    assert x < ruler["x"] + ruler["width"] - 4, (end, ruler)
+    pg.mouse.click(x, ruler["y"] + ruler["height"] / 2)
+    pg.wait_for_function("tl.state.playhead > tl.total() + 0.2", timeout=3000)
+    pg.wait_for_timeout(500)
+    dark = _screen_mean(pg)
+    # back on the film: the picture again
+    pg.evaluate("tl.seek(3.0)")
+    pg.wait_for_timeout(900)
+    back = _screen_mean(pg)
+    print(f"Program level: on the film {lit:.0f}, parked past the end {dark:.1f}, back {back:.0f}")
+    assert lit > 40 and back > 40, (lit, back)
+    assert dark < 6, f"the Program is not black past the end: {dark:.1f} (on the film {lit:.0f})"
