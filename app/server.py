@@ -6317,11 +6317,16 @@ POSTER_AT_S = 1.0
 
 
 def poster_time(clip: str) -> float:
-    """Where a clip's card frame is taken: POSTER_AT_S, or half a shorter clip; 0 while
-    its length is not known yet (cached lengths only — this never probes)."""
+    """Where a clip's card frame is taken: POSTER_AT_S, or half a clip shorter than twice
+    that. Cached lengths only (this never probes), and the same answer before the length
+    is known as after it for every clip of 2 s or more: POSTER_AT_S (wave 16: it said 0
+    until then, so a card drawn while the clip's facts were still being probed on a loaded
+    box kept a `?t=0.00` poster the Project panel, asking a moment later, had at `?t=1.00`
+    — two pictures of one clip, and a frame the walk never pre-builds). A clip found shorter
+    moves once, to its middle; a frame past the end is cut at 0 (build_poster)."""
     d = STATE.get("durations", {}).get(clip)
     if not d:
-        return 0.0
+        return POSTER_AT_S
     return round(min(POSTER_AT_S, float(d) / 2), 2)
 
 
@@ -6387,7 +6392,7 @@ def api_clips() -> JSONResponse:
             "captured": capture_time(clip) if ok else None,
             "session": session_of.get(clip),
             "proxy": (STATE["proxy_dir"] / f"{stem}.mp4").exists(),
-            "poster": poster_url(stem, poster_time(clip) if ok else 0.0),
+            "poster": poster_url(stem, poster_time(clip)),
             "analysed": stem in heard,
             "looked": stem in looked,
             "closed": stem in closed,
