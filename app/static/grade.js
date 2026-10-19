@@ -1598,7 +1598,13 @@ onmessage = (e) => {
         if (typeof m.onChange === 'function') m.onChange();
       });
     }
-    settle();
+    // (wave 16 PERF7, verdict 12 punch 3 + 10) Playing, a draw already asked for in this frame
+    // (a half's frame callback, drawSoon: it runs after app.js's tick, which calls this) draws
+    // the new mix: a draw here as well was a second two-frame draw in the same frame, 0.5-1.5 ms
+    // after the first, where the halves change hands (the incoming buffer taking over from its
+    // follower, the cut) — the worker's double work at the window's most loaded frames (traced
+    // on Killington's Cross Dissolves; the holds that remained in the window sat there).
+    if (!(G.drawReq && playerPlaying())) settle();
     return !!(G.canvas && G.enabled && G.canvas.classList.contains('on'));
   }
 
