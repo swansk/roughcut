@@ -1290,10 +1290,14 @@ function arm(v, seg, at = seg.in) {
   const src = proxyOf(seg);
   v._for = null;                    // armNext says which upcoming shot it holds
   v._used = performance.now();
-  if (v.dataset.src !== src || (v.error && !v._waitStop)) {
+  v._at = at;                       // where it is parked (a waited-on clip's head is made there)
+  // a clip's head (wave 14) that does not hold this time: the clip's URL again, which waits
+  const headMiss = !!v._head && v.dataset.src === src && !headHolds(v._head, at);
+  if (v.dataset.src !== src || (v.error && !v._waitStop) || headMiss) {
     if (v.dataset.src !== src) v._posterUp = false;
     v.dataset.src = src;
-    if (v._waitStop) { v._waitStop(); v._waitStop = null; }
+    v._head = null;
+    if (v._waitStop && !headMiss) { v._waitStop(); v._waitStop = null; }
     v.src = src ? `${src}#t=${Math.max(0, at).toFixed(2)}` : src;
     v._shown = false;               // a new file: no frame on screen until loadeddata
     v._status = null;
@@ -1326,7 +1330,7 @@ function arm(v, seg, at = seg.in) {
  * shots of the clip it played. `freshen(v)` re-opens it at the same clip time once the
  * server serves a better kind, only at a park: never the buffer on screen while playing,
  * never one prerolling. */
-const KIND_RANK = { preview: 0, range: 1, proxy: 2, original: 2 };
+const KIND_RANK = { head: -1, preview: 0, range: 1, proxy: 2, original: 2 };
 const statusUrl = (src) => src.replace('/media/proxy/', '/media/status/');
 
 async function mediaKind(src) {
@@ -1365,6 +1369,7 @@ async function freshen(v) {
   if (v._roll || v.seeking || (player.playing && v === liveVideo())) return;   // not a park
   const t = v.currentTime;
   v._kind = k;
+  v._head = null;
   v.src = `${src}#t=${Math.max(0, t).toFixed(2)}`;
   v._shown = false;
   v.load();
@@ -1463,8 +1468,10 @@ function monWait(on) {
  * is loaded again. The URL is never rewritten here. */
 function mediaWaitFor(v) {
   const src = v.dataset.src;
+  if (v.error && v._head) v._head = null;  // a head that would not play: wait for the clip
   if (v._waitStop && v._waitFor === src) {
     if (v === liveVideo()) { posterUp(v); waitLine(segs[player.idx], v._status); }
+    headHint(v, src);                      // a seek while waiting: its head where it is now
     return;
   }
   if (v._waitStop) v._waitStop();
@@ -1475,10 +1482,14 @@ function mediaWaitFor(v) {
     posterUp(v);                           // the poster shows through, not a black box
     waitLine(segs[player.idx], v._status);
   }
+  headHint(v, src);
   v._waitStop = dock.mediaWait(src, () => {
     v._waitStop = null;
     v._status = null;
     if (v.dataset.src !== src) return;
+    // playing from the clip's head: the whole preview goes in where the head ends
+    // (boundary → headOut), not under the picture on screen now
+    if (v._head && v === liveVideo() && player.playing && !player.off) { v._better = true; return; }
     v.dataset.src = '';
     const seg = v === liveVideo() ? segs[player.idx] : null;
     if (seg) {
@@ -1510,7 +1521,112 @@ function mediaWaitFor(v) {
   }, (j) => {
     v._status = j;
     if (v === liveVideo() && v.dataset.src === src) waitLine(segs[player.idx], j);
+    if (j && j.head && v.dataset.src === src) headLoad(v, src, j.head);
   }, 1500);
+}
+
+/* ---------------------------------------------------------------- a clip's head
+ * Verdict 10 punch 6 (wave 14 PLAY4): a clip imported mid-session and played waited for
+ * the whole of its 360p preview (~21 s for 40 s of 4K HEVC on a quiet box, minutes for a
+ * long clip). The server now makes a HEAD first where the monitor waits on the clip
+ * (server.py `want_head`: HEAD_PRE_S before the clip time it is told to HEAD_S after it,
+ * on the clip's own timeline), and the status names it (`head: {url, a, b}`). The buffer
+ * plays it under the clip's own URL (`dataset.src` stays the /media/proxy one, so every
+ * "which clip is this" check holds); past its end the shot plays on the film clock on its
+ * poster, as before, until the preview lands (headOut), and a seek outside it waits on the
+ * clip again (arm). */
+const HEAD_AHEAD_S = 3.0;            // playing past a clip: its head is asked this far ahead of the clock
+const HEAD_NEXT_S = 6.0;             // playing from a head: the next one is asked this long before its end
+
+/* Whether a head plays from clip time t on: it holds t and a little after (or its end). */
+function headHolds(h, t) {
+  if (!h) return false;
+  return t >= h.a - 0.05 && t <= h.b - 0.3;
+}
+
+/* The clip time buffer v waits at: the playhead's (the clock's, ahead, while it plays past
+ * the shot), else where it was parked. */
+function waitTime(v) {
+  if (v === liveVideo() && segs[player.idx] && proxyOf(segs[player.idx]) === v.dataset.src) {
+    const o = player.off;
+    if (o && o.seg === segs[player.idx]) return Math.min(o.seg.out, offClip(o) + HEAD_AHEAD_S * speedOf(o.seg));
+    return playheadClip(player.idx);
+  }
+  return Number.isFinite(v._at) ? v._at : 0;
+}
+
+/* Tell the server where this buffer waits on its clip: the head is made there first. */
+function headHint(v, src, at = waitTime(v)) {
+  if (!src || !src.startsWith('/media/proxy/') || !Number.isFinite(at)) return;
+  const now = performance.now();
+  if (v._hint && v._hint.src === src && Math.abs(v._hint.at - at) < 1.5 && now - v._hint.ms < 4000) return;
+  v._hint = { src, at, ms: now };
+  fetch(`${statusUrl(src)}?at=${Math.max(0, at).toFixed(2)}`, { cache: 'no-store' })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => { if (j && j.head && v.dataset.src === src && v._waitStop) headLoad(v, src, j.head); })
+    .catch(() => {});
+}
+
+/* The status named a head: the buffer plays it when it holds the time the buffer waits at
+ * (a park there; playing past the shot, a join ahead of the clock: offTick takes over). */
+function headLoad(v, src, h, lead = OFF_JOIN_S + 0.4) {
+  if (!h || !h.url || v.dataset.src !== src) return;
+  if (v._head && v._head.url === h.url) return;
+  // the head on screen still plays on: the next one goes in where it ends (headOut)
+  if (v._head && v === liveVideo() && player.playing && !player.off
+      && headHolds(v._head, v.currentTime + 0.5)) { v._nextHead = h; return; }
+  const seg = v === liveVideo() ? segs[player.idx] : null;
+  const o = seg && player.off && player.off.seg === seg ? player.off : null;
+  let at = o ? Math.min(seg.out - 0.05, offClip(o) + lead * speedOf(seg)) : waitTime(v);
+  if (!headHolds(h, at)) { headHint(v, src); return; }
+  v._head = { url: h.url, a: Number(h.a), b: Number(h.b) };
+  v._kind = 'head';
+  v._better = false;
+  v._nextHead = null;
+  v._nextAsked = false;
+  v.src = `${h.url}#t=${Math.max(0, at).toFixed(2)}`;
+  v._shown = false;
+  v.load();
+  if (o) o.join = at;
+  else if (seg) v._posterUp = true;        // the poster stays until its frame (frameBack)
+  const head = v._head;
+  v.addEventListener('loadedmetadata', () => {
+    if (v._head !== head) return;
+    const t = o && player.off === o ? o.join : at;
+    if (Math.abs(v.currentTime - t) > 0.002) { v.currentTime = t; seekTimed(v); }
+  }, { once: true });
+}
+
+/* Playing from a clip's head, the clock reached its end before the shot's: the shot goes on
+ * on the film clock and its poster (offStart), and the whole preview (when it is in) or a
+ * head further on joins ahead of the clock. */
+function headOut(v, seg, clipT) {
+  const better = v._better, next = v._nextHead;
+  v._better = false;
+  v._nextHead = null;
+  v.pause();
+  offStart(player.idx, clipT);
+  const o = player.off;
+  const src = v.dataset.src;
+  if (better && o) {
+    o.join = Math.min(seg.out - 0.05, clipT + OFF_JOIN_S * speedOf(seg));
+    v.dataset.src = '';
+    arm(v, seg, o.join);                   // the clip's URL again: its preview now
+    v._posterUp = true;
+    return;
+  }
+  if (!v._waitStop) mediaWaitFor(v);
+  if (next) headLoad(v, src, next, OFF_JOIN_S);   // made already: it joins just ahead of the clock
+  else headHint(v, src);
+}
+
+/* Playing from a head with HEAD_NEXT_S of it left, the next one is asked for where it ends
+ * (the preview of a long clip takes minutes), so it is there when this one runs out. */
+function headNext(v, seg, clipT) {
+  if (v._nextAsked || v._head.b >= seg.out - 0.5) return;
+  if (clipT < v._head.b - HEAD_NEXT_S * speedOf(seg)) return;
+  v._nextAsked = true;
+  headHint(v, v.dataset.src, v._head.b - 0.5);
 }
 
 /* ---------------------------------------------------------------- offline media
@@ -1629,8 +1745,9 @@ function offTick() {
       return false;
     }
     if (clipT > o.join + 0.25 && seg.out - clipT > 1 && v.readyState >= 1) {   // late: again, ahead
-      o.join = Math.min(seg.out - 0.05, clipT + OFF_JOIN_S * speedOf(seg));
-      v.currentTime = o.join;
+      const join = Math.min(seg.out - 0.05, clipT + OFF_JOIN_S * speedOf(seg));
+      if (!v._head || headHolds(v._head, join)) { o.join = join; v.currentTime = join; }
+      else { o.join = null; headHint(v, v.dataset.src); }   // past its head: wait on
     }
   }
   if (clipT >= seg.out - 0.04) { player.off = null; advance(); return true; }
@@ -2491,6 +2608,11 @@ function boundary() {
   const filmT = filmAt(player.idx, clipT, clipT < seg.in && txLeadIn(seg) > 0 ? 0.1 * speedOf(seg) : 0);
   paintPos(filmT, clipT, seg);
   bedTick(filmT, clipT, seg);
+  if (v._head && clipT < seg.out - 0.05 && (v.ended || clipT >= v._head.b - 0.08)) {
+    headOut(v, seg, clipT);
+    return false;
+  }
+  if (v._head) headNext(v, seg, clipT);
   if (clipT >= seg.out - 0.04 || v.ended) { advance(); return true; }
   preroll((seg.out - clipT) / speedOf(seg));
   return false;
@@ -2752,7 +2874,11 @@ function advance() {
   if (nv.readyState >= 1) go(); else nv.addEventListener('loadedmetadata', go, { once: true });
   // Verdict 8: the next shot's media is still being made (its park got the 503): played
   // past on its poster and the film clock; not known yet: looked at NOFRAME_MS from now.
-  if (nv.error || nv._waitStop) { mediaWaitFor(nv); offStart(next, segs[next].in); }
+  // (a clip's head that holds the shot's start plays: headHolds)
+  if (nv.error || (nv._waitStop && !(nv._head && headHolds(nv._head, nv.currentTime)))) {
+    mediaWaitFor(nv);
+    offStart(next, segs[next].in);
+  }
   else frameWatch(nv, segs[next]);
   // What the cut does not need on its own frame waits for the new shot's first frames:
   // the buffer we left takes the shot after this one (above), Effect Controls rebuilds

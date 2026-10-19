@@ -90,6 +90,10 @@ def building(project, tmp_path, monkeypatch):
 
     monkeypatch.setattr(server, "browser_playable", playable)
     monkeypatch.setattr(server, "start_preview", start_preview)
+    # no head (wave 14) unless a test asks for one: these tests are about a shot with no
+    # picture at all, which a head made in a second would give one
+    real_want_head = server.want_head
+    monkeypatch.setattr(server, "want_head", lambda clip, t: None)
 
     def release() -> None:
         landed.set()
@@ -110,7 +114,8 @@ def building(project, tmp_path, monkeypatch):
     assert srv.started, "server did not start"
     try:
         yield {"url": f"http://127.0.0.1:{port}", "server": server, "release": release,
-               "asked": asked}
+               "asked": asked,
+               "heads": lambda: monkeypatch.setattr(server, "want_head", real_want_head)}
     finally:
         release()
         srv.should_exit = True
@@ -481,3 +486,189 @@ def test_after_accept_the_cuts_previews_go_first_in_film_order(tmp_path, project
                 server.MEDIA["building"].pop(key, None)
             server.MEDIA["holds"].clear()
             server.MEDIA["wanted"].clear()
+
+
+# ------------------------------------------------------------------ the head (wave 14, punch 6)
+#
+# Verdict 10 punch 6: a clip imported mid-session, put in with `,` and played, first played
+# ~21 s later (judge10 freshplay.log: its whole 360p preview had to be made first). The
+# clip time the monitor waits at gets a HEAD first (server.py `want_head`): HEAD_PRE_S
+# before it to HEAD_S after, on the clip's own timeline; the board plays it, and past its
+# end the shot plays on the film clock on its poster until the preview lands. Here CLIP_B's
+# whole preview never ends (the fixture), its head is made for real (build_preview).
+
+HEAD_PLAY_LIMIT_S = 10.0     # Done = a just-imported clip presents frames within 10 s
+
+
+def _status(url: str, stem: str, at: float | None = None) -> dict:
+    q = "" if at is None else f"?at={at:.2f}"
+    with urllib.request.urlopen(f"{url}/media/status/{stem}.mp4{q}", timeout=10) as r:
+        return json.loads(r.read())
+
+
+def _frame_rgb(path: Path, n: int) -> "list[float]":
+    """Frame n (decode order = display order here) of a file, 80x45 RGB, as floats."""
+    import subprocess
+    r = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-i", str(path), "-vf",
+                        f"select=eq(n\\,{n}),scale=80:45", "-frames:v", "1", "-f", "rawvideo",
+                        "-pix_fmt", "rgb24", "-"], capture_output=True, check=True)
+    return list(r.stdout)
+
+
+def test_a_waited_on_clip_gets_a_head_at_the_monitor_s_time_on_its_own_timeline(building, tmp_path):
+    import subprocess
+    building["heads"]()
+    url, server = building["url"], building["server"]
+    t0 = time.monotonic()
+    st = _status(url, "CLIP_B", at=3.0)
+    assert st["serves"] == "building" and not st["ready"], st
+    while not st.get("head") and time.monotonic() - t0 < 20:
+        time.sleep(0.1)
+        st = _status(url, "CLIP_B")
+    took = time.monotonic() - t0
+    print(f"CLIP_B's head for clip 3.0 s in {took:.2f}s: {st['head']}")
+    h = st["head"]
+    assert h, f"no head within 20 s: {st}"
+    assert h["a"] == pytest.approx(3.0 - server.HEAD_PRE_S) and h["b"] == pytest.approx(6.0), h
+    # still not what /media/proxy serves: only the board knows whether its time is in it
+    assert st["serves"] == "building" and not st["ready"]
+    try:
+        urllib.request.urlopen(f"{url}/media/proxy/CLIP_B.mp4", timeout=10)
+        raise AssertionError("/media/proxy served the head")
+    except urllib.error.HTTPError as exc:
+        assert exc.code == 503
+    # the file: its frames at the clip's own times
+    got = tmp_path / "head.mp4"
+    with urllib.request.urlopen(f"{url}{h['url']}", timeout=10) as r:
+        assert r.headers["content-type"].startswith("video/mp4")
+        got.write_bytes(r.read())
+    pr = json.loads(subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries",
+         "frame=pts_time", "-of", "json", str(got)], capture_output=True, text=True, check=True).stdout)
+    pts = [float(f["pts_time"]) for f in pr["frames"]]
+    # from 0 (Chrome clamps a seek to a file's length from its first frame): the span's
+    # first frame is held from 0, the rest are at their own times
+    assert pts[0] == 0.0 and pts[1] == pytest.approx(1.0 + 1 / 24, abs=1e-3), pts[:3]
+    assert pts[-1] == pytest.approx(6.0 - 1 / 24, abs=1 / 12), pts[-3:]
+    snd = json.loads(subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "a:0", "-show_entries",
+         "stream=start_time,duration", "-of", "json", str(got)], capture_output=True, text=True,
+        check=True).stdout)["streams"]
+    assert snd and float(snd[0]["start_time"]) == 0.0 and float(snd[0]["duration"]) >= 5.9, snd
+    # the head's frame at clip time 3.0 is the source's frame at 3.0, not its neighbour's
+    k = min(range(len(pts)), key=lambda i: abs(pts[i] - 3.0))
+    src = Path(server.STATE["footage"]) / "CLIP_B.MP4"
+    mine = _frame_rgb(got, k)
+    diff = lambda a, b: sum(abs(x - y) for x, y in zip(a, b)) / len(a)   # noqa: E731
+    same, near = diff(mine, _frame_rgb(src, 72)), diff(mine, _frame_rgb(src, 66))
+    print(f"head frame at {pts[k]:.3f}: mean |diff| vs source 3.0 s {same:.1f}, vs 2.75 s {near:.1f}")
+    assert same < near / 2, (same, near)
+    # a time the newest head holds makes no other; one it does not, a new one
+    assert server.head_covers(server.head_record("CLIP_B"), 4.0)
+    assert not server.head_covers(server.head_record("CLIP_B"), 0.2)
+
+
+def _head_board(pw, url):
+    browser, page, errors = _board(pw, url)
+    page.evaluate("cueAt(0, segs[0].in + 0.2)")
+    page.wait_for_function("liveVideo().readyState >= 2 && !liveVideo().seeking", timeout=10000)
+    return browser, page, errors
+
+
+# frames the live buffer presents, by its own media clock: [page ms, mediaTime, src]
+FRAMES = """() => { window.__hf = []; window.__hfOn = true;
+  for (const v of player.vids) { if (v.__hfRec) continue; v.__hfRec = true;
+    const cb = (now, md) => { if (window.__hfOn && v.classList.contains('live'))
+        window.__hf.push([now, md.mediaTime, decodeURIComponent(v.currentSrc || '')]);
+      v.requestVideoFrameCallback(cb); };
+    v.requestVideoFrameCallback(cb); } }"""
+
+
+def test_a_shot_waiting_on_its_preview_plays_from_its_head_within_10_s(building):
+    """The judge's freshplay on the fixture: a seek onto the building shot (the wait line),
+    then Play at once; the shot's own frames play, from its head, inside 10 s, at its clip's
+    times (a frame's mediaTime is the clip time it shows)."""
+    sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed")
+    building["heads"]()
+    # a 5 s shot of CLIP_B (the fixture's 2 s one ends while its head is still being made)
+    edl = json.loads(building["server"].STATE["edl"].read_text(encoding="utf-8"))
+    edl["segments"][1].update({"in": 0.5, "out": 5.5})
+    building["server"].STATE["edl"].write_text(json.dumps(edl), encoding="utf-8")
+    with sync_api.sync_playwright() as pw:
+        browser, page, errors = _head_board(pw, building["url"])
+        try:
+            page.evaluate(FRAMES)
+            t0 = time.monotonic()
+            page.evaluate("cueAt(1, segs[1].in + 0.3)")       # clip 0.8 s of CLIP_B
+            page.wait_for_function("!document.querySelector('#monWait').hidden", timeout=5000)
+            page.evaluate("playFrom(1)")
+            page.wait_for_function(
+                "window.__hf.some(([t, mt, src]) => src.includes('/media/head/CLIP_B'))", timeout=20000)
+            took = time.monotonic() - t0
+            page.wait_for_timeout(700)
+            fr = [f for f in page.evaluate("window.__hf") if "/media/head/CLIP_B" in f[2]]
+            st = page.evaluate("({ph: tl.state.playhead, idx: player.idx, off: !!player.off,"
+                               " wait: !document.querySelector('#monWait').hidden})")
+            print(f"seek + Play on the building shot → its own frames in {took:.2f}s; "
+                  f"{len(fr)} frames, clip {fr[0][1]:.3f} → {fr[-1][1]:.3f}; {st}")
+            assert took <= HEAD_PLAY_LIMIT_S, f"{took:.1f}s to the shot's first played frame"
+            assert len(fr) >= 10, fr
+            mts = [mt for _t, mt, _s in fr]
+            assert all(b > a for a, b in zip(mts, mts[1:])), "the head's frames did not move on"
+            # on the clip's timeline: from about where the clock was, never from 0
+            assert 0.8 <= mts[0] <= 5.0 and mts[-1] - mts[0] >= 0.3, mts
+            assert st["idx"] == 1 and not st["off"] and not st["wait"], st
+            assert not [e for e in errors if "Error" in e], errors
+        finally:
+            browser.close()
+
+
+def test_past_its_head_the_shot_plays_on_the_film_clock_and_the_next_one_plays(building, monkeypatch):
+    """A head shorter than the shot (HEAD_S 1 s here): its frames, then the poster and the
+    wait line on the film clock to the shot's out, then the next shot; never a black buffer,
+    never the next shot early."""
+    sync_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed")
+    server = building["server"]
+    building["heads"]()
+    monkeypatch.setattr(server, "HEAD_S", 1.0)
+    with sync_api.sync_playwright() as pw:
+        browser, page, errors = _head_board(pw, building["url"])
+        try:
+            page.evaluate("cueAt(1, segs[1].in + 0.2)")       # head [0, 2.2] of a 1.0-3.0 shot
+            page.wait_for_function("liveVideo()._head && liveVideo().readyState >= 2"
+                                   " && liveVideo().classList.contains('live')", timeout=20000)
+            head = page.evaluate("liveVideo()._head")
+            assert head["b"] == pytest.approx(2.2), head
+            page.evaluate(FRAMES)
+            out = page.evaluate("""() => new Promise((ok) => {
+                const s = []; const t0 = performance.now();
+                playFrom(1);
+                const look = () => {
+                    const v = liveVideo(), w = document.querySelector('#monWait'), img = document.querySelector('#monPoster');
+                    s.push({ t: performance.now() - t0, idx: player.idx, off: !!player.off, ph: tl.state.playhead,
+                             line: w && !w.hidden ? w.textContent.trim() : '', poster: !!(img && !img.hidden),
+                             liveBlack: !!(v && v.classList.contains('live') && v.readyState < 2), playing: player.playing });
+                    const l = s[s.length - 1];
+                    if ((l.idx === 2 && l.ph > segs[0].out - segs[0].in + 2.0 + 0.6) || l.t > 9000 || (!l.playing && l.t > 500)) { ok(s); return; }
+                    requestAnimationFrame(look);
+                };
+                look();
+            })""")
+            fr = [f for f in page.evaluate("window.__hf") if "CLIP_B" in f[2]]
+            on_b = [x for x in out if x["idx"] == 1]
+            past = [x for x in on_b if x["off"]]
+            c = [x for x in out if x["idx"] == 2]
+            print(f"head frames {len(fr)} up to clip {fr[-1][1] if fr else None}; past it on the clock "
+                  f"{len(past)} samples, ph {past[0]['ph'] if past else None} → {past[-1]['ph'] if past else None}; "
+                  f"next shot reached: {bool(c)}")
+            assert fr and max(mt for _t, mt, _s in fr) >= 2.0, fr[-3:]
+            assert past, "the head's end was not played past on the clock"
+            assert all(x["poster"] and "preparing preview" in x["line"] for x in past[3:]), past[:5]
+            # the clock ran to the shot's out (film 1.5 + 2.0), not cut short at the head's end
+            assert past[-1]["ph"] >= 1.5 + 2.0 - 0.15, past[-1]
+            assert c and c[-1]["playing"], out[-3:]
+            assert not any(x["liveBlack"] for x in on_b), "a black live buffer was on screen"
+            assert not [e for e in errors if "Error" in e], errors
+        finally:
+            browser.close()
+
