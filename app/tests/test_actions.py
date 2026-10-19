@@ -523,3 +523,46 @@ def test_state_from_the_project_payload():
     assert st["fps"] == 29.97 and st["out"] == 2.0 and st["presets"] == {"quick": "Quick 1080p"}
     assert actions.check([{"op": "overlay", "clip": "X.MP4", "in": 0, "out": 1, "at": 0,
                            "track": "V3"}], st)["refused"] == []
+
+
+def test_a_vignette_is_lumetris_own():
+    """Wave 15, VIGNETTE (verdict 11 punch 7): "put a soft vignette on this shot" is Lumetri ›
+    Vignette — the `vignette` op, each value as its row is typed, one review line — and its
+    four numbers are `set` / `keys` properties too; Sharpen is an `effect` kind."""
+    op = accepted({"op": "vignette", "id": "s1", "amount": -1.5, "midpoint": 45, "feather": 70.0001})
+    assert op == {"op": "vignette", "id": "s1", "amount": -1.5, "midpoint": 45.0, "feather": 70.0}
+    assert actions.describe(op, state()) == \
+        "Shot 1 (CLIP_A): Lumetri Vignette — Amount −1.5, Midpoint 45, Feather 70"
+    assert "vignette" in actions.FAMILIES["lumetri"] and actions.FAMILY_OF["vignette"] == "lumetri"
+    # an op after it may shape the vignette it made, or one a keyed Amount makes
+    ok, bad = actions.validate([{"op": "vignette", "id": "s1", "amount": -2},
+                                {"op": "vignette", "id": "s1", "roundness": 40},
+                                {"op": "keys", "id": "s2", "prop": "vignette_amount", "keys": [[0, 0], [1, -3]]},
+                                {"op": "vignette", "id": "s2", "feather": 80}], state())
+    assert bad == [] and [o["op"] for o in ok] == ["vignette", "vignette", "keys", "vignette"]
+    assert actions.describe(ok[2], state()) == \
+        "Shot 2 (CLIP_B): Vignette Amount keyframes 0.0 → −3.0 over 1.00 s (2 keys)"
+    st = accepted({"op": "set", "id": "s1", "prop": "vignette_roundness", "value": -30})
+    assert actions.describe(st, state()) == "Shot 1 (CLIP_A): Vignette Roundness −30"
+    sh = accepted({"op": "effect", "id": "s3", "kind": "sharpen", "params": {"amount": 80}})
+    assert actions.describe(sh, state()) == "Shot 3 (CLIP_C): add Sharpen — Sharpen Amount 80"
+    text = actions.schema_text()
+    for word in ('{"op":"vignette","id","amount"', "Lumetri › Vignette", "The centre of the picture is never touched",
+                 "Blur & Sharpen › Sharpen", "vignette_amount, vignette_midpoint"):
+        assert word in text, word
+
+
+@pytest.mark.parametrize("op,why", [
+    ({"op": "vignette", "id": "s1"}, "say the vignette's values"),
+    ({"op": "vignette", "id": "s1", "feather": 60}, "needs its amount"),
+    ({"op": "vignette", "id": "s1", "amount": -6}, "Vignette Amount is -5 to 5"),
+    ({"op": "vignette", "id": "s1", "amount": -1, "midpoint": 120}, "Vignette Midpoint is 0 to 100"),
+    ({"op": "vignette", "id": "s1", "amount": -1, "glow": 3}, "a vignette has no 'glow'"),
+    ({"op": "vignette", "id": "ov1", "amount": -1}, "Lumetri Color applies to shots on V1"),
+    ({"op": "vignette", "id": "nope", "amount": -1}, "is not in the cut"),
+    ({"op": "keys", "id": "ov1", "prop": "vignette_amount", "keys": [[0, -1]]}, "Motion and Opacity only"),
+    ({"op": "effect", "id": "s1", "kind": "sharpen", "params": {"amount": 900}}, "Sharpen Amount is 0 to 500"),
+])
+def test_vignette_and_sharpen_refusals(op, why):
+    st = state(overlays=[{"id": "ov1", "clip": "CLIP_C.MP4", "in": 0, "out": 1, "at": 0.5, "track": "V2"}])
+    assert why in refused(op, st)
