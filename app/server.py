@@ -8843,22 +8843,42 @@ def _build_claimed(src: Path, dest: Path, orient: str, ev: threading.Event,
     finally:
         with MEDIA["lock"]:
             MEDIA["building"].pop(key, None)
+            MEDIA.get("whole_asked", set()).discard(key)
         ev.set()
+
+
+def head_is_clip(clip: str | None) -> bool:
+    """A clip no longer than one head (HEAD_PRE_S + HEAD_S): any head of it is most of the
+    clip, so a head comes no sooner than its whole preview — the same frames, encoded."""
+    dur = clip_duration(clip) if clip else None
+    return bool(dur) and dur <= HEAD_PRE_S + HEAD_S
 
 
 def _head_first(dest: Path) -> None:
     """An asked whole preview gives the head of the same clip the decoder first (wave 14):
     the board asks for the head a moment after the /media/proxy answer that started this
     build, and the two encodes side by side took ~twice as long each (the GPU's decoder).
-    It waits HEAD_FIRST_S for that ask, then for the head's encode (HEAD_WAIT_S at most)."""
+    It waits HEAD_FIRST_S for that ask, then for the head's encode (HEAD_WAIT_S at most).
+
+    A clip no longer than a head (`head_is_clip`) does not wait for an ask: its head would
+    come no sooner than this, and a monitor that never asks for one (the Source monitor, a
+    bare <video>) waited HEAD_FIRST_S for nothing — 2 s of the 5 s test_media_first's frame
+    bar allows, the encode the rest, so the bar failed whenever the box slowed the encode
+    (verdict 11, punch 10). A head of it already being made is still waited for."""
     tail = f".{PICTURE_V}.mp4"
     if not dest.name.endswith(tail):
         return
-    hk = f"head:{dest.name[:-len(tail)]}"
-    until = time.monotonic() + HEAD_FIRST_S
+    stem = dest.name[:-len(tail)]
+    hk = f"head:{stem}"
+    short = head_is_clip(clip_for_stem(stem))
+    until = time.monotonic() + (0.0 if short else HEAD_FIRST_S)
     while True:
         with MEDIA["lock"]:
             hev = MEDIA["building"].get(hk)
+            if hev is None and short:
+                # on its way at once: a head asked from now on waits for it (_build_heads)
+                MEDIA.setdefault("whole_asked", set()).add(str(dest))
+                return
         if hev is not None:
             hev.wait(HEAD_WAIT_S)
             return
@@ -9113,6 +9133,16 @@ def _build_heads(clip: str, src: Path, orient: str, key: str, ev: threading.Even
             with MEDIA["lock"]:
                 t = (MEDIA.get("head_want") or {}).get(stem)
             if t is None or head_covers(head_record(stem), t) or preview_path(stem).exists():
+                break
+            # a clip no longer than a head whose asked whole preview is on its way already
+            # (`_head_first` did not wait for this ask): that preview is the head, so the same
+            # frames are never encoded twice side by side (the GPU decoder: ~twice as long each)
+            whole = str(preview_path(stem))
+            with MEDIA["lock"]:
+                wev = (MEDIA["building"].get(whole)
+                       if whole in MEDIA.get("whole_asked", ()) else None)
+            if wev is not None and head_is_clip(clip):
+                wev.wait(HEAD_WAIT_S)
                 break
             a, b = head_span(clip, t)
             got = _build_head(clip, src, head_path(stem, a), (a, b), orient, key)
