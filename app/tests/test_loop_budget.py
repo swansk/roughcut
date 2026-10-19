@@ -65,3 +65,31 @@ def test_a_sidecar_is_parsed_once_per_version_and_each_reader_gets_its_own(tmp_p
         server.read_json_file(tmp_path / "gone.json")
 
 
+
+
+def test_stale_cli_facts_answer_at_once_and_are_asked_again_behind(monkeypatch):
+    """`claude --version` + `claude auth status` are 0.4-0.6 s on a loaded box; the
+    request that found the cache stale paid them every 30 s (slow /api/backend)."""
+    import server
+    asked = threading.Event()
+    calls = []
+
+    def ask():
+        calls.append(time.time())
+        asked.wait(5)
+        server._CLI_FACTS.update(at=time.time(), facts={"version": "new", "logged_in": True},
+                                 gen=server._CLI_FACTS["gen"] + 1)
+        return server._CLI_FACTS["facts"]
+    monkeypatch.setattr(server, "_cli_facts_ask", ask)
+    monkeypatch.setitem(server._CLI_FACTS, "facts", {"version": "old", "logged_in": True})
+    monkeypatch.setitem(server._CLI_FACTS, "at", time.time() - server.CLI_FACTS_TTL_S - 1)
+    monkeypatch.setitem(server._CLI_FACTS, "asking", False)
+    t0 = time.perf_counter()
+    assert server.cli_facts()["version"] == "old"
+    assert server.cli_facts()["version"] == "old"
+    assert time.perf_counter() - t0 < 0.1
+    asked.set()
+    deadline = time.time() + 5
+    while server._CLI_FACTS["facts"]["version"] != "new" and time.time() < deadline:
+        time.sleep(0.02)
+    assert server.cli_facts()["version"] == "new" and len(calls) == 1

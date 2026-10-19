@@ -2687,13 +2687,41 @@ def backend_preflight() -> dict:
 # both answered by the CLI itself without a model call. Cached because /api/status
 # carries this and is polled; a sign-in done at the terminal shows within the TTL, or
 # at once on *Check again*, which drops the cache.
+#
+# Asked again in the background once stale (wave 14: the two CLI calls are 0.4-0.6 s
+# on a loaded box, and the request that found the cache stale paid them — every 30 s a
+# slow /api/backend); only the first ask (at launch) waits for them.
 CLI_FACTS_TTL_S = 30.0
-_CLI_FACTS: dict = {"at": 0.0, "facts": {}}
+_CLI_FACTS: dict = {"at": 0.0, "facts": {}, "gen": 0, "asking": False}
+_CLI_FACTS_LOCK = threading.Lock()
 
 
 def cli_facts(fresh: bool = False) -> dict:
-    if not fresh and time.time() - _CLI_FACTS["at"] < CLI_FACTS_TTL_S:
-        return _CLI_FACTS["facts"]
+    """The CLI's version and sign-in (cached `CLI_FACTS_TTL_S`). Stale: what is known,
+    and a background ask; `fresh` (or nothing known yet): asked now."""
+    if fresh or not _CLI_FACTS["at"]:
+        return _cli_facts_ask()
+    if time.time() - _CLI_FACTS["at"] >= CLI_FACTS_TTL_S:
+        cli_facts_refresh()
+    return _CLI_FACTS["facts"]
+
+
+def cli_facts_refresh() -> None:
+    """Ask the CLI about itself on a thread of its own (one at a time)."""
+    with _CLI_FACTS_LOCK:
+        if _CLI_FACTS["asking"]:
+            return
+        _CLI_FACTS["asking"] = True
+
+    def run() -> None:
+        try:
+            _cli_facts_ask()
+        finally:
+            _CLI_FACTS["asking"] = False
+    threading.Thread(target=run, name="cli facts", daemon=True).start()
+
+
+def _cli_facts_ask() -> dict:
     facts: dict = {}
     try:
         out = subprocess.run(["claude", "--version"], capture_output=True, text=True,
@@ -2712,7 +2740,7 @@ def cli_facts(fresh: bool = False) -> dict:
         facts["plan"] = auth.get("subscriptionType")
     except (OSError, subprocess.TimeoutExpired, ValueError):
         facts["logged_in"] = None          # unknown is not "signed out"
-    _CLI_FACTS.update(at=time.time(), facts=facts)
+    _CLI_FACTS.update(at=time.time(), facts=facts, gen=_CLI_FACTS["gen"] + 1)
     return facts
 
 
@@ -2767,8 +2795,10 @@ def _probe_job() -> None:
 def probe_backend() -> None:
     if BACKEND["state"] == "checking":
         return
-    # *Check again* means everything: the cached CLI facts, the last job's diagnosis.
-    cli_facts(fresh=True)
+    # *Check again* means everything: the cached CLI facts (asked again beside the
+    # probe, not in the click's request), the last job's diagnosis.
+    if STATE.get("cli_facts"):
+        cli_facts_refresh()
     inference.clear_problem()
     BACKEND.update(state="checking", detail="", latency_ms=None, fix=None)
     threading.Thread(target=_probe_job, daemon=True).start()
@@ -3105,7 +3135,7 @@ def _snap_key() -> tuple:
                          if k.startswith("ROUGHCUT_"))),
             bool(os.environ.get("ANTHROPIC_API_KEY")),
             # the CLI's sign-in is re-asked once its cache is stale (`cli_facts`)
-            int(time.time() // CLI_FACTS_TTL_S) if STATE.get("cli_facts") else 0,
+            (int(time.time() // CLI_FACTS_TTL_S), _CLI_FACTS["gen"]) if STATE.get("cli_facts") else 0,
             STATE.get("edl_created"), _snap_paths())
 
 
