@@ -148,6 +148,19 @@
     return t && t.state && t.state.anchor != null ? String(t.state.anchor) : null;
   }
   function seg(id) { return SEGS().find((s) => String(s.id) === String(id)) || null; }
+  /* An event's clip time on its shot, or null when it is not on it: inside [in, out), or
+   * within half a frame of an edge and moved onto it, as the render draws it (roughcut/
+   * fx.py EDGE_TOL_S, snap_events; verdict 11 punch 2: an in-point of 194.5944 given to
+   * the designer as 194.59 put "at the start of this shot" 4 ms before the shot). */
+  const EDGE_TOL_S = 0.5 / 60;
+  function onShot(ev, sg) {
+    const t = Number(ev && ev.t);
+    if (!sg || !Number.isFinite(t)) return null;
+    if (t >= sg.in && t < sg.out) return t;
+    if (t >= sg.in - EDGE_TOL_S && t < sg.in) return sg.in;
+    if (t >= sg.out && t < sg.out + EDGE_TOL_S) return Math.max(sg.in, round4(sg.out - EDGE_TOL_S));
+    return null;
+  }
   /* the shot's effects — and the proposals keyed to a shot the edits will create, which
    * sit on the shot they are anchored to until Accept (`anchor_shot`, the server's) */
   function forShot(id) {
@@ -258,9 +271,10 @@
     S.sel = { id, i };
     const e = byId(id), sg = e && seg(e.shot), ev = e && e.events[i];
     const t = TL();
-    if (e && sg && ev && t && ev.t >= sg.in && ev.t < sg.out) {
+    const at = e && sg && ev ? onShot(ev, sg) : null;
+    if (t && at != null) {
       const start = t.filmStart(sg.id);
-      if (start >= 0) t.seek(start + (ev.t - sg.in));
+      if (start >= 0) t.seek(start + (at - sg.in));
     }
     paint();
   }
@@ -873,8 +887,8 @@
     band.style.width = `${Math.max(2, x1 - x0)}px`;
     band.classList.toggle('whole', !windowFor(S.shot));
     const ticks = activeForShot(S.shot).flatMap((e) => (e.events || [])
-      .filter((ev) => ev.t >= sg.in && ev.t < sg.out)
-      .map((ev) => tl.timeToX(start + (ev.t - sg.in)) - x0));
+      .map((ev) => onShot(ev, sg)).filter((at) => at != null)
+      .map((at) => tl.timeToX(start + (at - sg.in)) - x0));
     band.innerHTML = ticks.map((x) => `<i style="left:${x.toFixed(1)}px"></i>`).join('')
       + (windowFor(S.shot) ? `<span>${esc(`${shotFilm(w.t0)}–${shotFilm(w.t1)}`)}</span>` : '');
   }
@@ -1250,8 +1264,9 @@
     const B = (ov.size || 0.12) * W;
     const dur = ov.duration || 0.35;
     for (const ev of e.events || []) {
-      if (!(ev.t >= sg.in && ev.t < sg.out)) continue;
-      const dt = t - ev.t;
+      const at = onShot(ev, sg);
+      if (at == null) continue;
+      const dt = t - at;
       if (dt < 0 || dt >= dur) continue;
       if (ov.flash && dt < (ov.flash.duration || 0)) {
         ctx.save();
@@ -1352,7 +1367,8 @@
       if (prev != null && !v.paused && t > prev) {
         for (const e of drawnForShot(sg.id)) {
           (e.events || []).forEach((ev, i) => {
-            if (ev.t >= sg.in && ev.t < sg.out && ev.t >= prev && ev.t < t) sound(e, i);
+            const at = onShot(ev, sg);
+            if (at != null && at >= prev && at < t) sound(e, i);
           });
         }
       }
@@ -1733,6 +1749,7 @@
     move: (id, i, x, y) => { const e = byId(id); return e ? moveEvent(e, i, x, y) : Promise.resolve(null); },
     fmtT,
     poseAt,
+    onShot,                 // an event's time on its shot (half a frame's slack at each edge)
     draw,
     redraw: draw,
     audio: (id) => { const a = S.audio.get(id); return a && a.el ? a.el : null; },

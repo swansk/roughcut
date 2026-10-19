@@ -1202,6 +1202,34 @@ def test_the_monitor_draws_the_effect_at_its_hit_and_only_then(page):
     page.wait_for_function("!document.querySelector('#fxCanvas').classList.contains('live')")
 
 
+def test_the_monitor_draws_an_effect_anchored_on_the_shots_first_frame(page):
+    """Verdict 11, punch 2: an effect the designer anchored "at the start of this shot" on
+    the in-point read to 2 decimals sat a few ms before the shot, and the monitor skipped
+    it (`ev.t >= sg.in`) as the export did. Within half a frame of an edge an event is on
+    the shot (fx.js `onShot`, roughcut/fx.py EDGE_TOL_S): an accepted hit at clip 0.996 on
+    a shot from 1.0 (written as it was before validation moved such events) is drawn from
+    the shot's first frame; one a frame out is not on the shot."""
+    import server
+    assert page.evaluate("fx.onShot({t: 0.996}, {in: 1.0, out: 3.0})") == 1.0
+    assert page.evaluate("fx.onShot({t: 1.5}, {in: 1.0, out: 3.0})") == 1.5
+    assert page.evaluate("fx.onShot({t: 3.004}, {in: 1.0, out: 3.0})") == pytest.approx(3.0 - 0.5 / 60, abs=1e-4)
+    assert page.evaluate("fx.onShot({t: 0.98}, {in: 1.0, out: 3.0})") is None
+    assert page.evaluate("fx.onShot({t: 3.0}, {in: 1.0, out: 3.0})") is not None
+    sid1 = shot_ids(page)[0]
+    hit = json.loads(json.dumps(HIT))
+    hit.update(id="fx_start1", shot=sid1, clip="CLIP_A.MP4", status="accepted", sound=None,
+               created="2026-10-19T09:00:00", events=[{"t": 0.996, "x": 0.5, "y": 0.7}])
+    server._fx_put(hit)                       # as on disk before the fix: not re-validated
+    open_fx(page, 0)
+    page.evaluate("fx.refresh()")
+    wait_effect(page, "fx_start1", "e => e.status === 'accepted'")
+    page.evaluate("tl.seek(0.1)")             # clip 1.1: 0.1 s into the hit from the first frame
+    page.wait_for_function(
+        "Math.abs(document.querySelector('.screen video.live').currentTime - 1.1) < 0.02", timeout=10000)
+    page.wait_for_function("document.querySelector('#fxCanvas').classList.contains('live')")
+    page.wait_for_function(f"({PIXELS})([0.5, 0.7, 30]) > 0", timeout=10000)
+
+
 def test_preview_plays_the_shot_and_sounds_each_hit_once_per_pass(page):
     """Preview plays this shot only; the effect's sound (one Audio from its sound.wav)
     starts as the clip time crosses each hit — twice for two hits, not more, however
