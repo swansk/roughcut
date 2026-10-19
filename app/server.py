@@ -1815,7 +1815,7 @@ SLOW_KEEP = 50
 SLOW: list[dict] = []
 SLOWEST: dict = {"all": None, "api": None, "loop": None}
 _LOOP_WATCH: dict = {"task": None, "beat": None, "tid": None, "sampler": None, "hold": None,
-                     "cpu_base": None}
+                     "cpu_base": None, "ntid": None, "ring": None}
 # The budget (wave 14, verdict 10 punch 1: "no request > 300 ms and no loop hold > 200
 # ms" during a first pass, an export and an effect check): what is over it is kept apart
 # (`over_budget`, the last 50), each loop hold with `where` the loop was and which threads
@@ -1879,11 +1879,114 @@ def _thread_cpu() -> dict[int, float]:
     return out
 
 
+# What the box did to the process (wave 16, verdict 12 punch 7): the judge's Killington
+# holds (227-651 ms) had the loop "barely on CPU while the box swapped", and a Python
+# sampler cannot say why — it needs the GIL itself. The kernel can: the loop thread's
+# run-queue wait (`/proc/self/task/<tid>/schedstat`: runnable and not run, a starved CPU),
+# the process's major faults (`/proc/self/stat`: pages read back from swap, the GIL held
+# by whoever touched them) and the time this process spent collecting garbage (one thread,
+# the GIL held, every tracked object touched). Each hold and each request over the budget
+# carries the three over its span, and `cause` says which of them explains it.
+GC_WATCH: dict = {"t0": None, "ms": 0.0, "n": 0, "longest": None}
+LOOP_RING_N = 64             # the sampler's last readings (~2.5 s): a request's baseline
+
+
+def _gc_watch(phase: str, info: dict) -> None:
+    if phase == "start":
+        GC_WATCH["t0"] = time.perf_counter()
+        return
+    t0 = GC_WATCH["t0"]
+    if t0 is None:
+        return
+    ms = (time.perf_counter() - t0) * 1000.0
+    GC_WATCH["t0"] = None
+    GC_WATCH["ms"] += ms
+    GC_WATCH["n"] += 1
+    top = GC_WATCH["longest"]
+    if top is None or ms > top["ms"]:
+        GC_WATCH["longest"] = {"ms": round(ms, 1), "generation": info.get("generation"),
+                               "collected": info.get("collected"), "at": time.time()}
+
+
+if _gc_watch not in gc.callbacks:
+    gc.callbacks.append(_gc_watch)
+
+
+def _box_now() -> tuple:
+    """(the loop thread's run-queue wait so far in ms, the process's major faults so far,
+    the garbage collections' time so far in ms); None where /proc does not say (not
+    Linux, or before the watcher knows the loop thread)."""
+    rq = None
+    ntid = _LOOP_WATCH.get("ntid")
+    if ntid is not None:
+        try:
+            with open(f"/proc/self/task/{ntid}/schedstat", "rb") as fh:
+                rq = int(fh.read().split()[1]) / 1e6
+        except (OSError, ValueError, IndexError):
+            rq = None
+    maj = None
+    try:
+        with open("/proc/self/stat", "rb") as fh:
+            st = fh.read()
+        maj = int(st[st.rindex(b")") + 2:].split()[9])
+    except (OSError, ValueError, IndexError):
+        maj = None
+    return rq, maj, GC_WATCH["ms"]
+
+
+def _box_since(base) -> dict:
+    """The run-queue wait, major faults and GC time since `base` (a `_box_now()`)."""
+    if base is None:
+        return {}
+    rq, maj, gcms = _box_now()
+    out: dict = {"gc_ms": round(gcms - base[2], 1)}
+    if rq is not None and base[0] is not None:
+        out["rq_ms"] = round(rq - base[0], 1)
+    if maj is not None and base[1] is not None:
+        out["majflt"] = maj - base[1]
+    return out
+
+
+def _box_before(t: float):
+    """The sampler's last reading taken at or before perf_counter `t` (None: none kept)."""
+    best = None
+    for at, box in list(_LOOP_WATCH.get("ring") or ()):
+        if at > t:
+            break
+        best = box
+    return best
+
+
+def _cause(ms: float, w: dict) -> str:
+    """What explains a hold (or a request) of `ms`: "gc" (this process collecting garbage),
+    "loop" (the loop thread ran server code: sync work on the loop), "thread" (another
+    server thread ran with the GIL), "starved" (the loop thread was runnable and the box
+    did not run it), "faults" (pages read back from swap while the GIL was held) or "?";
+    a request's "server" is the process's own CPU through it (every thread)."""
+    half = 0.5 * ms
+    if float(w.get("gc_ms") or 0) >= half:
+        return "gc"
+    if float(w.get("loop_cpu_ms") or 0) >= half:
+        return "loop"
+    if float(w.get("busy_cpu_ms") or 0) >= half:
+        return "thread"
+    if "loop_cpu_ms" not in w and float(w.get("proc_cpu_ms") or 0) >= half:
+        return "server"              # a request: the process worked through it
+    if float(w.get("rq_ms") or 0) >= half:
+        return "starved"
+    if int(w.get("majflt") or 0) > 0:
+        return "faults"
+    return "?"
+
+
 def _loop_sampler() -> None:
     """A thread beside the loop. While the loop keeps its beat it notes every thread's
-    CPU time (the baseline a hold is measured from); while the loop has missed its beat
-    by more than a tick it notes where the loop thread is — the loop running sync work
-    shows its own frames, a loop waiting for the GIL shows the selector."""
+    CPU time (the baseline a hold is measured from) and what the box has done to the
+    process so far (`_box_now`, kept a few seconds: a request's baseline); while the loop
+    has missed its beat by more than a tick it notes where the loop thread is — the loop
+    running sync work shows its own frames, a loop waiting for the GIL shows the selector."""
+    from collections import deque
+    ring = _LOOP_WATCH["ring"] = deque(maxlen=LOOP_RING_N)
     while True:
         time.sleep(LOOP_SAMPLE_S)
         beat, tid = _LOOP_WATCH.get("beat"), _LOOP_WATCH.get("tid")
@@ -1891,7 +1994,9 @@ def _loop_sampler() -> None:
         if beat is None or tid is None:
             continue
         if now - beat < LOOP_TICK_S * 2:
-            _LOOP_WATCH["cpu_base"] = (beat, _thread_cpu(), time.process_time())
+            box = _box_now()
+            _LOOP_WATCH["cpu_base"] = (beat, _thread_cpu(), time.process_time(), box)
+            ring.append((now, box))
             continue
         frames = sys._current_frames()
         hold = _LOOP_WATCH.get("hold")
@@ -1929,11 +2034,14 @@ def _hold_where(beat: float) -> dict:
     out["busy_cpu_ms"] = round(ran[0][0] * 1000.0, 1) if ran else 0.0
     # the whole process (threads that ended meanwhile, and work beside the GIL too)
     out["proc_cpu_ms"] = round((time.process_time() - base[2]) * 1000.0, 1)
+    # what the box did meanwhile: the loop's run-queue wait, major faults, GC time
+    out.update(_box_since(base[3] if len(base) > 3 else None))
     return out
 
 
 async def _loop_lag() -> None:
     _LOOP_WATCH["tid"] = threading.get_ident()
+    _LOOP_WATCH["ntid"] = threading.get_native_id()
     sampler = _LOOP_WATCH.get("sampler")
     if sampler is None or not sampler.is_alive():
         sampler = _LOOP_WATCH["sampler"] = threading.Thread(
@@ -1949,6 +2057,8 @@ async def _loop_lag() -> None:
         where = _hold_where(t0) if lag >= 20.0 else None
         if lag > 0 and (top is None or lag > top["ms"]):
             SLOWEST["loop"] = {"ms": round(lag, 1), "at": time.time(), "where": where}
+        if where is not None:
+            where["cause"] = _cause(lag, where)
         if lag >= LOOP_BUDGET_MS:
             row = {"method": "LOOP", "path": "(the event loop was held)", "handler": "-",
                    "ms": round(lag, 1), "status": None, "at": time.time(), "where": where}
@@ -1963,6 +2073,8 @@ async def _loop_lag() -> None:
                 del SLOW[:-SLOW_KEEP]
                 w = row["where"] or {}
                 print(f"  !! the event loop was held {lag:.0f} ms"
+                      + (f" ({w.get('cause')}: rq {w.get('rq_ms')} ms, {w.get('majflt')} faults, "
+                         f"gc {w.get('gc_ms')} ms)" if w.get("cause") else "")
                       + (f" — loop at {w.get('loop')}" if w.get("loop") else "")
                       + (f"; ran: {'; '.join(w['busy'])}" if w.get("busy") else ""), flush=True)
 
@@ -2043,20 +2155,59 @@ class RequestTiming:
                         row["load"] = round(os.getloadavg()[0], 1)
                     except OSError:
                         pass
+                    # and what the box did to the process meanwhile (wave 16): the loop's
+                    # run-queue wait, major faults, GC time — from the sampler's last
+                    # reading before the request began
+                    row.update(_box_since(_box_before(t0)))
+                    row["cause"] = _cause(row["ms"], row)
                 note_request(row)
 
 
 app.add_middleware(RequestTiming)
 
 
+def _heap_types(n: int = 25) -> dict:
+    """The live objects the collector tracks, by type: the commonest `n` with their count and
+    shallow size (MB), and the totals."""
+    counts: dict[str, list] = {}
+    objs = gc.get_objects()
+    for o in objs:
+        k = type(o).__name__
+        c = counts.get(k)
+        if c is None:
+            c = counts[k] = [0, 0]
+        c[0] += 1
+        try:
+            c[1] += sys.getsizeof(o)
+        except TypeError:
+            pass
+    top = sorted(counts.items(), key=lambda kv: -kv[1][0])[:n]
+    return {"tracked": len(objs), "frozen": gc.get_freeze_count(),
+            "types": [[k, c, round(b / 2**20, 2)] for k, (c, b) in top]}
+
+
 @app.get("/api/debug/slow")
-def api_debug_slow() -> JSONResponse:
+def api_debug_slow(heap: int = 0) -> JSONResponse:
     """Read-only: the last 50 requests over SLOW_MS (and event-loop holds), and the
     slowest request (`slowest`) and slowest `/api/` request (`slowest_api`) seen; the
     budget (`budget`: a request's first byte within 300 ms, the loop never held 200 ms)
     with the last 50 over it (`over_budget`, holds with `where`) and the longest hold
-    (`slowest_loop`)."""
+    (`slowest_loop`); `gc` (collections, their time, the longest) and `rss_mb`. Each row
+    over the budget has `cause` (`_cause`) with the loop's run-queue wait (`rq_ms`), the
+    major faults (`majflt`) and the GC time (`gc_ms`) over its span. `?heap=1` adds the
+    commonest live object types (a walk of every object, the GIL held: a look, not a poll)."""
+    rss = None
+    try:
+        with open("/proc/self/statm", "rb") as fh:
+            rss = round(int(fh.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 2**20, 1)
+    except (OSError, ValueError, IndexError):
+        pass
     return JSONResponse({"threshold_ms": SLOW_MS, "slowest": SLOWEST["all"],
+                         "gc": {"n": GC_WATCH["n"], "ms": round(GC_WATCH["ms"], 1),
+                                "longest": GC_WATCH["longest"], "count": list(gc.get_count()),
+                                "frozen": gc.get_freeze_count()},
+                         "rss_mb": rss,
+                         **({"heap": _heap_types()} if heap else {}),
                          "slowest_api": SLOWEST["api"], "slowest_loop": SLOWEST["loop"],
                          "budget": {"request_ms": REQUEST_BUDGET_MS, "loop_ms": LOOP_BUDGET_MS},
                          "over_budget": list(OVER_BUDGET), "slow": list(SLOW)})
