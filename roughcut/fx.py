@@ -1706,6 +1706,24 @@ def _revealed_at(overlay: dict, dur: float) -> float | None:
     return max(0.0, min(done, last))
 
 
+def _shown_at(overlay: dict, dur: float) -> float | None:
+    """Seconds into the effect when the sprite first shows at (nearly) its fullest, when
+    its opacity eases in: a vignette faded up over 0.4 s was measured 0.1 s in, a
+    quarter drawn, and failed its own check (wave 14, Killington's fx_6bfca884). None
+    when it is (nearly) all there by the usual 0.1 s: the check samples as before."""
+    track = (overlay.get("anim") or {}).get("opacity")
+    if not track:
+        return None
+    step = 1 / 24
+    times = [i * step for i in range(int(dur / step) + 1)]
+    shown = [sample_track(track, t, 1.0) for t in times]
+    peak = max(shown, default=0.0)
+    if peak <= 0 or sample_track(track, min(0.1, dur * 0.4), 1.0) >= 0.9 * peak:
+        return None
+    first = next(t for t, v in zip(times, shown) if v >= 0.9 * peak)
+    return max(0.0, min(first + 0.05, dur - 0.05))
+
+
 def verify(effect: dict, seg: dict, *, onset: list[float] | None = None,
            hz: float = ONSET_HZ, part: Path | None = None, base: Path | None = None,
            impact: bool = True) -> dict:
@@ -1804,6 +1822,10 @@ def verify(effect: dict, seg: dict, *, onset: list[float] | None = None,
         # has drawn its first two characters, high on the first line, nowhere near the
         # anchor its whole block is centred on (fx_b9e6a61c, I16.0 j)
         look = _revealed_at(overlay, dur)
+        # …and a sprite that fades up, once it is up
+        shown = _shown_at(overlay, dur)
+        if shown is not None:
+            look = shown if look is None else max(look, shown)
         for ev in evs:
             ts = ev["t_part"] + min(0.1, dur * 0.4)
             if look is not None:      # …and never past the shot's own end

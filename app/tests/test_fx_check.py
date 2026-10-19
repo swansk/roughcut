@@ -351,3 +351,34 @@ def test_the_eta_counts_from_the_check_not_from_its_wait(monkeypatch, scripted, 
     assert snap["state"] == "done", snap
     assert snap["waited_s"] >= 2.0 and snap["elapsed_s"] < snap["waited_s"] + 60
     assert etas and etas[0] is not None and etas[0] > 0, etas
+
+
+def test_a_vignette_that_fades_up_is_checked_once_it_is_up(project, tmp_path):
+    """Killington, wave 14: the designer eased the vignette in (opacity 0 → 1 over
+    0.4 s); its check looked 0.1 s in, found a quarter of it at the bottom edge only,
+    and said "not drawn where expected". The proof is measured once the sprite is up."""
+    import subprocess
+    from roughcut import fxcheck
+    # a mid-grey shot: a quarter of a soft vignette moves no pixel past the check's
+    # threshold (24/255), the whole of it darkens the corners by ~50
+    grey = tmp_path / "GREY.MP4"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-f", "lavfi",
+                    "-i", "color=c=0x808080:size=320x180:rate=24:duration=4", "-f", "lavfi",
+                    "-i", "sine=frequency=440:duration=4", "-c:v", "libx264", "-preset", "ultrafast",
+                    "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(grey)],
+                   check=True, capture_output=True)
+    seg = {"id": "s1", "clip": "GREY.MP4", "in": 0.0, "out": 4.0}
+    e = fx.validate_effect({"id": "fx_fade0001", "shot": "s1", "clip": "GREY.MP4",
+                            "name": "soft vignette", "events": [{"t": 0.0, "x": 0.5, "y": 0.5}],
+                            "overlay": {**VIGNETTE, "duration": 4.0,
+                                        "shapes": [dict(s, opacity=0.06) for s in VIGNETTE["shapes"]],
+                                        "anim": {"opacity": [[0, 0], [0.4, 1], [3.6, 1], [4.0, 0]]}},
+                            "sound": None}, [seg])
+    assert fx._shown_at(e["overlay"], 4.0) == pytest.approx(0.375 + 0.05, abs=0.05)
+    assert fx._shown_at(VIGNETTE, 2.0) is None                     # no fade: as before
+    res = fxcheck.check({"effect": e, "seg": seg, "src": str(grey),
+                         "dir": str(tmp_path / "fx"), "w": 640, "h": 360, "fps": 24,
+                         "onset": None, "hz": 10, "impact": False})
+    pic = next(c for c in res["verify"]["checks"] if c["key"] == "picture_landed")
+    assert pic["ok"] is True, pic
+    assert res["stats"]["overlay_frames"] <= 20                   # the fades, then one held frame
