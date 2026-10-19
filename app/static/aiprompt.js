@@ -71,6 +71,23 @@
     const s = Math.max(0, Math.floor(ms / 1000));
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   };
+  // A sequence time as the scope chip says it (verdict 11, punch 8: two whole timecodes
+  // read "In/Out 00:00:00:00-00:00:0…"): m:ss, h:mm:ss past an hour, tenths when both ends
+  // would read the same second. The chip's hover keeps the timecodes.
+  const chipTime = (t, tenths) => {
+    // whole seconds as a timecode reads them (down); tenths to the nearest (a frame-grid
+    // Out of 1.7917 s reads 0:01.8)
+    let v = Math.max(0, Number(t) || 0);
+    v = tenths ? Math.round(v * 10) / 10 : Math.floor(v + 1e-6);
+    const h = Math.floor(v / 3600), m = Math.floor((v - h * 3600) / 60);
+    const sec = v - h * 3600 - m * 60;
+    const ss = tenths ? sec.toFixed(1).padStart(4, '0') : String(Math.round(sec)).padStart(2, '0');
+    return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+  };
+  const chipSpan = (a, b) => {
+    const same = chipTime(a) === chipTime(b);
+    return `${chipTime(a, same)}–${chipTime(b, same)}`;
+  };
   const TL = () => (window.tl && tl.state ? tl : null);
   const tc = (t) => (TL() && typeof tl.tc === 'function' ? tl.tc(t) : secs(t));
   function say(msg, ms) { if (typeof window.toast === 'function') window.toast(msg, ms || 4000); }
@@ -185,7 +202,7 @@
         const seg = segOf(ids[0]);
         const no = shotNo(t, ids[0]);
         const name = seg ? clipName(seg.clip) : 'clip';
-        return { text: no ? `Shot ${no} · ${name}` : name,
+        return { text: no ? `Shot ${no} · ${name}` : name, short: [no ? `Shot ${no}` : 'Clip'],
           title: `the selected shot: ${no ? `shot ${no} (${name})` : name}`
             + (seg ? `, ${tc(seg.in)}–${tc(seg.out)} of the clip` : '') };
       }
@@ -193,18 +210,20 @@
       const each = ids.map((id) => { const seg = segOf(id), no = shotNo(t, id);
         return seg && no ? `shot ${no} (${clipName(seg.clip)})` : null; }).filter(Boolean);
       return { text: nums.length === ids.length && nums.length ? shotList(nums) : plural(ids.length, 'shot'),
+        short: [plural(ids.length, 'shot')],
         title: `the ${ids.length} selected shots${each.length ? `: ${each.join(', ')}` : ''}` };
     }
     if (s.kind === 'range') {
-      return { text: `In/Out ${tc(s.in)}–${tc(s.out)}`,
+      return { text: `In/Out ${chipSpan(s.in, s.out)}`, short: ['In/Out'],
         title: `the sequence In/Out: ${tc(s.in)} to ${tc(s.out)} (${secs(s.out - s.in)})` };
     }
     if (s.kind === 'clip') {
       const span = s.in != null && s.out != null ? `, its In/Out ${secs(s.in)}–${secs(s.out)}` : '';
       // the Source monitor's clip says so; a Project panel clip reads as its row does
       const src = window.rcSource && window.rcSource.clip === s.clip;
-      return src ? { text: `Source: ${clipName(s.clip)}`, title: `the Source clip ${clipName(s.clip)}${span}` }
-        : { text: clipName(s.clip), title: `the clip ${clipName(s.clip)} in the Project panel${span}` };
+      return src ? { text: `Source: ${clipName(s.clip)}`, short: ['Source clip'],
+        title: `the Source clip ${clipName(s.clip)}${span}` }
+        : { text: clipName(s.clip), short: ['Clip'], title: `the clip ${clipName(s.clip)} in the Project panel${span}` };
     }
     return { text: 'Sequence', title: 'the whole sequence' };
   }
@@ -274,11 +293,17 @@
     });
     chip.addEventListener('click', (e) => { e.stopPropagation(); toggleScopeMenu(); });
     input.addEventListener('keydown', onInputKey);
-    input.addEventListener('focus', () => { host.classList.add('focus'); paintStatus(); fetchPrice(input.value, scope()); });
-    input.addEventListener('blur', () => { host.classList.remove('focus'); paintStatus(); });
+    input.addEventListener('focus', () => { host.classList.add('focus'); paintStatus(); paintScope(); fetchPrice(input.value, scope()); });
+    input.addEventListener('blur', () => { host.classList.remove('focus'); paintStatus(); paintScope(); });
     input.addEventListener('input', () => { host.classList.toggle('typed', !!input.value); AI.histAt = -1; priceSoon(); });
     status.addEventListener('click', onStatusClick);
-    if ('ResizeObserver' in window) new ResizeObserver(fitPlaceholder).observe(input);
+    if ('ResizeObserver' in window) {
+      new ResizeObserver(fitPlaceholder).observe(input);
+      new ResizeObserver((es) => {                              // the chip's room
+        chipRoom = Math.round(es[es.length - 1].contentRect.width);
+        paintScope();
+      }).observe(field);
+    }
     paintScope();
     paintStatus();
     return true;
@@ -306,6 +331,40 @@
     if (input.placeholder !== fit) input.placeholder = fit;
   }
 
+  /* The chip's words whole, never cut with "…" (verdict 11, punch 8): the longest of its
+   * forms that fits the chip's room — its max-width, and the field's width less what the
+   * field's other parts need (the input keeps its least) — else its shortest ("Shot 5",
+   * "In/Out"). Measured in the label's own font; the hover always has the whole scope. */
+  let chipMeasure = null, chipKey = '', chipSaid = '';
+  function chipFit(el, forms) {
+    const label = $('.aip-scope-l', el);
+    if (!label || forms.length < 2 || !field) return forms[0];
+    // measured again only when the words, the field's width (chipRoom) or the key hint change:
+    // paintScope runs every second, during playback too, and a measure is a layout read
+    const key = `${forms.join('|')}|${chipRoom}|${host.classList.contains('focus')}|${host.classList.contains('typed')}`;
+    if (key === chipKey) return chipSaid;
+    const cs = getComputedStyle(el);
+    const fixed = el.offsetWidth - label.offsetWidth;          // padding, border, gap, chevron
+    const max = parseFloat(cs.maxWidth);
+    // the field's other parts as laid out (the icon is an <svg>: no offsetWidth), the input
+    // at its least; a hidden one (the key hint while typing) takes no room and no gap
+    const parts = [...field.children].filter((c) => c !== el
+      && (c === input || c.getBoundingClientRect().width > 0));
+    const others = parts.reduce((a, c) => a + (c === input ? INPUT_LEAST : c.getBoundingClientRect().width), 0);
+    const fcs = getComputedStyle(field);
+    const gaps = parseFloat(fcs.columnGap || fcs.gap || '0') * parts.length;
+    const pad = parseFloat(fcs.paddingLeft) + parseFloat(fcs.paddingRight);
+    let room = field.clientWidth - pad - gaps - others - fixed;
+    if (Number.isFinite(max)) room = Math.min(room, max - fixed);
+    chipMeasure = chipMeasure || document.createElement('canvas').getContext('2d');
+    chipMeasure.font = getComputedStyle(label).font;
+    chipKey = key;
+    chipSaid = forms.find((f) => chipMeasure.measureText(f).width <= room + 0.5) || forms[forms.length - 1];
+    return chipSaid;
+  }
+  const INPUT_LEAST = 60;     // aiprompt.css .aip-input min-width
+  let chipRoom = 0;           // the field's width, from its ResizeObserver
+
   let scopeKey = '';
   function paintScope() {
     if (!chip) return;
@@ -320,8 +379,9 @@
     }
     const w = scopeWords(s);
     const l = $('.aip-scope-l', chip);
-    if (l.textContent !== w.text) l.textContent = w.text;
     chip.dataset.kind = s.kind;
+    const say = chipFit(chip, [w.text].concat(w.short || []));
+    if (l.textContent !== say) l.textContent = say;
     const t = `The AI works on ${w.title}. Click to change it: the selected clips, the In/Out,`
       + ' the Source clip or the whole sequence.';
     if (chip.title !== t) chip.title = t;
@@ -347,8 +407,10 @@
       html = '<span class="aip-dim">Stopped · nothing changed</span>'
         + '<button type="button" class="aip-x" data-ai="dismiss" aria-label="dismiss" title="dismiss">×</button>';
     } else if (host && host.classList.contains('focus')) {
+      // the price before ↵, whole at every width (verdict 11, punch 8: Selects open, the narrow
+      // Timeline hid the words and left their dot, "↵ ask ·"): the dot is the words' own
       const c = costOf(null);
-      html = `<span class="aip-dim">↵ ask${c.words ? ` · <span class="aip-cost" title="${esc(c.title)}">${esc(c.words)}</span>` : ''}</span>`;
+      html = `<span class="aip-dim">↵ ask${c.words ? `<span class="aip-psep"> · </span><span class="aip-cost" title="${esc(c.title)}">${esc(c.words)}</span>` : ''}</span>`;
     }
     // compared with what was last written, not innerHTML's re-serialisation: a needless
     // rewrite between a press and its release would swallow a click on Stop or Review

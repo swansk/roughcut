@@ -1166,9 +1166,9 @@ def test_the_scope_chip_names_a_block_as_the_review_does(browser, live_server, p
         p.locator('#tl .blk[data-id="shot-b"]').click()
         p.locator('#tl .blk[data-id="shot-c"]').click(modifiers=["Control"])
         p.wait_for_function("(s) => document.querySelector(s).innerText.trim() === 'Shots 2–3'", arg=chip)
-        # an In/Out: its two timecodes, whole
+        # an In/Out: its two times, whole (verdict 11, punch 8: m:ss, the timecodes in its hover)
         p.evaluate("tl.select([]); tl.setSeqIn(1.0); tl.setSeqOut(4.5)")
-        want = p.evaluate("`In/Out ${tl.tc(1.0)}–${tl.tc(4.5)}`")
+        want = "In/Out 0:01–0:04"
         p.wait_for_function("([s, w]) => document.querySelector(s).innerText.trim() === w", arg=[chip, want])
         assert p.evaluate(whole, chip), "the In/Out chip is cut"
         p.evaluate("tl.setSeqIn(null); tl.setSeqOut(null)")

@@ -75,10 +75,12 @@
                                     padding: 0 3px; height: 18px; line-height: 16px; font-size: 14px; }
 #aiPrompt .aip-x:hover, .aip-pop .aip-x:hover { color: var(--text, #dcdcdf); background: transparent; }
 
-/* a narrow Timeline (the panels dragged): the key hint goes, then the status's words */
+/* a narrow Timeline (the panels dragged, Selects open): the key hint goes, then the running
+   line's cost and the result's dots — never the price before ↵ ("↵ ask · free on your plan"
+   is short, and it is what an ask costs; verdict 11, punch 8) */
 @container aiprompt (max-width: 520px) {
   #aiPrompt .aip-key { display: none; }
-  #aiPrompt .aip-cost, #aiPrompt .aip-sep { display: none; }
+  #aiPrompt .aip-status[data-state=working] .aip-cost, #aiPrompt .aip-sep { display: none; }
 }
 @container aiprompt (max-width: 380px) {
   #aiPrompt .aip-field { min-width: 160px; }
