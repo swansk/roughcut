@@ -554,7 +554,9 @@ def test_designed_effects_go_to_the_designer_with_the_note(browser, live_server,
     """Accepting a design_effect op opens Designed Effects on that shot with the note and
     presses Design (the designer's own proposal and review follow) — the request the same
     note typed there and Design pressed by hand sends. It changes nothing in the cut by
-    itself: no undo entry, the EDL untouched."""
+    itself — the EDL untouched — and it is one undo entry of its own (verdict 12, punch 5:
+    with none, the next Ctrl+Z undid the edit before it), whose undo takes the request back
+    (test_ai_honest_ui)."""
     b = Board(browser, live_server, project)
     try:
         before = b.raw()
@@ -566,7 +568,7 @@ def test_designed_effects_go_to_the_designer_with_the_note(browser, live_server,
         b.page.wait_for_function("dock.current() === 'fx'", timeout=8000)
         assert _wait(b.page, lambda: ai), "Design was never pressed"
         assert b.page.evaluate("fx.state.shot") == "shot-b"
-        assert b.page.locator("#undo").is_disabled()
+        assert check_undo_title(b.page.locator("#undo").get_attribute("title") or "") == "AI: effect"
         assert b.raw() == before
     finally:
         b.close()
