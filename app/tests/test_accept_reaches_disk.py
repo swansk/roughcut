@@ -446,3 +446,37 @@ def test_a_quiet_board_and_an_after_preview_save_nothing(browser, live_server, p
     finally:
         ctx.close()
     assert errors == [], errors
+
+
+def test_every_hand_edit_saves_through_its_own_path(browser, live_server, project):
+    """The watch is a net, not the way edits save: a trim, a razor, a move, a speed, a
+    marker, In / Out, a track, a V2 clip, a transition, Effect Controls, a look and an undo
+    each reach the disk through their own save, and the watch never has to start one."""
+    ctx, page, errors = open_board(browser, live_server, project)
+    try:
+        page.evaluate("""() => {
+          tl.setRange('shot-a', 1.25, null);
+          tl.split('shot-c', 5.0);
+          tl.move(['shot-c'], 'shot-a');
+          tl.setSpeed('shot-b', 0.5);
+          tl.addMarker(1.5);
+          tl.setSeqIn(0.5); tl.setSeqOut(4.0);
+          tl.addTrack('video');
+          tl.addOverlay({clip: 'CLIP_C.MP4', in: 0, out: 1.0}, 1.0, 'V2');
+          tl.addTransition(0, 'cross_dissolve', 0.5);
+          effects.set('saturation', 80, tl.byId('shot-b'));
+          colourEdit('look', () => { shotOverride('shot-b', true).look = 'crisp'; });
+        }""")
+        page.wait_for_timeout(2500)
+        page.evaluate("tl.undo()")
+        page.wait_for_timeout(2500)
+        assert page.evaluate("window.saveHeals") == 0
+        page.wait_for_function("document.querySelector('#saveState').dataset.state === 'saved'", timeout=8000)
+        disk = _disk(project)
+        assert disk["markers"] == [1.5] and disk["in"] == 0.5 and disk["out"] == 4.0
+        assert disk["segments"][0]["clip"] == "CLIP_C.MP4" and len(disk["segments"]) == 4
+        assert (disk.get("colour") or {}).get("shots", {}).get("shot-b", {}).get("look") is None   # undone
+        assert any((s.get("controls") or {}).get("saturation") == 80 for s in disk["segments"])
+    finally:
+        ctx.close()
+    assert errors == [], errors
