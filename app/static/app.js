@@ -1277,8 +1277,23 @@ function armUpcoming(i, g, room) {
     const b2 = bufFor(n2);
     // parked as far ahead as the short shot leaves room for a start (prerollAt's rule,
     // without the seek: this one has the whole of the shot before to land)
-    if (b2 && b2 !== b1) armNext(b2, n2, tl.dur(n1) + roll.seek);
+    if (b2 && b2 !== b1) armNext(b2, n2, tl.dur(n1) + roll.seek, thirdAhead(n1));
   });
+}
+
+/* (wave 16 PERF7, verdict 12 punch 3) The third buffer's lead, film s, or null for prerollAt's.
+ * It starts its lead and a start before the second cut, on the short shot's own clock
+ * (preroll), and the second cut comes the short shot's length less ~0.12 s after the first
+ * (boundary()'s 0.04 s, the first preroll's frame early, a start). At PREROLL_S, a shot of
+ * 0.32-0.52 s had it start within a few frames after the first cut, in the frames that put
+ * the short shot on screen: measured on the speed test's 0.4 s shot, a start 0-20 ms after
+ * the cut held it >= 65 ms in 3 of 35 plays, one 20-60 ms before it in 1 of 108. There it
+ * is parked further ahead, to start ~60 ms before the first cut. */
+const THIRD_GAP_S = 0.06;
+function thirdAhead(n1) {
+  const d1 = tl.dur(n1);
+  const at = d1 - 0.12 - PREROLL_S;           // its start at PREROLL_S, from the first cut
+  return at > -THIRD_GAP_S && at < THIRD_GAP_S + 0.02 ? Math.max(0.04, d1 - THIRD_GAP_S) : null;
 }
 
 /* The buffer holding upcoming shot k (1 = the next), or null: for the tests and the judge. */
@@ -2831,8 +2846,9 @@ function txHalf(c) {
   return Math.max(TX_DIPS.has(c.vkind) ? 0 : c.video, c.audio);
 }
 
-function armNext(v, seg, room) {
-  const at = prerollAt(seg, room);
+function armNext(v, seg, room, ahead = null) {
+  // `ahead` (film s): a lead of its own (the third buffer's, thirdAhead), else prerollAt's
+  const at = ahead != null ? Math.max(0, seg.in - ahead * speedOf(seg)) : prerollAt(seg, room);
   v._posterUp = false;              // off screen: whatever poster stood in for it is gone
   // the grade fetches the next shot's LUT and makes its texture now, not at the cut
   const gr = gradeApi();
@@ -2851,16 +2867,20 @@ function armNext(v, seg, room) {
   const lead = (seg.in - v.currentTime) / speedOf(seg);
   // (a dissolve's park is exact: the buffer starts as the incoming picture from it)
   const tx = txLeadIn(seg);
+  // (the third buffer's own lead, thirdAhead, kept when it is re-armed for its shot at the cut)
+  const own = v._for === seg && v._lead != null && Math.abs(lead - v._lead) < 0.04;
   const near = tx > 0 ? Math.abs(lead - (seg.in - at) / speedOf(seg)) < 0.04
-    : lead <= Math.max(seg.in - at, PREROLL_S * speedOf(seg)) / speedOf(seg) + 1e-3;
+    : own || lead <= Math.max(seg.in - at, PREROLL_S * speedOf(seg)) / speedOf(seg) + 1e-3;
   if (v.dataset.src === proxyOf(seg) && !v.error && v.paused
       && !v._roll && !v.seeking && v.readyState >= 2 && lead >= 0 && near) {
     setShotRate(v, seg);
+    if (!own) v._lead = (seg.in - at) / speedOf(seg);
     v._for = seg;
     freshen(v);
     return;
   }
   arm(v, seg, at);
+  v._lead = (seg.in - at) / speedOf(seg);   // the lead it is parked for (rollStart)
   v._for = seg;
   freshen(v);
 }
@@ -2943,7 +2963,9 @@ function rollStart(nb, nseg, left) {
   if (nb.dataset.src !== proxyOf(nseg)) return;
   const lead = (nseg.in - nb.currentTime) / speedOf(nseg);    // film seconds to its in-point
   const tx = txLeadIn(nseg);                                    // a dissolve's park: further ahead
-  if (lead < -0.01 || lead > Math.max(PREROLL_S, tx) + 0.05) return;   // not parked for this cut
+  // (and the third buffer's: thirdAhead, kept on the buffer by armNext)
+  const own = nb._for === nseg && nb._lead != null ? nb._lead : 0;
+  if (lead < -0.01 || lead > Math.max(PREROLL_S, tx, own) + 0.05) return;   // not parked for this cut
   // boundary() cuts 0.04 s before the out; the start's latency is real time, the
   // rest film time, so it scales with the J/L shuttle's rate
   const shuttle = (liveVideo() && liveVideo().defaultPlaybackRate) || 1;
