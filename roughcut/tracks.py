@@ -31,7 +31,8 @@ Around the segments, the EDL gains four keys (each absent = the default below):
             (no name, no comment, Green, no duration) is its bare time, as every EDL
             before verdict 12 has it; any other is an object carrying only what is not
             the default — Premiere's Marker dialog: a name, comments, a colour (Green Red
-            Purple Orange Yellow White Blue Cyan) and a duration in film seconds.
+            Purple Orange Yellow White Blue Cyan) and a duration in film seconds. The
+            export writes the named ones as the file's chapters (assemble.py).
   in / out: film seconds or null           the sequence's In / Out
   fps:      the sequence's timebase        fixed: from its first clip or Sequence
                                            Settings, never from the shots ("the timebase")

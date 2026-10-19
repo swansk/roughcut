@@ -304,8 +304,8 @@ Export presets: {presets}
 - a marker (M) at a moment → marker at that film time (a shot's start is its film time in the
   table above; "at 0:12" is 12 s); "called / named X" is its `name`, a note on it its
   `comment`, "a red marker" its `colour`, "mark the whole jump" a `duration` to the moment it
-  ends; naming a marker already there is a marker op at its time with the name. Never a
-  design_effect for a marker.
+  ends; naming a marker already there is a marker op at its time with the name. A chapter of
+  the export is a named marker. Never a design_effect for a marker.
 - a title, a graphic, hit markers, an arrow → design_effect with a note saying what and where
   (only what no tool above draws).
 - a review copy, a file to upload, the final file → export with quick, youtube or master.

@@ -1870,6 +1870,66 @@ def join_parts(parts: list[Path], spans: list[tuple[int, int]], video: dict,
         raise RuntimeError(f"concat failed: {r.stderr[-600:]}")
 
 
+# ------------------------------------------------- chapters (verdict 12, punch 4)
+#
+# A sequence's named markers are the file's chapters, as Premiere writes its chapter
+# markers into an export: each from its marker to the next named one (the last to the
+# film's end), titled with the marker's name. The EDL's markers are on the clock of the
+# film this renders (the server moves an In/Out range's back by where it starts:
+# server.export_markers). MP4 keeps them as a QuickTime chapter track (and Nero `chpl`);
+# `ffprobe -show_chapters` lists them. Its chapters run end to end from the film's first
+# frame (a reader puts the first one at 0 whatever it says), so when the first named
+# marker is after the start, the opening is a chapter of its own, "Start". A marker's
+# duration does not shape its chapter: an MP4 chapter runs to the next one. Unnamed
+# markers are not chapters.
+
+CHAPTER_MIN_S = 0.001
+OPENING_CHAPTER = "Start"
+
+
+def chapters_of(markers: list | None, film_s: float) -> list[dict]:
+    """`[{start, end, title}]` in film seconds from the EDL's named markers inside the film."""
+    named: dict[float, str] = {}
+    for m in markers or []:
+        if not isinstance(m, dict):
+            continue
+        name = " ".join(str(m.get("name") or "").split())
+        t = tracksmod.marker_time(m)
+        if not name or t is None or t < 0 or t >= film_s - CHAPTER_MIN_S:
+            continue
+        named[round(t, 4)] = name
+    times = sorted(named)
+    if times and times[0] >= CHAPTER_MIN_S:
+        named[0.0] = OPENING_CHAPTER
+        times.insert(0, 0.0)
+    return [{"start": t, "end": times[k + 1] if k + 1 < len(times) else film_s, "title": named[t]}
+            for k, t in enumerate(times)]
+
+
+def ffmetadata(chapters: list[dict]) -> str:
+    """The chapters as an FFMETADATA1 file (milliseconds; `=`, `;`, `#`, `\\` and newlines escaped)."""
+    esc = lambda v: re.sub(r"([=;#\\\n])", r"\\\1", v)  # noqa: E731
+    out = [";FFMETADATA1"]
+    for c in chapters:
+        out += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={round(c['start'] * 1000)}",
+                f"END={round(c['end'] * 1000)}", f"title={esc(c['title'])}"]
+    return "\n".join(out) + "\n"
+
+
+def write_chapters(out: Path, chapters: list[dict], workdir: Path) -> None:
+    """The film's chapters muxed in, every stream copied (no generation of quality)."""
+    meta = workdir / "chapters.ffmeta"
+    meta.write_text(ffmetadata(chapters), encoding="utf-8")
+    tmp = out.with_name(out.stem + ".chapters.mp4")
+    r = run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-i", str(out), "-f", "ffmetadata",
+             "-i", str(meta), "-map", "0", "-map_metadata", "0", "-map_chapters", "1",
+             "-c", "copy", "-write_tmcd", "0", "-movflags", "+faststart", str(tmp)])
+    if r.returncode != 0:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"chapters failed: {r.stderr[-600:]}")
+    tmp.replace(out)
+
+
 def overlay_pieces(edl: dict, spans: list[tuple[int, int]], rate: Fraction,
                    footage: Path, generated_dir: Path | None,
                    probes: dict) -> tuple[list[list[dict]], list[str]]:
@@ -2573,6 +2633,14 @@ def main() -> int:
                     how += f" ({applied['speech_regions']} speech regions)"
             print(f"music: {Path(applied['asset_path']).name} at "
                   f"{applied['gain_db']}dB — {how}")
+
+        # the named markers as the file's chapters (verdict 12, punch 4)
+        chapters = chapters_of(edl.get("markers"), film_s)
+        if chapters:
+            write_chapters(args.out, chapters, workdir)
+            assert_no_rotation(args.out, orient)
+            print(f"chapters: {len(chapters)} — " + ", ".join(
+                f"{c['title'][:40]} {c['start']:.2f}s" for c in chapters[:12]))
 
         final = probe_duration(args.out)
         drift = final - planned

@@ -12,7 +12,9 @@ a duration:
   * the timeline (app/static/timeline.js) draws it in its colour with its name beside it
     when there is room and everything in its hover; M on a marker, or a double-click,
     opens the Marker dialog (Name, In, Duration, Comments, Marker Color; Delete, Cancel,
-    OK), and OK is one undo entry; names survive a reload.
+    OK), and OK is one undo entry; names survive a reload;
+  * an export writes the named markers as the file's chapters (research/tools/assemble.py),
+    an In/Out range's moved onto its own clock (server.export_markers).
 
 No model is called: the ask is scripted (`inference.set_backend`)."""
 
@@ -20,6 +22,7 @@ from __future__ import annotations
 
 import json
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -29,9 +32,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "research" / "tools"))
 from roughcut import actions, assist, config, inference  # noqa: E402
 from roughcut import tracks as tracksmod  # noqa: E402
 
+TOOLS = ROOT / "research" / "tools"
 FPS = 24.0
 SEGS = [{"id": "s1", "clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0, "why": "first"},
         {"id": "s2", "clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0, "why": "second"},
@@ -188,6 +193,96 @@ def test_drop_a_marker_at_the_start_of_shot_3_called_best_trick(client, project)
     assert {"op": "marker", "at": 4.0, "name": "best trick"} in d["ops"]
     assert "Marker at 00:00:04:00: “best trick”" in d["lines"]
     assert "called / named X" in model.prompts[0]
+
+
+# ---------------------------------------------------------------- the export's chapters
+
+def test_chapters_are_the_named_markers_each_to_the_next():
+    import assemble
+    ch = assemble.chapters_of([0.5, {"t": 3.0, "name": "landing"}, {"t": 1.0, "name": "best trick"},
+                               {"t": 2.0, "colour": "red"}, {"t": 9.0, "name": "past the end"}], 7.0)
+    # an MP4's chapters run from its first frame: the opening before the first is "Start"
+    assert ch == [{"start": 0.0, "end": 1.0, "title": "Start"},
+                  {"start": 1.0, "end": 3.0, "title": "best trick"},
+                  {"start": 3.0, "end": 7.0, "title": "landing"}]
+    assert assemble.chapters_of([{"t": 0.0, "name": "cold open"}, {"t": 2.0, "name": "b"}], 4.0) == [
+        {"start": 0.0, "end": 2.0, "title": "cold open"}, {"start": 2.0, "end": 4.0, "title": "b"}]
+    meta = assemble.ffmetadata([{"start": 0.0, "end": 1.5, "title": "a = b; #1 \\ c"}])
+    assert meta == (";FFMETADATA1\n[CHAPTER]\nTIMEBASE=1/1000\nSTART=0\nEND=1500\n"
+                    "title=a \\= b\\; \\#1 \\\\ c\n")
+    assert assemble.chapters_of([1.0, 2.0], 7.0) == []
+
+
+def test_an_in_out_range_moves_its_markers_onto_its_own_clock():
+    import server
+    whole = [dict(s) for s in SEGS]                               # 0-2, 2-4, 4-7
+    marks = [0.5, {"t": 2.5, "name": "in range", "dur": 3.0}, 4.0, {"t": 6.9, "name": "past"}]
+    assert server.export_markers(marks, whole, [dict(s) for s in whole]) == marks
+    # In 1.0 / Out 5.0: CLIP_A 2.0-3.0, CLIP_B 0-2, CLIP_C 2.0-3.0 (export.js clipRange)
+    sent = [{**SEGS[0], "in": 2.0}, dict(SEGS[1]), {**SEGS[2], "out": 3.0}]
+    assert server.range_start(whole, sent) == 1.0
+    assert server.export_markers(marks, whole, sent) == [{"t": 1.5, "name": "in range", "dur": 2.5}, 3.0]
+    # a range whose first shot is not in the sequence cannot be placed: no chapters
+    assert server.export_markers(marks, whole, [{"id": "zz", "clip": "X", "in": 0, "out": 1}]) == []
+
+
+def _ffprobe_chapters(path: Path) -> list[dict]:
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_chapters", "-of", "json", str(path)],
+                       capture_output=True, text=True, check=True)
+    return json.loads(r.stdout)["chapters"]
+
+
+def _ffprobe_video(path: Path) -> dict:
+    r = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_frames",
+                        "-show_entries", "stream=r_frame_rate,nb_read_frames", "-of", "json", str(path)],
+                       capture_output=True, text=True, check=True)
+    return json.loads(r.stdout)["streams"][0]
+
+
+def test_an_in_out_export_carries_its_named_markers_as_chapters(client, project, monkeypatch, tmp_path):
+    """POST /api/render with an In/Out range (the shots the Export dialog sends): the EDL it
+    writes for assemble.py has the range's markers on its own clock, and assemble.py's file
+    lists the named ones as chapters in ffprobe, its frames untouched."""
+    import server
+    body = {"variant": "T", "title": "test cut", "orient": "none", "story": "", "target_s": [5, 20],
+            "segments": [dict(s) for s in SEGS],
+            "markers": [0.5, {"t": 2.0, "name": "best trick", "colour": "red"},
+                        {"t": 3.5, "name": "landing", "comment": "clean"}, {"t": 6.5, "name": "out"}]}
+    Path(project["edl"]).write_text(json.dumps(body), encoding="utf-8")
+    seen: dict = {}
+
+    def fake_render(job, edl_path, out_path, meta):
+        seen["edl"] = json.loads(Path(edl_path).read_text(encoding="utf-8"))
+        server.RENDERS[job].finish("done")
+
+    monkeypatch.setattr(server, "_render_job", fake_render)
+    sent = [{**SEGS[0], "in": 2.0}, dict(SEGS[1]), {**SEGS[2], "out": 3.0}]   # In 1.0 / Out 5.0
+    r = client.post("/api/render", json={"segments": sent, "preset": "quick", "name": "chapters",
+                                          "folder": "markers-test"})
+    assert r.status_code == 200, r.text
+    assert seen["edl"]["markers"] == [{"t": 1.0, "name": "best trick", "colour": "red"},
+                                      {"t": 2.5, "name": "landing", "comment": "clean"}]
+    edl_path = tmp_path / "range.json"
+    edl_path.write_text(json.dumps(seen["edl"]), encoding="utf-8")
+    out = tmp_path / "range.mp4"
+    res = subprocess.run(["uv", "run", "--quiet", str(TOOLS / "assemble.py"), str(edl_path),
+                          "--footage", str(project["footage"]), "--profile", "match", "-o", str(out)],
+                         capture_output=True, text=True)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert "chapters: 3 — Start 0.00s, best trick 1.00s, landing 2.50s" in res.stdout
+    ch = _ffprobe_chapters(out)
+    assert [(c["tags"]["title"], float(c["start_time"]), float(c["end_time"])) for c in ch] == [
+        ("Start", 0.0, 1.0), ("best trick", 1.0, 2.5), ("landing", 2.5, pytest.approx(4.0, abs=0.05))]
+    v = _ffprobe_video(out)
+    assert v["r_frame_rate"] == "24/1" and int(v["nb_read_frames"]) == 96     # 4.00 s, untouched
+    # no named marker, no chapters (and no extra pass)
+    plain = dict(seen["edl"], markers=[1.0])
+    edl_path.write_text(json.dumps(plain), encoding="utf-8")
+    res = subprocess.run(["uv", "run", "--quiet", str(TOOLS / "assemble.py"), str(edl_path),
+                          "--footage", str(project["footage"]), "--profile", "match", "-o", str(out)],
+                         capture_output=True, text=True)
+    assert res.returncode == 0 and "chapters:" not in res.stdout
+    assert _ffprobe_chapters(out) == []
 
 
 # ---------------------------------------------------------------- the board
