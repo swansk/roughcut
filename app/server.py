@@ -10463,19 +10463,6 @@ def _fx_revise_job(job: str, fx_id: str, note: str) -> None:
 PROOF_W, PROOF_H, PROOF_FPS = 1280, 720, 24
 
 
-def _fx_proof(e: dict, seg: dict) -> tuple[Path, Path]:
-    """The one shot rendered from its proxy at 720p, with the effect (`proof.mp4`) and
-    without (`base.mp4`), so the checks can measure a difference and the human can
-    watch the result in seconds rather than after a whole render (`fxcheck.proof`, on
-    this thread: the check itself runs it in a child process, `_fx_run_check`)."""
-    src = _fx_proxy(seg["clip"])
-    if src is None:
-        raise RuntimeError(f"no proxy or source for {seg['clip']}")
-    proof, base, _stats = fxcheck.proof(e, seg, src, fx_home() / e["id"], w=PROOF_W,
-                                        h=PROOF_H, fps=PROOF_FPS)
-    return proof, base
-
-
 # The free check runs by itself (INTAKE M16 I16.5): after every design, revise, nudge
 # and revert, never a model call — a proof render of the one shot and the measured
 # checklist. Proposals arrived unchecked because the check waited for a Verify button
