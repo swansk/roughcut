@@ -408,3 +408,12 @@ def test_a_name_never_reads_through_the_timecode_and_shows_only_with_room(page):
     assert hover.startswith("a long marker name that runs on · 00:00:01:00")
     assert page.locator("#tl .tl-ruler .tl-marker[data-t='5']").get_attribute("data-colour") == "cyan"
 
+
+def test_a_marker_at_a_shots_first_frame_parks_on_that_shot_at_59_94(page):
+    """At 59.94 a frame is 0.0167 s. Frame 98 starts at 1.63497 s: kept to 0.01 s, the marker
+    a 59.94 shot's first frame got was 1.63 — frame 97, the shot before (Killington's "drop a
+    marker at the start of shot 3" parked the Program on shot 2). A marker sits on the edit
+    grid now, as every cut does: the frame's own start at 4 places."""
+    got = page.evaluate("() => { tl.setFps(59.94); const m = tl.addMarker(1.635); "
+                        "const n = tl.nextMarker(0); tl.setFps(null); return [m, n]; }")
+    assert got == [1.635, 1.635]

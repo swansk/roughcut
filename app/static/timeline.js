@@ -2145,16 +2145,18 @@
 
   /* A marker from any shape the EDL, an old page or an op has used: a bare time or
    * `{t, name, comment, colour | color, dur | duration}`. `snap` puts its time and its
-   * duration on the frame grid (an edit); a load keeps what was saved. Null when the
-   * time is not one. */
+   * duration on the edit grid (an edit): a frame's own start at 4 places, as every cut
+   * is, so a marker at a shot's first frame parks the playhead on that shot (on the 0.01 s
+   * grid a 59.94 shot starting at 1.635 had its marker at 1.63, the shot before's last
+   * frame); a load keeps what was saved. Null when the time is not one. */
   function normMarker(raw, snap) {
     const o = raw && typeof raw === 'object' ? raw : { t: raw };
     let t = Number(o.t);
     if (!Number.isFinite(t) || t < 0) return null;
-    t = snap ? onFrame(t) : round4(t);
+    t = snap ? onGrid(t) : round4(t);
     const c = String(o.colour || o.color || 'green').toLowerCase();
     let d = Number(o.dur != null ? o.dur : o.duration);
-    d = Number.isFinite(d) && d > 0 ? (snap ? onFrame(d) : round4(d)) : 0;
+    d = Number.isFinite(d) && d > 0 ? (snap ? onGrid(d) : round4(d)) : 0;
     return {
       t,
       name: typeof o.name === 'string' ? o.name.replace(/\s+/g, ' ').trim().slice(0, MARKER_NAME_MAX) : '',
@@ -2249,7 +2251,7 @@
    * when an AI op or a caller names it. Its time, or null when one is at that frame. */
   function addMarker(t, opts) {
     return marksEdit('add marker', () => {
-      const at = onFrame(t == null ? state.playhead : Number(t));
+      const at = onGrid(t == null ? state.playhead : Number(t));
       if (!Number.isFinite(at) || markerIndex(at) >= 0) return null;
       const m = normMarker({ ...(opts && typeof opts === 'object' ? opts : {}), t: at }, true);
       if (!m) return null;
@@ -2279,7 +2281,7 @@
       if (k < 0 || !patch || typeof patch !== 'object') return false;
       const was = state.markers[k];
       // an In of its own moves it (the dialog's In), never onto another marker's frame
-      const at = patch.t != null && Number.isFinite(Number(patch.t)) ? onFrame(Number(patch.t)) : was.t;
+      const at = patch.t != null && Number.isFinite(Number(patch.t)) ? onGrid(Number(patch.t)) : was.t;
       const j = markerIndex(at);
       if (j >= 0 && j !== k) return false;
       const m = normMarker({ ...was, ...markerPatch(patch), t: at }, true);
@@ -4035,7 +4037,7 @@
     const d = parseTc(mkDlg.querySelector('#mkDur').value);
     if (!Number.isFinite(at)) { note.textContent = `In is a timecode, ${tc(mkAt)}`; return; }
     if (!Number.isFinite(d)) { note.textContent = 'Duration is a timecode (00:00:01:00) or seconds (1.5)'; return; }
-    const t = onFrame(at);
+    const t = onGrid(at);
     if (!sameFrame(t, mkAt) && markerIndex(t) >= 0) {
       note.textContent = `A marker is already at ${tc(t)}`;
       return;
