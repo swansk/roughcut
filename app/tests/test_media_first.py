@@ -99,13 +99,24 @@ def _no_proxies(server) -> None:
 # ------------------------------------------------------------------ posters
 
 
+def _poster(c, name: str, wait_s: float = 20.0, **params):
+    """A poster as the board gets it: a frame not cut yet is a 503 at once (wave 15: cut
+    in the background, never inside the request), so ask again until it is there."""
+    deadline = time.monotonic() + wait_s
+    while True:
+        r = c.get(f"/media/poster/{name}", params=params or None)
+        if r.status_code != 503 or time.monotonic() > deadline:
+            return r
+        time.sleep(0.05)
+
+
 def test_a_poster_for_every_clip_within_five_seconds_of_open(fresh, media_bin):
     """The bin's cards ask for `/media/poster/<stem>.jpg` the moment they render.
     Before, that 404'd until the proxy existed and every card was a broken <img>."""
     c, server = fresh["client"], fresh["server"]
     t0 = time.monotonic()
     for stem in media_bin["stems"]:
-        r = c.get(f"/media/poster/{stem}.jpg")
+        r = _poster(c, f"{stem}.jpg")
         assert r.status_code == 200, (stem, r.status_code, r.text[:200])
         assert r.headers["content-type"] == "image/jpeg"
         assert r.content[:2] == b"\xff\xd8", f"{stem}: not a JPEG"
@@ -116,8 +127,8 @@ def test_a_poster_for_every_clip_within_five_seconds_of_open(fresh, media_bin):
 
 def test_a_poster_at_a_time_comes_from_the_original_too(fresh):
     c = fresh["client"]
-    a = c.get("/media/poster/CLIP_A.jpg", params={"t": 0.5})
-    b = c.get("/media/poster/CLIP_A.jpg", params={"t": 4.5})
+    a = _poster(c, "CLIP_A.jpg", t=0.5)
+    b = _poster(c, "CLIP_A.jpg", t=4.5)
     assert a.status_code == b.status_code == 200
     assert a.content != b.content
     assert "immutable" in a.headers["cache-control"]

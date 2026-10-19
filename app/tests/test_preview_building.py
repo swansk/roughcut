@@ -243,38 +243,110 @@ def _slow_original_posters(server, monkeypatch, delay_s: float) -> None:
     monkeypatch.setattr(server, "build_poster", slow)
 
 
+def _get(url: str, timeout: float = 30):
+    """(status, headers, body) of a GET, a 4xx/5xx included."""
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as r:
+            return r.status, r.headers, r.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.headers, exc.read()
+
+
+def _exact_poster(url: str, wait_s: float = 20.0):
+    """Ask for a poster until the exact frame is there (a frame not cut yet is a 503:
+    wave 15, cut in the background); (seconds it took, headers, body)."""
+    t0 = time.monotonic()
+    while True:
+        st, h, body = _get(url)
+        if st == 200 and "x-roughcut-poster" not in h:
+            return time.monotonic() - t0, h, body
+        assert st == 503 and h["x-roughcut-poster"] == "pending", (st, dict(h))
+        assert time.monotonic() - t0 < wait_s, f"no exact frame in {wait_s} s: {url}"
+        time.sleep(0.1)
+
+
 def test_a_poster_cut_from_the_original_answers_the_nearest_still_at_once(building, monkeypatch):
     """Wave 13 CANVAS2: `near=1` answers a clip's still already on disk at once when the
     asked frame is not cut yet and would come from the original (no preview, no proxy);
-    not cached, and it says which time it shows. The exact frame is still the exact frame,
-    and a clip with a proxy always answers its exact frame."""
+    not cached, and it says which time it shows. Wave 15 BUDGET (verdict 11 punch 4): the
+    exact frame is cut in the background, never inside the request: asked before it is cut
+    it is a 503 at once (`x-roughcut-poster: pending`), then the exact frame, immutable. A
+    clip with a proxy answers its exact frame, never a near one."""
     url, server = building["url"], building["server"]
-    with urllib.request.urlopen(f"{url}/media/poster/CLIP_B.jpg?t=0.40", timeout=30) as r:
-        assert r.status == 200
+    _exact_poster(f"{url}/media/poster/CLIP_B.jpg?t=0.40")
     _slow_original_posters(server, monkeypatch, 1.5)
     t0 = time.monotonic()
-    with urllib.request.urlopen(f"{url}/media/poster/CLIP_B.v2.jpg?near=1&t=2.37", timeout=30) as r:
-        took = time.monotonic() - t0
-        assert r.status == 200 and r.read(3) == b"\xff\xd8\xff"
-        assert (r.headers["x-roughcut-poster"] or "").startswith("near "), dict(r.headers)
-        assert "no-store" in r.headers["cache-control"]
+    st, h, body = _get(f"{url}/media/poster/CLIP_B.v2.jpg?near=1&t=2.37")
+    took = time.monotonic() - t0
+    assert st == 200 and body[:3] == b"\xff\xd8\xff"
+    assert (h["x-roughcut-poster"] or "").startswith("near "), dict(h)
+    assert "no-store" in h["cache-control"]
     print(f"near still for CLIP_B at 2.37 in {took * 1000:.0f} ms")
     assert took < 0.3, f"the near still took {took:.2f}s"
-    # the exact frame: cut (slowly) from the original, immutable
+    # the exact frame: not waited on (a 503 within the wait), cut beside it, then immutable
     t0 = time.monotonic()
-    with urllib.request.urlopen(f"{url}/media/poster/CLIP_B.v2.jpg?t=2.37", timeout=30) as r:
-        assert r.status == 200 and "x-roughcut-poster" not in r.headers
-        assert "immutable" in r.headers["cache-control"]
-    assert time.monotonic() - t0 >= 1.4
+    st, h, _ = _get(f"{url}/media/poster/CLIP_B.v2.jpg?t=2.37")
+    took = time.monotonic() - t0
+    assert st == 503 and h["x-roughcut-poster"] == "pending" and h["retry-after"] == "1", (st, dict(h))
+    assert "no-store" in h["cache-control"]
+    assert took < 0.3, f"an exact frame not cut yet held the request {took:.2f}s"
+    waited, h, _ = _exact_poster(f"{url}/media/poster/CLIP_B.v2.jpg?t=2.37")
+    assert "immutable" in h["cache-control"]
+    assert time.monotonic() - t0 >= 1.4, "the slow cut was not the one served"
     # now on disk: near=1 answers it, exact
-    with urllib.request.urlopen(f"{url}/media/poster/CLIP_B.v2.jpg?near=1&t=2.37", timeout=30) as r:
-        assert "x-roughcut-poster" not in r.headers
+    st, h, _ = _get(f"{url}/media/poster/CLIP_B.v2.jpg?near=1&t=2.37")
+    assert st == 200 and "x-roughcut-poster" not in h
     # a clip with a proxy: its exact frame (cut from the proxy), never a near one
-    with urllib.request.urlopen(f"{url}/media/poster/CLIP_A.v2.jpg?t=0.00", timeout=30) as r:
-        assert r.status == 200
-    with urllib.request.urlopen(f"{url}/media/poster/CLIP_A.v2.jpg?near=1&t=1.73", timeout=30) as r:
-        assert "x-roughcut-poster" not in r.headers
+    _exact_poster(f"{url}/media/poster/CLIP_A.v2.jpg?t=0.00")
+    _exact_poster(f"{url}/media/poster/CLIP_A.v2.jpg?near=1&t=1.73")
     assert server.poster_path("CLIP_A", 1.73).exists()
+
+
+def test_a_frame_of_a_4k_original_is_never_cut_inside_a_request(building, monkeypatch):
+    """Verdict 11 punch 4: on Killington the posters of clips with no preview yet took
+    1.1-2.1 s after a first pass and up to 3.9 s for a just-imported clip, each a 4K HEVC
+    frame decoded inside its request (the server's budget is 300 ms). Now such a frame is
+    never waited on: exact or `near=1`, the request answers at once (a 503, or the nearest
+    still), and the frame is cut on the poster queue's own thread, then served exact."""
+    url, server = building["url"], building["server"]
+    _exact_poster(f"{url}/media/poster/CLIP_B.jpg?t=0.40")
+    since = time.time()
+    src = server.clip_path("CLIP_B.MP4")
+    st_ = src.stat()
+    key = (str(src), st_.st_size, st_.st_mtime_ns)
+    facts = dict(server.MEDIA["facts"].get(key) or server.media_facts(src))
+    # what the facts of a Killington GoPro clip say: 4K HEVC
+    monkeypatch.setitem(server.MEDIA["facts"], key, {**facts, "vcodec": "hevc", "width": 3840, "height": 2160})
+    assert server.poster_costly(src, True) is True
+    cut_on: list[str] = []
+    real = server.build_poster
+
+    def slow(src_, dest, t, original=False):
+        cut_on.append(threading.current_thread().name)
+        time.sleep(1.0)
+        return real(src_, dest, t, original=original)
+
+    monkeypatch.setattr(server, "build_poster", slow)
+    for k, t in enumerate((3.11, 3.52, 4.07)):
+        for near in (False, True):
+            q = f"near=1&t={t:.2f}" if near else f"t={t:.2f}"
+            t0 = time.monotonic()
+            st, h, _ = _get(f"{url}/media/poster/CLIP_B.v2.jpg?{q}")
+            took = time.monotonic() - t0
+            assert took < 0.15, f"{q}: held {took:.2f}s for a 4K original's frame"
+            if near:
+                assert st == 200 and h["x-roughcut-poster"].startswith("near "), (st, dict(h))
+            else:
+                assert st == 503 and h["x-roughcut-poster"] == "pending", (st, dict(h))
+    # every one lands, exact, cut once each on the queue's own thread
+    _exact_poster(f"{url}/media/poster/CLIP_B.v2.jpg?t=4.07", wait_s=10)
+    for t in (3.11, 3.52):
+        _exact_poster(f"{url}/media/poster/CLIP_B.v2.jpg?t={t:.2f}", wait_s=10)
+    assert cut_on and all(n.startswith("posters") for n in cut_on), cut_on
+    assert len(cut_on) == 3, f"cut {len(cut_on)} times for 3 frames: {cut_on}"
+    slow_rows = [r for r in json.loads(_get(f"{url}/api/debug/slow")[2])["over_budget"]
+                 if r["path"].startswith("/media/poster/") and r["at"] >= since]
+    assert not slow_rows, slow_rows
 
 
 def test_a_seek_onto_a_building_shot_shows_a_picture_within_300_ms(building, monkeypatch):

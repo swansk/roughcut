@@ -8013,11 +8013,19 @@ def media_poster(name: str, t: float = 0.0, near: int = 0) -> Response:
     kilobytes, cached on disk under --work and immutable for a given clip and time.
 
     `near=1` (the Program monitor's ask, wave 13 CANVAS2): when this frame is not on disk
-    and would be cut from the ORIGINAL (no proxy or preview yet: a 4K GoPro frame is
-    0.7-1.3 s on a loaded box, every seek a new time), the clip's poster already on disk
-    nearest `t` is answered at once instead, not cached (`no-store`, `x-roughcut-poster:
-    near <its t>`): the shot shows a picture of itself within a request, not black, while
-    the monitor asks for the exact frame beside it. Otherwise it is the exact frame.
+    yet, the clip's poster already on disk nearest `t` is answered at once instead, not
+    cached (`no-store`, `x-roughcut-poster: near <its t>`): the shot shows a picture of
+    itself within a request, not black, while the exact frame is cut beside it.
+
+    Never a decode the request waits on (verdict 11 punch 4: posters 1.1-2.1 s after a
+    first pass on Killington, up to 3.9 s for a just-imported clip, against the server's
+    300 ms budget): a frame not on disk is cut in the background (`queue_poster`, newest
+    asked first), and the request waits for it at most POSTER_WAIT_S, and only when it
+    comes from a proxy, a preview, a generated clip or (asked exactly) a small original
+    (tens of milliseconds); a frame of a 4K / HEVC original (0.7-1.3 s on a loaded box) is
+    never waited on. Not cut in that time: `near=1` gets the nearest still, an exact ask a 503
+    (`retry-after: 1`, `x-roughcut-poster: pending`), and the board's posters show the
+    nearest still and put the exact frame in when it is cut (dock.js `posterSoon`).
     """
     stem = Path(name).stem
     if stem.endswith(f".{PICTURE_V}"):          # poster_url's versioned name
@@ -8028,24 +8036,145 @@ def media_poster(name: str, t: float = 0.0, near: int = 0) -> Response:
         t = 0.0
     t = round(min(t, 86400.0), 2)
     dest = poster_path(stem, t)
-    if not dest.exists() and near:
-        found = poster_source(stem)
-        alt = nearest_poster(stem, t) if found is not None and found[1] else None
+    if dest.exists():
+        return FileResponse(dest, media_type="image/jpeg", headers=POSTER_CACHE)
+    found = poster_source(stem)
+    if found is None:
+        raise HTTPException(404, f"no such clip: {stem}")
+    src, original = found
+    costly = poster_costly(src, original)
+    key = str(dest)
+    with MEDIA["lock"]:
+        bad = POSTER_FAILED.get(key)
+        # asked for: a walk build of it paused for playback runs again (the yield thread)
+        MEDIA.setdefault("holds", {})[key] = time.monotonic() + POSTER_HOLD_S
+    if bad is not None and time.monotonic() - bad[0] < POSTER_FAIL_S:
+        raise HTTPException(500, bad[1])
+    ev = queue_poster(stem, t, src, dest, original, costly is not False)
+    # waited on: a frame of a proxy / preview / generated clip, or (asked exactly) of a
+    # small original; `near=1` of an original has its nearest still at once (CANVAS2)
+    if costly is not True and not (near and original):
+        ev.wait(POSTER_WAIT_S)
+    if dest.exists():
+        return FileResponse(dest, media_type="image/jpeg", headers=POSTER_CACHE)
+    if near:
+        alt = nearest_poster(stem, t)
         if alt is not None:
             return FileResponse(alt[0], media_type="image/jpeg",
                                 headers={"cache-control": "no-store",
                                          "x-roughcut-poster": f"near {alt[1]:.2f}"})
-    if not dest.exists():
+    return Response(status_code=503, content=f"{stem} at {t:.2f} s: being cut",
+                    media_type="text/plain",
+                    headers={"retry-after": "1", "cache-control": "no-store",
+                             "x-roughcut-poster": "pending"})
+
+
+# The posters the board asks for, cut in the background (wave 15 BUDGET). Two queues, each
+# newest-asked first (a scrub, a seek, a pass's subclips: the frame asked last is the one
+# on screen), each with its own workers: frames from a proxy / preview / small original
+# (`cheap`, tens of ms: the request waits up to POSTER_WAIT_S for one) and frames from a 4K
+# or HEVC original (`costly`, a second each; never waited on, and never more than
+# POSTER_ORIGINAL_WORKERS at once, so they do not take the decoder from a just-imported
+# clip's head). A frame nobody re-asked for is dropped past POSTER_QUEUE_MAX (the board asks
+# again for what it still shows); the open-time walk's own builds are ensure_poster's.
+POSTER_WAIT_S = 0.2
+POSTER_CHEAP_WORKERS = 2
+POSTER_ORIGINAL_WORKERS = 2
+POSTER_QUEUE_MAX = 32
+POSTER_HOLD_S = 5.0           # an asked-for walk poster stays unpaused this long
+POSTER_FAIL_S = 30.0          # a frame that would not cut answers its error this long
+POSTER_HEAD_YIELD_S = 15.0    # a frame of an original waits this long at most for a head
+POSTER_FAILED: dict[str, tuple[float, str]] = {}
+POSTER_QUEUES: dict[bool, dict] = {
+    flag: {"cv": threading.Condition(), "todo": [], "workers": 0,
+           "max": POSTER_ORIGINAL_WORKERS if flag else POSTER_CHEAP_WORKERS}
+    for flag in (False, True)}
+
+
+def poster_costly(src: Path, original: bool) -> bool | None:
+    """Whether a frame of `src` is a decode a request must never wait on: True for an
+    original the facts say is HEVC or bigger than 1080p (a 4K HEVC GoPro frame: 0.7-1.3 s
+    on a loaded box; build_poster's own line for the GPU), False for a proxy, a preview, a
+    generated clip or a small original, None for an original whose facts are not probed
+    yet (finding out is an ffprobe: it is waited on, as a small one, but queued as a big one)."""
+    if not original:
+        return False
+    try:
+        st = src.stat()
+    except OSError:
+        return None
+    with MEDIA["lock"]:
+        f = MEDIA["facts"].get((str(src), st.st_size, st.st_mtime_ns))
+    if not f:
+        return None
+    return f.get("vcodec") == "hevc" or (f.get("width") or 0) * (f.get("height") or 0) > 1920 * 1080
+
+
+def queue_poster(stem: str, t: float, src: Path, dest: Path, original: bool,
+                 costly: bool) -> threading.Event:
+    """Ask for `dest` (the frame of `src` at `t`) to be cut in the background; returns the
+    event set when that build ends (the build already under way, if one is: the walk's,
+    or this queue's). Asked again while it waits, it goes back to the front."""
+    key = str(dest)
+    q = POSTER_QUEUES[costly]
+    with MEDIA["lock"]:
+        ev = POSTER_BUILDING.get(key)
+        mine = ev is None
+        if mine:
+            ev = POSTER_BUILDING[key] = threading.Event()
+    with q["cv"]:
+        todo = q["todo"]
+        for k, job in enumerate(todo):
+            if job["key"] == key:            # queued already: to the front
+                todo.append(todo.pop(k))
+                return job["ev"]
+        if not mine:
+            return ev                        # being built (the walk's, or a worker's)
+        todo.append({"key": key, "stem": stem, "t": t, "src": src, "dest": dest,
+                     "original": original, "ev": ev})
+        drop = todo[:-POSTER_QUEUE_MAX]
+        del todo[:-POSTER_QUEUE_MAX]
+        if q["workers"] < q["max"]:
+            q["workers"] += 1
+            threading.Thread(target=_poster_worker, args=(q,), daemon=True,
+                             name=f"posters{'-original' if costly else ''}").start()
+        q["cv"].notify()
+    for job in drop:                         # nobody asked again: asked again, it is queued again
+        with MEDIA["lock"]:
+            POSTER_BUILDING.pop(job["key"], None)
+        job["ev"].set()
+    return ev
+
+
+def _poster_worker(q: dict) -> None:
+    while True:
+        with q["cv"]:
+            if not q["todo"]:
+                q["cv"].wait(10.0)
+            if not q["todo"]:
+                q["workers"] -= 1            # under the lock queue_poster starts one in
+                return
+            job = q["todo"].pop()            # the newest asked
+        # a frame of a 4K original waits while a just-imported clip's head is made: the
+        # head is what plays, and both want the one decoder (verdict 11 punch 5)
+        until = time.monotonic() + POSTER_HEAD_YIELD_S
+        while job["original"] and heads_building() and time.monotonic() < until:
+            time.sleep(0.1)
         try:
-            # the board's own: never paused for playback (not background), but in a
-            # scope so its ffmpeg dies with the server
-            with procscope.active(poster_scope()):
-                ensure_poster(stem, t)
-        except RuntimeError as exc:
-            raise HTTPException(500, str(exc)) from exc
-    if not dest.exists():
-        raise HTTPException(404, f"no such clip: {stem}")
-    return FileResponse(dest, media_type="image/jpeg", headers=POSTER_CACHE)
+            if not job["dest"].exists():
+                # the board's own: never paused for playback (not background), but in a
+                # scope so its ffmpeg dies with the server
+                with procscope.active(poster_scope()), procscope.tagged(job["key"]):
+                    build_poster(job["src"], job["dest"], job["t"], original=job["original"])
+            POSTER_FAILED.pop(job["key"], None)
+        except Exception as exc:  # noqa: BLE001 — a frame that would not cut is said, not fatal
+            POSTER_FAILED[job["key"]] = (time.monotonic(), str(exc)[:300])
+            print(f"  !! poster: {exc}", flush=True)
+        finally:
+            with MEDIA["lock"]:
+                if POSTER_BUILDING.get(job["key"]) is job["ev"]:
+                    POSTER_BUILDING.pop(job["key"], None)
+            job["ev"].set()
 
 
 def poster_source(stem: str) -> tuple[Path, bool] | None:

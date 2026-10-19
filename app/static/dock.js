@@ -339,9 +339,73 @@
     + '<g fill="none" stroke="#38383e" stroke-width="4" stroke-linejoin="round">'
     + '<rect x="128" y="66" width="64" height="48" rx="5"/><path d="M128 78h64M142 66v12M160 66v12M178 66v12"/></g></svg>');
   const failed = new Map();      // img → the src that failed
+  /* Posters (wave 15 BUDGET, verdict 11 punch 4): the server cuts a frame it does not have
+   * in the background and never makes a request wait on a 4K original's decode — a frame
+   * not cut yet answers 503 at once, and `near=1` the clip's nearest still on disk. So any
+   * poster on the board (a Project tile or subclip, a card, the monitors' stills, the
+   * inspector's, the filmstrip) that is not cut yet shows its clip's nearest still at once
+   * and the exact frame the moment it is cut (posterSoon: probed off-screen, quick at
+   * first, then every few seconds while the picture still wants it). The stand-in is the
+   * image's `srcset` (posterShow): its `src` stays the frame the board asked for, so
+   * nothing that reads it sees a different URL, and a new `src` drops the stand-in. A
+   * still the board itself asked `near=1` for (the Program's) gets its exact frame as
+   * its `src`, as the Program would put it. */
+  const POSTER_RE = /\/media\/poster\//;
+  const NEAR_RE = /([?&])near=1(&|$)/;
+  const POSTER_TRIES = 60;       // ~2.5 min of probes, then the 5 s sweep (retryImages)
+  const nearOf = (src) => (NEAR_RE.test(src) ? src : `${src}${src.includes('?') ? '&' : '?'}near=1`);
+  const exactOf = (src) => src.replace(NEAR_RE, (m, a, b) => (b ? a : '')).replace(/[?&]$/, '');
+  function posterShow(img, shown) {
+    if (shown) {
+      img._posterFor = img.getAttribute('src');
+      img.setAttribute('srcset', shown);
+    } else if (img._posterFor) {
+      img._posterFor = null;
+      img.removeAttribute('srcset');
+    }
+  }
+  // a new src (the board moved the picture on): the stand-in for the old one goes
+  const posterSrcs = new MutationObserver((muts) => muts.forEach((m) => {
+    const img = m.target;
+    if (img._posterFor && img.getAttribute('src') !== img._posterFor) posterShow(img, null);
+  }));
+  function posterSoon(img, exact, asSrc = false, k = 0) {
+    const from = img.getAttribute('src');
+    const want = `${from}\n${exact}`;
+    if (k === 0 && img._posterSoon === want) return;      // already probing for this picture
+    img._posterSoon = want;
+    img._posterAt = performance.now();
+    const still = () => img.isConnected && img.getAttribute('src') === from && img._posterSoon === want;
+    const probe = new Image();
+    probe.onload = () => {
+      if (!still()) return;
+      if (asSrc) img.setAttribute('src', exact);
+      else posterShow(img, null);
+    };
+    probe.onerror = () => {
+      if (still() && k + 1 < POSTER_TRIES) {
+        setTimeout(() => { if (still()) posterSoon(img, exact, asSrc, k + 1); }, Math.min(3000, 400 + 200 * k));
+      }
+    };
+    probe.src = exact;
+  }
   function onImgError(img) {
     const src = img.getAttribute('src');
     if (!src || src === BLANK) return;
+    if (POSTER_RE.test(src)) {
+      const shown = img._posterFor === src ? img.getAttribute('srcset') : null;
+      if (shown === BLANK) return;
+      const near = NEAR_RE.test(src);
+      // not cut yet: its clip's nearest still now (asked once), the frame when it is cut
+      if (!near && !shown) { posterShow(img, nearOf(src)); posterSoon(img, src); return; }
+      // not even a still of the clip yet (a clip just in): the neutral frame meanwhile
+      posterShow(img, BLANK);
+      posterSoon(img, exactOf(src), near);
+      img.dataset.wait = '1';
+      if (img.id === 'monPoster') waitOn('#monWait', true);
+      if (img.id === 'srcPoster') waitOn('#srcWait', true);
+      return;
+    }
     failed.set(img, src);
     img.dataset.wait = '1';
     img.setAttribute('src', BLANK);
@@ -349,11 +413,13 @@
     if (img.id === 'srcPoster') waitOn('#srcWait', true);
   }
   function onImgLoad(img) {
-    if (img.getAttribute('src') === BLANK) return;
+    const src = img.getAttribute('src');
+    if (src === BLANK || (img._posterFor && img.getAttribute('srcset') === BLANK)) return;
     failed.delete(img);
     delete img.dataset.wait;
     if (img.id === 'monPoster') waitOn('#monWait', false);
     if (img.id === 'srcPoster') waitOn('#srcWait', false);
+    if (src && POSTER_RE.test(src) && NEAR_RE.test(src) && !img._posterFor) posterSoon(img, exactOf(src), true);
   }
   function retryImages() {
     failed.forEach((src, img) => {
@@ -363,6 +429,14 @@
         if (img.getAttribute('src') === BLANK && failed.get(img) === src) img.setAttribute('src', src);
       };
       probe.src = src;
+    });
+    // a poster still on its stand-in after its quick probes: the exact frame, now and then
+    document.querySelectorAll('img[srcset]').forEach((img) => {
+      if (img._posterFor && img.getAttribute('src') === img._posterFor
+          && performance.now() - (img._posterAt || 0) > 4000) {
+        img._posterSoon = null;
+        posterSoon(img, img._posterFor, false, POSTER_TRIES - 1);
+      }
     });
   }
   /* A monitor's "preparing preview…" has more than one reason to be up: its poster still
@@ -387,6 +461,7 @@
     document.addEventListener('load', (e) => {
       if (e.target && e.target.tagName === 'IMG') onImgLoad(e.target);
     }, true);
+    posterSrcs.observe(document, { subtree: true, attributes: true, attributeFilter: ['src'] });
     setInterval(retryImages, 5000);
   }
 
