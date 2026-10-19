@@ -363,7 +363,9 @@
       return `<option value="${esc(s.key)}">${esc(label)}${s.upscale ? ' · upscaled' : ''}</option>`;
     }).join('') + '<option value="preset" hidden>preset</option>';
     const rates = (info.rates || []).map((r) =>
-      `<option value="${esc(r.key)}">${r.key === 'match' ? `Match Sequence (${esc(rateWords(r.fps))})` : esc(r.label)}</option>`).join('');
+      `<option value="${esc(r.key)}">${r.key !== 'match' ? esc(r.label)
+        // the sequence's timebase (verdict 10, punch 3); none yet says none
+        : r.fps ? `Match Sequence (${esc(rateWords(r.fps))})` : 'Match Sequence'}</option>`).join('');
     const lim = info.bitrate || { min: 0.5, max: 200 };
     const folders = info.folders.map((f) => `<option value="${esc(f)}"></option>`).join('');
     const ago = (t) => {

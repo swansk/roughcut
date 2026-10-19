@@ -149,8 +149,12 @@
  *                               strip used to be painted; a lane rarely needs to.
  *
  *   — Premiere's frame: timecode, tools, markers, marks (REDESIGN-GOAL dimension 5) —
- *   tl.fps() / tl.setFps(r)     The sequence rate: setFps, else the project's `fps`, else
- *                               23.976. tl.frame() is one frame in seconds.
+ *   tl.fps() / tl.setFps(r)     The sequence rate: setFps, else the sequence's timebase,
+ *                               else 23.976 (the grid only). tl.frame() is one frame.
+ *   tl.timebase()               The sequence's timebase (verdict 10, punch 3): the EDL's
+ *                               `fps`, or the first clip's for a sequence that had none;
+ *                               0 while it has never held a clip (nothing says a rate).
+ *                               Never derived from the shots: adding them never changes it.
  *   tl.gridRate() / tl.onGrid(t) The edit grid (wave 3): the exact rate (29.97 →
  *   tl.isOnGrid(t)               30000/1001) and a time on its nearest frame. setRange,
  *                               split, insert, overwrite, setSpeed, the A1 offset and V2
@@ -395,18 +399,75 @@
   }
 
   /* ---- the sequence rate and timecode (REDESIGN-GOAL dimension 5) */
-  /* The sequence's frame rate: tl.setFps(), else the project's `fps` (app.js's `P`,
-   * read by name — the EDL does not carry one yet), else 23.976. */
+  /* The sequence's timebase (verdict 10, punch 3). It was worked out from the shots, so a
+   * 29.97 cut read 59.94 once enough 59.94 shots went in, and the grid, the timecode and
+   * Export's "Match Sequence" moved under the editor. Now it is the EDL's own `fps`
+   * (roughcut/tracks.py), as a Premiere sequence's is: a new sequence takes the rate of
+   * the first clip put in it (adoptRate — Premiere's New Sequence From Clip), Sequence ›
+   * Sequence Settings… changes it (setTimebase), and nothing else does. 0 while the
+   * sequence has none (it has never held a clip): tl.timebase() says so, and the board
+   * shows no rate; the grid alone falls back to DEFAULT_FPS then. */
+  let seqRate = 0;                 // the timebase this page holds (0: none yet)
+  let seqRateWhy = '';             // 'stored' (the project's) | 'first' (its first clip) | 'preview' | 'set'
+  let rateTouched = false;         // set here (first clip, Settings): every tracks save carries it
+  const TIMEBASES = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60];   // tracks.py TIMEBASES
+  const rateOk = (r) => Number.isFinite(r) && r >= 1 && r <= 240;
+  /* A rate as the EDL keeps it (tracks.py timebase_value): 29.97002997 → 29.97. */
+  function rateKey(v) {
+    const r = Number(v);
+    if (!rateOk(r)) return 0;
+    const t = TIMEBASES.find((x) => Math.abs(r - x) < 0.005);
+    return t || Math.round(r * 1000) / 1000;
+  }
+  function projectRate() {
+    try {
+      // eslint-disable-next-line no-undef
+      return typeof P !== 'undefined' && P ? rateKey(P.fps) : 0;
+    } catch (err) { return 0; }    // P not initialised yet
+  }
+  const clipRateOf = (name) => rateKey((clipOf(name) || {}).fps);
+  function firstClipRate(list) {
+    for (const s of list || []) {
+      if (!s || isGen(s.clip)) continue;
+      const r = clipRateOf(s.clip);
+      if (r) return r;
+    }
+    return 0;
+  }
+  /* The rate a first clip gives a sequence that has none. Inside a preview (an AI answer
+   * under review, `record: false`) it is lent, not kept: a rejected answer leaves the
+   * sequence without one, as it found it. Kept, it rides the tracks' save. */
+  function latch(r) {
+    seqRate = r;
+    if (previewing()) { seqRateWhy = 'preview'; return; }
+    seqRateWhy = 'first';
+    rateTouched = true;
+    scheduleSeqSave();
+  }
+  function timebase() {
+    if (seqRateWhy === 'preview' && !previewing()) { seqRate = 0; seqRateWhy = ''; }
+    if (seqRate) return seqRate;
+    const p = projectRate();
+    if (p) { seqRate = p; seqRateWhy = 'stored'; return p; }
+    const r = firstClipRate(segs());
+    if (r) latch(r);
+    return r;
+  }
+  /* A clip about to go into a sequence with no timebase gives it its rate first, so the
+   * clip's range is gridded on it (gridded, the inserts and overwrites, V2). */
+  function adoptRate(clip) {
+    if (timebase()) return;
+    const r = clipRateOf(clip);
+    if (r) latch(r);
+  }
+
+  /* The sequence's frame rate: tl.setFps() (tests), a hook's, else the timebase, else
+   * 23.976 (the grid of a sequence that has none yet). */
   function fps() {
     if (fpsOverride) return fpsOverride;
     const h = hooks && hooks.fps ? Number(hooks.fps()) : 0;
     if (h > 0) return h;
-    try {
-      // eslint-disable-next-line no-undef
-      const p = typeof P !== 'undefined' && P ? Number(P.fps || (P.edl && P.edl.fps)) : 0;
-      if (p > 0 && p < 1000) return p;
-    } catch (err) { /* P not initialised yet */ }
-    return DEFAULT_FPS;
+    return timebase() || DEFAULT_FPS;
   }
 
   function setFps(rate) {
@@ -1578,6 +1639,9 @@
       overlays: state.overlays.map((o) => ({ ...o })),
       audio: state.audio.map((c) => ({ ...c })),
       markers: [...state.markers], in: state.seqIn, out: state.seqOut,
+      // the timebase, once this page gave the sequence one or changed it (verdict 10,
+      // punch 3); a page that only shows the stored one leaves it to the server
+      ...(rateTouched && seqRate && seqRateWhy !== 'preview' ? { fps: seqRate } : {}),
     });
   }
 
@@ -1621,6 +1685,10 @@
       // eslint-disable-next-line no-undef
       p = typeof P !== 'undefined' && P ? P : null;
     } catch (err) { p = null; }
+    // the timebase the project keeps (none for a sequence that never held a clip)
+    seqRate = p ? rateKey(p.fps) : 0;
+    seqRateWhy = seqRate ? 'stored' : '';
+    rateTouched = false;
     const base = DEFAULT_TRACKS();
     const got = (p && p.tracks) || {};
     for (const n of TRACKS) base[n] = { ...base[n], ...(got[n] || {}) };
@@ -3322,8 +3390,10 @@
     return Math.floor(d * r + 1e-4) / r;
   }
 
-  /* A shot about to go in: its range on the grid, inside the clip's media. */
+  /* A shot about to go in: its range on the grid, inside the clip's media — the grid of
+   * the sequence's timebase, which a sequence that has none takes from this clip. */
   function gridded(seg) {
+    adoptRate(seg.clip);
     const [a, b] = gridRange(Number(seg.in), Number(seg.out), speedOf(seg), null,
                              clipEnd(clipOf(seg.clip)));
     return { ...seg, in: a, out: b };
@@ -3393,6 +3463,7 @@
    * One undo entry. Resolves to the new shot's id. */
   async function placeAt(seg, atFilmTime, kind = 'insert') {
     if (!seg || !seg.clip || !(seg.out > seg.in)) return null;
+    adoptRate(seg.clip);              // a gap before a first clip is on its grid too
     const tot = total();
     const at = onGrid(Math.max(0, Number(atFilmTime) || 0));
     if (at <= tot + frame() / 2) return kind === 'overwrite' ? overwrite(seg, at) : insertAt(seg, at);
@@ -3865,6 +3936,8 @@
     addOverlay, moveOverlay, trimOverlay, removeOverlay, selectOverlay, layoutTracks, saveSeq,
     get trackTops() { return { ...(state.trackTops || {}) }; },
     fps, setFps, frame, tc, keyLabel, isMac: IS_MAC, gridRate, onGrid, isOnGrid,
+    // the sequence's timebase (verdict 10, punch 3): 0 while it has none
+    timebase, TIMEBASES,
     TOOLS, setTool, get tool() { return state.tool; },
     addMarker, removeMarker, clearMarkers, setMarkers, nextMarker, prevMarker,
     markers: () => [...state.markers],

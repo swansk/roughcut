@@ -555,13 +555,24 @@ def test_a_shot_only_graded_by_hand_is_kept_by_a_rerun(fp):
     assert fp.get("/api/project").json()["colour"]["shots"][sid]["balance"]["exposure"] == 1.1
 
 
+def _timebase(fp, plan) -> float | None:
+    """The rate a proposal is snapped to (verdict 10, punch 3): the sequence's timebase,
+    or — a fresh bin's sequence has none until it holds a clip — the one its first clip
+    will give it."""
+    proj = fp.get("/api/project").json()
+    if proj["fps"]:
+        return proj["fps"]
+    first = next(x["clip"] for x in plan["segments"] if not x["clip"].startswith("gen_"))
+    return proj["clips"][first]["fps"]
+
+
 def test_proposal_ranges_land_on_the_sequence_frame_grid(fp):
     """The journey: edit points between frames made the export VFR. Every range a
     proposal makes is a whole number of frames at the sequence rate."""
     assert fp.post("/api/firstpass", json={"mode": "run"}).status_code == 200
     s = _wait(fp)
     plan = _plan(fp, s["proposal"]["job"])
-    fps = revise.exact_rate(fp.get("/api/project").json()["fps"])
+    fps = revise.exact_rate(_timebase(fp, plan))
     assert fps and fps > 1
     for x in plan["segments"]:
         for t in (x["in"], x["out"]):
@@ -769,7 +780,7 @@ def test_a_rerun_keeps_what_it_says_and_remembers_rejections(fp, order):
     s = _wait(fp)
     assert s["state"] == "done", s
     plan = _plan(fp, s["proposal"]["job"])
-    fps = revise.exact_rate(fp.get("/api/project").json()["fps"])
+    fps = revise.exact_rate(_timebase(fp, plan))
     assert len(plan["segments"]) == 5
     assert all(_on_grid(t, fps) for x in plan["segments"] for t in (x["in"], x["out"]))
 

@@ -28,6 +28,8 @@ Around the segments, the EDL gains four keys (each absent = the default below):
             full frame, for its own length.
   markers:  [film seconds]                 sequence markers (the ruler's flags)
   in / out: film seconds or null           the sequence's In / Out
+  fps:      the sequence's timebase        fixed: from its first clip or Sequence
+                                           Settings, never from the shots ("the timebase")
 
 A2 is the music bed (`effects_music`): its mute, solo and gain apply to the bed.
 
@@ -253,6 +255,66 @@ def validate_point(v: Any, what: str) -> float | None:
     if x < 0:
         raise ValueError(f"{what} is before the film starts")
     return x
+
+
+# ---------------------------------------------------------------- the timebase
+#
+# Verdict 10, punch 3: "the sequence's frame rate is derived from its shots and flips
+# 29.97 ↔ 59.94 as you edit". A Premiere sequence has a timebase, fixed in Sequence
+# Settings: a new sequence takes its first clip's ("New Sequence From Clip"), and adding
+# or removing shots never changes it. The EDL keeps it as `fps`: frames per second to 3
+# places (29.97 is 30000/1001, 59.94 is 60000/1001, 23.976 is 24000/1001 — the grid's
+# exact rates). Absent only while a sequence has never held a clip; an EDL from before
+# the key gets one once, when it is opened (server.ensure_timebase), the rate it was
+# showing then. Sequence Settings offers Premiere's common timebases; a sequence made
+# from a clip of another rate (a 119.88 phone clip) keeps that one.
+
+TIMEBASES = (23.976, 24.0, 25.0, 29.97, 30.0, 50.0, 59.94, 60.0)
+MIN_RATE, MAX_RATE = 1.0, 240.0
+
+
+def timebase_value(v: Any) -> float | None:
+    """A frame rate as the EDL keeps it — 30000/1001, 29.97002997 and "29.97" are all
+    29.97 — or None when `v` is not one (missing, nonsense, outside 1–240)."""
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        text = str(v).strip()
+        if "/" in text:
+            num, _, den = text.partition("/")
+            x = float(num) / float(den)
+        else:
+            x = float(text)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+    if not math.isfinite(x) or not (MIN_RATE <= x <= MAX_RATE):
+        return None
+    for t in TIMEBASES:
+        if abs(x - t) < 0.005:
+            return t
+    return round(x, 3)
+
+
+def validate_timebase(raw: Any) -> float | None:
+    """A save's `fps` (Sequence › Sequence Settings…): None leaves the stored timebase as
+    it is — a sequence never loses its rate — else the rate, or a ValueError."""
+    if raw is None:
+        return None
+    v = timebase_value(raw)
+    if v is None:
+        raise ValueError(f"fps {raw!r} is not a frame rate ({MIN_RATE:g}–{MAX_RATE:g})")
+    return v
+
+
+def exact_rate(fps: Any) -> float | None:
+    """The timebase as the frame grid counts it: 29.97 → 30000/1001, 25 → 25."""
+    v = timebase_value(fps)
+    if v is None:
+        return None
+    n = round(v * 1.001)
+    if abs(v - round(v)) > 0.004 and abs(v - n / 1.001) < 0.004:
+        return n / 1.001
+    return v
 
 
 # ---------------------------------------------------------------- what the render reads

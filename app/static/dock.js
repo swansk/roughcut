@@ -691,7 +691,8 @@
   const boardKeeps = () => board('keeps', []);
   const boardSegs = () => board('segs', []);
   const boardPlan = () => board('plan', null);
-  const seqRate = () => { try { return window.tl && typeof tl.gridRate === 'function' && tl.state ? tl.gridRate() : 0; } catch (e) { return 0; } };
+  // the sequence's timebase (verdict 10, punch 3): none — no Frame Rate — until it has one
+  const seqRate = () => { try { return window.tl && typeof tl.gridRate === 'function' && tl.state && (typeof tl.timebase !== 'function' || tl.timebase()) ? tl.gridRate() : 0; } catch (e) { return 0; } };
   function liveCut() {
     try {
       if (!window.tl || !tl.state || typeof tl.total !== 'function') return null;

@@ -25,6 +25,7 @@ Two design rules, both learned the hard way earlier in this project:
 from __future__ import annotations
 
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any, Callable
@@ -1158,6 +1159,14 @@ NTSC = {23.976: 24000 / 1001, 29.97: 30000 / 1001, 47.952: 48000 / 1001,
         59.94: 60000 / 1001, 119.88: 120000 / 1001}
 
 
+def _speed(seg: dict) -> float:
+    try:
+        v = float(seg.get("speed") or 1.0)
+    except (TypeError, ValueError):
+        return 1.0
+    return v if 0.1 <= v <= 4.0 else 1.0
+
+
 def exact_rate(fps: float | None) -> float | None:
     """The sequence rate as the frame grid uses it: 59.94 → 60000/1001."""
     try:
@@ -1178,12 +1187,15 @@ def on_frames(t: float, fps: float) -> float:
     return round(round(float(t) * fps) / fps, 4)
 
 
-def to_sequence(plan: dict, current: list[dict] | None, fps: float | None) -> dict:
-    """A proposal as the timeline takes it: each new range on the frame grid of `fps`
-    (at least one frame long), each range copied from `current` — exactly, or typed
-    back in hundredths (`_echoed`) — set to the cut's own in and out, and each
-    shot that continues one of the cut's (same id) carrying its `controls` over
-    exactly. Returns a new plan; `plan` is not modified."""
+def to_sequence(plan: dict, current: list[dict] | None, fps: float | None,
+                durations: dict[str, float] | None = None) -> dict:
+    """A proposal as the timeline takes it: each new range on the frame grid of `fps` —
+    the SEQUENCE's timebase, never a clip's (verdict 10, punch 3) — at least one frame
+    long, a retimed shot's length whole frames at its speed, and never past its clip's
+    media (`durations`, clip seconds by name, when known); each range copied from
+    `current` — exactly, or typed back in hundredths (`_echoed`) — set to the cut's own
+    in and out, and each shot that continues one of the cut's (same id) carrying its
+    `controls` over exactly. Returns a new plan; `plan` is not modified."""
     rate = exact_rate(fps)
     cur = [s for s in (current or []) if isinstance(s, dict) and "in" in s and "out" in s]
     by_id = {c.get("id"): c for c in cur if c.get("id")}
@@ -1205,8 +1217,17 @@ def to_sequence(plan: dict, current: list[dict] | None, fps: float | None) -> di
             s["in"], s["out"] = src["in"], src["out"]
         if rate and not copied:
             a, b = on_frames(s["in"], rate), on_frames(s["out"], rate)
+            end = (durations or {}).get(s.get("clip"))
+            if end and b > float(end) + 1e-6:          # the nearest frame past the media
+                b = round(math.floor(float(end) * rate + 1e-6) / rate, 4)
             if b - a < 1.0 / rate - 1e-6:
                 b = on_frames(a + 1.0 / rate, rate)
+            spd = _speed(s)
+            if spd != 1.0:
+                # retimed: its length in the film whole frames at its speed (the
+                # timeline's gridRange), so every cut after it stays on a frame too
+                n = max(1, round((b - a) / spd * rate))
+                b = round(a + n / rate * spd, 4)
             s["in"], s["out"] = a, b
         was = by_id.get(s.get("id"))
         if was is not None and was.get("controls"):

@@ -375,6 +375,12 @@ def test_nothing_in_the_dialog_overlaps_on_a_5994_sequence(board, monkeypatch, s
 
     monkeypatch.setattr(server, "media_facts", facts)
     monkeypatch.setattr(server, "_native_frame", lambda: (3840, 2160))
+    # a 59.94 SEQUENCE: its timebase is the EDL's own now (verdict 10, punch 3), never the
+    # rate its clips' facts happen to say, so the seeded cut is given 59.94 as Sequence
+    # Settings would (the next test's seed takes it away again)
+    edl = server.read_edl()
+    edl["fps"] = 59.94
+    server.write_edl(edl)
     hold = threading.Event()
 
     def held(preset, key, scope, choice=None):                  # measuring, until the end
