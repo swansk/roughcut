@@ -478,7 +478,7 @@ def _seq_row(p: Page) -> str:
 
 def test_the_board_says_no_rate_until_a_first_clip_and_never_flips(browser, live_server, tb):
     """An empty project: no rate anywhere (the Project panel's sequence row, Export's
-    Match Sequence). A 29.97 clip goes in by hand: the sequence is
+    Match Sequence, Sequence Settings). A 29.97 clip goes in by hand: the sequence is
     29.97; three 59.94 shots go in after it, outnumbering it: still 29.97, on disk and
     after a reload."""
     _open(tb, None)
@@ -490,6 +490,15 @@ def test_the_board_says_no_rate_until_a_first_clip_and_never_flips(browser, live
         # Export's Match Sequence names no rate
         opts = p.js("fetch('/api/export').then((r) => r.json()).then((j) => j.rates[0])")
         assert opts["fps"] is None
+        # Sequence Settings: none yet
+        p.pg.locator("#menubar .menu[data-menu=sequence] .mtop").click()
+        p.pg.locator("[data-testid=menu-seq-settings]").click()
+        p.pg.wait_for_selector("#seqSettings[open]")
+        sel = p.pg.locator("[data-testid=seq-timebase]")
+        assert sel.evaluate("(s) => s.options[s.selectedIndex].text") == "None yet: the first clip sets it"
+        p.pg.locator("[data-testid=seq-settings-cancel]").click()
+        p.pg.wait_for_function("!document.getElementById('seqSettings').open")
+        assert p.js("tl.timebase()") == 0
 
         # the first clip, by hand, off any grid: the sequence takes its 29.97
         p.js("tl.insertAt({clip: 'CLIP_30.MP4', in: 0.37, out: 2.71, why: 'first'}, 0)")
@@ -577,5 +586,58 @@ def test_hand_trims_an_ai_op_and_the_export_are_whole_sequence_frames(browser, l
         st = json.loads(probe.stdout)["streams"][0]
         assert Fraction(st["avg_frame_rate"]) == NTSC30 == Fraction(st["r_frame_rate"]), st
         assert int(st["nb_read_packets"]) == round(n), (st, total, n)
+    finally:
+        p.close()
+
+
+def test_sequence_settings_resnaps_every_edit_point_as_one_undo(browser, live_server, tb):
+    """Sequence › Sequence Settings… › Timebase 25: the timecode counts 25, every edit
+    point (V1, the A1 offset, V2, the markers and In / Out) moves to the nearest 25 fps
+    frame, the save carries `fps` 25; one Ctrl+Z puts the rate AND every point back
+    exactly, and the disk with them; Ctrl+Shift+Z does it again."""
+    _open(tb, SEED_30 + [_shot("CLIP_60.MP4", 0.5005, 2.5025, "s3")])
+    p = Page(browser, live_server)
+    try:
+        p.js("tl.addOverlay({clip: 'CLIP_60.MP4', in: 1.001, out: 2.002}, 1.001)")
+        p.js("tl.addMarker(2.002)")
+        p.js("tl.setSeqIn(1.001)")
+        p.settle(tb)
+        before = p.segs()
+        ov_before = p.js("tl.overlays()")
+        assert _all_on_grid(before, NTSC30) == [] and not _all_on_grid(before, Fraction(25)) == []
+
+        p.pg.locator("#menubar .menu[data-menu=sequence] .mtop").click()
+        p.pg.locator("[data-testid=menu-seq-settings]").click()
+        p.pg.wait_for_selector("#seqSettings[open]")
+        sel = p.pg.locator("[data-testid=seq-timebase]")
+        assert sel.evaluate("(s) => s.options[s.selectedIndex].text") == "29.97 frames/second"
+        sel.select_option("25")
+        assert "nearest frame of 25 fps" in p.pg.inner_text("#ssAbout")
+        p.pg.locator("[data-testid=seq-settings-ok]").click()
+        p.pg.wait_for_function("!document.getElementById('seqSettings').open")
+        assert p.js("tl.timebase()") == 25 and p.js("tl.fps()") == 25
+        after = p.segs()
+        assert _all_on_grid(after, Fraction(25)) == [], after
+        assert all(abs(a["in"] - b["in"]) <= 0.5 / 25 + 1e-6 for a, b in zip(after, before))
+        ov = p.js("tl.overlays()")[0]
+        assert all(_whole(ov[k], Fraction(25)) for k in ("in", "out", "at")), ov
+        assert all(_whole(m, Fraction(25), 0.26) for m in p.js("tl.markers()"))  # 0.01 s marks
+        assert p.js("document.querySelector('#undo').getAttribute('title')").startswith("undo: sequence settings")
+        d = p.settle(tb)
+        assert d["fps"] == 25.0 and _all_on_grid(d["segments"], Fraction(25)) == []
+
+        p.js("document.activeElement && document.activeElement.blur()")
+        p.pg.keyboard.press("Control+z")
+        p.pg.wait_for_function("tl.timebase() === 29.97")
+        assert p.segs() == before
+        assert p.js("tl.overlays()") == ov_before
+        d = p.settle(tb)
+        assert d["fps"] == 29.97 and _all_on_grid(d["segments"], NTSC30) == []
+        p.pg.keyboard.press("Control+Shift+z")
+        p.pg.wait_for_function("tl.timebase() === 25")
+        assert p.segs() == after
+        assert p.settle(tb)["fps"] == 25.0
+        p.load()
+        assert p.js("tl.timebase()") == 25
     finally:
         p.close()
