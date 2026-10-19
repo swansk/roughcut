@@ -502,13 +502,18 @@ def test_a_clips_free_facts_are_one_ffprobe_and_the_list_never_waits_long(tmp_pa
 
     server.configure(None, project["footage"], None, tmp_path / "work", proxies=False,
                      visual=tmp_path / "no-visual")
+    deadline = time.time() + 20                       # the configure's own warm-up, done
+    while time.time() < deadline and len(server.STATE.get("clip_facts") or {}) < len(server.footage_clips()):
+        time.sleep(0.05)
     probes: list[list[str]] = []
     real_run = subprocess.run
     clip = server.footage_clips()[0]
     src = str(server.clip_path(clip))
 
     def watched(cmd, *a, **kw):
-        if isinstance(cmd, list) and cmd and cmd[0] == "ffprobe" and src in cmd:
+        # the facts' ffprobes of this clip (not the colour tags' one, queued behind them)
+        if isinstance(cmd, list) and cmd and cmd[0] == "ffprobe" and src in cmd \
+                and any("duration" in str(x) or "codec_name" in str(x) for x in cmd):
             probes.append(cmd)
         return real_run(cmd, *a, **kw)
 
