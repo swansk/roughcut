@@ -396,6 +396,36 @@ def test_video_effects_crop_transform_and_blur(browser, live_server, project):
     assert c["keys"] == {"blurriness@gaussian_blur": [[0.0, 0.0], [2.0, 30.0]]}
 
 
+def test_a_video_effect_shows_on_the_program_before_accept_and_reject_writes_nothing(browser, live_server, project):
+    """Dimension 15: an `effect` op under review is on the Program before it lands — the
+    shot's stack in memory, the picture clipped (After) — ◐ shows it without (Before),
+    nothing is saved, and Reject all puts the shot back as it was."""
+    b = Board(browser, live_server, project)
+    try:
+        b.settle()
+        time.sleep(0.3)
+        before = b.raw()
+        b.review(b.ask([{"op": "effect", "id": "shot-a", "kind": "crop", "params": {"left": 25}}]))
+        p = b.page
+        p.wait_for_function("rcActions.previewing")
+        assert p.evaluate("effects.vfx(tl.byId('shot-a'))") == [{"id": "crop", "kind": "crop", "params": {"left": 25}}]
+        p.wait_for_function("liveVideo() && getComputedStyle(liveVideo()).clipPath.startsWith('polygon(25%')")
+        p.locator("[data-testid=ai-before-after]").click()             # Before
+        p.wait_for_function("getComputedStyle(liveVideo()).clipPath === 'none'")
+        p.locator("[data-testid=ai-before-after]").click()             # After again
+        p.wait_for_function("getComputedStyle(liveVideo()).clipPath.startsWith('polygon(25%')")
+        p.wait_for_timeout(900)                                        # past any autosave
+        assert b.raw() == before
+        p.locator("[data-testid=ai-reject-all]").click()
+        p.wait_for_function("!rcActions.open")
+        assert p.evaluate("effects.vfx(tl.byId('shot-a'))") == []
+        p.wait_for_function("getComputedStyle(liveVideo()).clipPath === 'none'")
+        p.wait_for_timeout(900)
+        assert b.raw() == before
+    finally:
+        b.close()
+
+
 def test_lumetri_basic_curves_wheels_hsl_look_and_match(browser, live_server, project):
     ops = [{"op": "set", "id": "shot-a", "prop": "temperature", "value": 30},
            {"op": "set", "id": "shot-a", "prop": "exposure", "value": 0.25},
