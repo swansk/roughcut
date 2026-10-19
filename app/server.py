@@ -10986,7 +10986,7 @@ async def api_fx_revert(request: Request) -> JSONResponse:
     e.pop("verify", None)
     e = fx.validate_effect(e, _fx_segments())
     _fx_put(e)
-    _fx_sound(e)
+    await asyncio.to_thread(_fx_sound, e)        # numpy, 50-230 ms for a long repeat
     _fx_autoverify(e["id"])
     return JSONResponse({"ok": True, "effect": _fx_urls(e)})
 
@@ -11027,7 +11027,7 @@ async def api_fx_discard(request: Request) -> JSONResponse:
     current = next((x for x in read_edl().get("effects") or [] if x.get("id") == fx_id), None)
     if current is not None and e.get("status") == "proposed":
         fx.save(fx_home(), current)                 # a revision dropped: the accepted one stays
-        _fx_sound(current)
+        await asyncio.to_thread(_fx_sound, current)
         return JSONResponse({"ok": True})
     if e.get("status") == "accepted" or current is not None:
         raise HTTPException(400, "that effect is accepted — remove it instead")
@@ -11074,7 +11074,7 @@ async def api_fx_update(fx_id: str, request: Request) -> JSONResponse:
         raise HTTPException(400, str(exc))
     _fx_put(new)
     if body.get("sound") is not None:
-        _fx_sound(new)
+        await asyncio.to_thread(_fx_sound, new)  # off the loop: a long synth holds it
     _fx_autoverify(fx_id)
     return JSONResponse(_fx_urls(new))
 
