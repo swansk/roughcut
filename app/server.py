@@ -10865,10 +10865,17 @@ def _fx_reference(fx_id: str, reference: dict | None) -> dict | None:
     return out
 
 
+# The words that make a note an impact, whole words with their endings: matched as
+# substrings, "white" held "hit", so judge 11's "a big white SEND IT title" had its check
+# fail "not on a peak" (verdict 11, punch 2), and "island" was a landing.
+_FX_IMPACT = re.compile(
+    r"\b(?:hit(?:s|ting)?|impacts?|crash(?:es|ed|ing)?|rocks?|rocky|strik(?:e|es|ing)|struck"
+    r"|bang(?:s|ed|ing)?|land(?:s|ed|ing|ings)?|smack(?:s|ed|ing)?|slam(?:s|med|ming)?)\b")
+
+
 def _fx_impact(e: dict) -> bool:
-    words = ("hit", "impact", "crash", "rock", "strike", "bang", "land", "smack", "slam")
     text = f"{e.get('note', '')} {e.get('name', '')}".lower()
-    return any(w in text for w in words)
+    return bool(_FX_IMPACT.search(text))
 
 
 def _fx_window(raw, seg: dict) -> tuple[float, float] | None:

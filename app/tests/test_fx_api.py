@@ -256,6 +256,21 @@ def test_an_overlay_only_accept_is_taken_back_and_put_back(stubbed, client):
     assert client.post("/api/fx/redo", json={"id": fx_id}).json()["changed"] is False
 
 
+def test_an_impact_is_named_by_a_whole_word():
+    """Verdict 11, punch 2: the check's "each impact on an onset peak" runs only when the
+    note names an impact. Matched as substrings, "white" held "hit": judge 11's "A big
+    white SEND IT title that pops in at the start of this shot" failed "not on a peak"."""
+    import server
+    said = lambda note, name="effect": server._fx_impact({"note": note, "name": name})  # noqa: E731
+    assert not said("A big white SEND IT title that pops in at the start of this shot", "SEND IT pop title")
+    assert not said("put a soft vignette on this shot", "soft feathered vignette")
+    assert not said("a title over the island", "landscape title")
+    for note in ("hit markers where my skis hit the rocks", "a flash as he lands", "the crash",
+                 "on the landing", "when the board strikes the rail", "BANG on the impact", "slammed into the snow"):
+        assert said(note), note
+    assert said("a marker", "hit markers")
+
+
 def test_remove_keeps_the_effect_for_restore_and_accept_keeps_the_previous_for_revert(stubbed, client):
     """Karl: effects applied long term must be reversible, and more can go on top."""
     project = stubbed
