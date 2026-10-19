@@ -83,13 +83,13 @@
   const KEY_GROUP = { posx: 'pos', posy: 'pos', scale: 'scale', rotation: 'rotation', opacity: 'opacity', volume_db: 'volume_db' };
   const KEY_PROP = { posx: 'position_x', posy: 'position_y', scale: 'scale', rotation: 'rotation', opacity: 'opacity', volume_db: 'volume_db' };
   const CUT_OPS = new Set(['insert', 'overwrite', 'append', 'move', 'razor', 'ripple_delete', 'trim', 'roll', 'slip', 'speed']);
-  const LOOK_OPS = new Set(['set', 'keys', 'curve', 'wheel', 'look', 'match']);   // shown on the Program
+  const LOOK_OPS = new Set(['set', 'keys', 'effect', 'curve', 'wheel', 'look', 'match']);   // shown on the Program
   const TX_OPS = new Set(['transition', 'fade']);                                // drawn on the timeline
   const FAMILY = {
     insert: 'timeline', overwrite: 'timeline', append: 'timeline', move: 'timeline', razor: 'timeline',
     ripple_delete: 'timeline', trim: 'timeline', roll: 'timeline', slip: 'timeline', speed: 'timeline',
     marker: 'timeline', in_out: 'timeline', track_add: 'timeline', overlay: 'timeline',
-    set: 'effect_controls', keys: 'effect_controls',
+    set: 'effect_controls', keys: 'effect_controls', effect: 'effect_controls',
     curve: 'lumetri', wheel: 'lumetri', look: 'lumetri', match: 'lumetri',
     transition: 'transitions', fade: 'transitions', design_effect: 'designed_effects', export: 'export',
   };
@@ -264,6 +264,11 @@
         if (!fx.set(op.prop, Number(v), c.target(op.id).seg)) refuse(`key ${n + 1} was refused (is the track locked?)`);
       });
     },
+    // a video effect (wave 14, VFX): the bin's drop, then its section's values (effects.js)
+    effect(op, c) {
+      if (!FX() || typeof FX().vfxOp !== 'function') refuse('video effects are not loaded');
+      FX().vfxOp(op, c.shot(op.id));
+    },
     curve(op, c) {
       const { seg } = c.target(op.id);
       if (!FX() || !FX().curve(op.channel || 'master', op.points, seg)) refuse('Lumetri refused the curve');
@@ -380,6 +385,7 @@
     look: ['colour change', 'colour changes'], match: ['colour change', 'colour changes'],
     transition: ['transition', 'transitions'], fade: ['fade', 'fades'],
     design_effect: ['effect', 'effects'], export: ['export', 'exports'],
+    effect: ['video effect', 'video effects'],
   };
   function nounOf(op) {
     if (op.op !== 'set') return NOUN[op.op] || ['edit', 'edits'];
@@ -514,6 +520,7 @@
       case 'overlay': return `${r(op)} on ${op.track || 'V2'} at ${tc(op.at)}`;
       case 'set': return `${Shot(op.id)}: ${op.prop} ${op.value}`;
       case 'keys': return `${Shot(op.id)}: ${op.prop} keyframes (${(op.keys || []).length})`;
+      case 'effect': return `${Shot(op.id)}: ${op.remove ? 'clear ' : ''}${((FX() && FX().VFX) || {})[op.kind] ? FX().VFX[op.kind].name : op.kind}`;
       case 'curve': return `${Shot(op.id)}: Lumetri ${op.channel || 'master'} curve`;
       case 'wheel': return `${Shot(op.id)}: Lumetri ${op.range} wheel`;
       case 'look': return `${op.ids === 'all' ? 'The film' : (op.ids || []).map(Shot).join(', ')}: look ${op.name}`;

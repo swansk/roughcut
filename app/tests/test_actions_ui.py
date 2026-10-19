@@ -193,7 +193,7 @@ def norm(edl: dict) -> dict:
 UNDO_WORDS = set("""AI: + more edit edits insert inserts overwrite overwrites move moves razor cut cuts
 ripple delete deletes trim trims roll rolls slip slips speed changes change marker markers In/Out
 new track tracks overlay overlays keyframes keyframe sets colour transition transitions fade fades
-effect effects export exports opacity volume motion""".split())
+effect effects export exports opacity volume motion video""".split())
 
 
 def check_undo_title(title: str) -> str:
@@ -351,6 +351,49 @@ def test_effect_controls_values_and_keyframes(browser, live_server, project):
     c = ai["segments"][2]["controls"]
     assert c["keys"]["opacity"] == [[0, 100], [2, 0]]
     assert ai["segments"][0]["controls"]["scale"] == 125
+
+
+def test_video_effects_crop_transform_and_blur(browser, live_server, project):
+    """Wave 14, VFX (verdict 10 punch 8): the Effects bin's video effects, each an `effect`
+    op. The hand drops each from the bin (effects.vfxAdd: the drop's own call), types its
+    values in its Effect Controls section, keys Blurriness with the stopwatch and turns a
+    Crop's fx off — the AI's ops land the same EDL, one Ctrl+Z back."""
+    ops = [{"op": "effect", "id": "shot-a", "kind": "crop", "params": {"left": 10, "feather": 20}},
+           {"op": "effect", "id": "shot-b", "kind": "transform",
+            "params": {"posx": 1200, "scale": 50, "rotation": 10, "opacity": 80}},
+           {"op": "effect", "id": "shot-c", "kind": "gaussian_blur", "params": {"dimensions": "horizontal"},
+            "keys": {"blurriness": [[0.0, 0], [2.0, 30]]}},
+           {"op": "effect", "id": "shot-c", "kind": "crop", "params": {"bottom": 25}, "on": False}]
+    hand = """() => {
+      const seg = (id) => tl.byId(id);
+      effects.vfxAdd('crop', ['shot-a']);                                // dropped from the bin
+      effects.set('left@crop', 10, seg('shot-a'));                       // typed in its section
+      effects.set('feather@crop', 20, seg('shot-a'));
+      effects.vfxAdd('transform', ['shot-b']);
+      effects.set('posx@transform', 1200, seg('shot-b'));
+      effects.set('scale@transform', 50, seg('shot-b'));
+      effects.set('rotation@transform', 10, seg('shot-b'));
+      effects.set('opacity@transform', 80, seg('shot-b'));
+      effects.vfxAdd('gaussian_blur', ['shot-c']);
+      effects.vfxChoice('gaussian_blur', 'dimensions', 'horizontal', seg('shot-c'));   // its select
+      // the stopwatch: select the shot, playhead on the frame, stopwatch, type the value
+      tl.select(['shot-c'], {source: 'click'});
+      const s = tl.filmStart('shot-c');
+      tl.seek(s + 0.0); effects.animate('blurriness@gaussian_blur'); effects.set('blurriness@gaussian_blur', 0, seg('shot-c'));
+      tl.seek(s + 2.0); effects.set('blurriness@gaussian_blur', 30, seg('shot-c'));
+      effects.vfxAdd('crop', ['shot-c']);
+      effects.set('bottom@crop', 25, seg('shot-c'));
+      effects.vfxAct('off', 'crop', seg('shot-c'));                      // its fx toggle
+    }"""
+    ai, h, _ = ai_then_hand(browser, live_server, project, ops, hand)
+    assert ai == h
+    a, b, c = (ai["segments"][i]["controls"] for i in range(3))
+    assert a["vfx"] == [{"id": "crop", "kind": "crop", "params": {"left": 10.0, "feather": 20.0}}]
+    assert b["vfx"] == [{"id": "transform", "kind": "transform",
+                         "params": {"position_x": 0.625, "scale": 50.0, "rotation": 10.0, "opacity": 80.0}}]
+    assert c["vfx"] == [{"id": "gaussian_blur", "kind": "gaussian_blur", "params": {"dimensions": "horizontal"}},
+                        {"id": "crop", "kind": "crop", "params": {"bottom": 25.0}, "off": True}]
+    assert c["keys"] == {"blurriness@gaussian_blur": [[0.0, 0.0], [2.0, 30.0]]}
 
 
 def test_lumetri_basic_curves_wheels_hsl_look_and_match(browser, live_server, project):

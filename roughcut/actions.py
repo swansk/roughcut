@@ -48,6 +48,17 @@ THE OPS (each maps to the human path named after the arrow)
                                                  value typed at each `t` (film seconds from
                                                  the shot's first frame) — effects.set with
                                                  the playhead there
+  Video effects (the Effects bin's Video Effects; wave 14, VFX — roughcut/vfx.py)
+    effect        {id, kind, params?, keys?, on?, remove?}  → the bin's drop on the shot
+                                                 (effects.vfxAdd) when it has no effect of
+                                                 that kind, else its first one; then each
+                                                 value typed in its section (effects.set),
+                                                 keys as `keys` does, `on` its fx toggle,
+                                                 `remove` its Clear. kind crop (Left / Top
+                                                 / Right / Bottom %, feather px), transform
+                                                 (posx / posy px, scale %, rotation °,
+                                                 opacity %), gaussian_blur (blurriness px,
+                                                 dimensions both|horizontal|vertical)
   Lumetri Color
     curve         {id, channel, points}      → effects.curve  channel master|r|g|b;
                                                  points [[x, y], …] on 0..1, x increasing
@@ -89,6 +100,7 @@ import math
 from typing import Any, Iterable
 
 from . import tracks as tracksmod
+from . import vfx as vfxmod
 
 MAX_OPS = 24
 MIN_LEN = 0.2                     # s — the timeline's shortest shot (tl MIN_LEN)
@@ -102,7 +114,7 @@ FRAME_W, FRAME_H = 1920, 1080     # Effect Controls' Position is in a 1920×1080
 FAMILIES: dict[str, tuple[str, ...]] = {
     "timeline": ("insert", "overwrite", "append", "move", "razor", "ripple_delete", "trim",
                  "roll", "slip", "speed", "marker", "in_out", "track_add", "overlay"),
-    "effect_controls": ("set", "keys"),
+    "effect_controls": ("set", "keys", "effect"),
     "lumetri": ("curve", "wheel", "look", "match"),
     "transitions": ("transition", "fade"),
     "designed_effects": ("design_effect",),
@@ -151,6 +163,21 @@ SET_PROPS: dict[str, tuple[str, float, float, str]] = {
 KEY_PROPS = ("posx", "posy", "scale", "rotation", "opacity", "volume_db")
 OVERLAY_PROPS = ("posx", "posy", "scale", "rotation", "opacity")
 CURVE_CHANNELS = {"master": "RGB master", "r": "red", "g": "green", "b": "blue"}
+
+
+def vfx_params(kind: str) -> dict[str, tuple[str, float, float, str]]:
+    """A video effect's numbers as its Effect Controls section shows them (the `effect`
+    op's units): key → (label, lo, hi, unit). The Transform's Position is in pixels of a
+    1920×1080 frame (`posx` / `posy`), as Motion's is; the rest are vfx.py's own."""
+    out: dict[str, tuple[str, float, float, str]] = {}
+    for p in vfxmod.KINDS[kind].params:
+        if p.key == "position_x":
+            out["posx"] = ("Position X", p.lo * FRAME_W, p.hi * FRAME_W, " px")
+        elif p.key == "position_y":
+            out["posy"] = ("Position Y", p.lo * FRAME_H, p.hi * FRAME_H, " px")
+        else:
+            out[p.key] = (p.label, p.lo, p.hi, p.unit)
+    return out
 WHEELS = {"shadows": "Shadows", "midtones": "Midtones", "highlights": "Highlights"}
 TRANSITION_KINDS = dict(tracksmod.TRANSITION_KINDS)
 TRANSITION_MIN_S, TRANSITION_MAX_S = tracksmod.TRANSITION_MIN_S, tracksmod.TRANSITION_MAX_S
@@ -176,6 +203,11 @@ def schema_text() -> str:
     props = ", ".join(f"{k} ({v[1]:g}..{v[2]:g}{v[3].strip() and ' ' + v[3].strip()})"
                       for k, v in SET_PROPS.items())
     kinds = ", ".join(f"{k} ({v})" for k, v in TRANSITION_KINDS.items())
+    vfx = "; ".join(
+        f"{k} ({K.folder} › {K.name}: "
+        + ", ".join(f"{u} {lo:g}..{hi:g}{unit.rstrip()}" for u, (_, lo, hi, unit) in vfx_params(k).items())
+        + "".join(f", {c} {'|'.join(opts)}" for c, opts in K.choices.items()) + ")"
+        for k, K in vfxmod.KINDS.items())
     sizes = "|".join(f'"{k}"' for k in EXPORT_SIZES)
     rates = "|".join(f'"{k}"' for k in EXPORT_RATES)
     return f"""\
@@ -202,6 +234,7 @@ Timeline
   {{"op":"overlay","clip","in","out","at","track"?}}  a clip over the cut on V2 (or an added track) at film time `at`
 Effect Controls
   {{"op":"set","id","prop","value"}}             one property, in the panel's units: {props}
+  {{"op":"effect","id","kind","params"?,"keys"?,"on"?,"remove"?}}   a video effect from the Effects bin on a shot (its first of that kind; added when it has none): {vfx}. "keys" {{param: [[t, v], …]}} keyframes as `keys`; "on": false bypasses it; "remove": true clears it
   {{"op":"keys","id","prop","keys":[[t,v],…]}}   keyframes (t = film seconds from the shot's first frame, before its last frame; v in the prop's units) on {", ".join(KEY_PROPS)}
 Lumetri Color
   {{"op":"curve","id","channel":"master"|"r"|"g"|"b","points":[[x,y],…]}}   2–{MAX_CURVE_POINTS} points on 0..1, x increasing; [[0,0],[1,1]] is no change
@@ -825,6 +858,106 @@ def _c_keys(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
     return {"op": "keys", "id": sid, "prop": prop, "keys": clean}, line
 
 
+def _vfx_num(kind: str, key: str, v: float) -> str:
+    label, lo, hi, unit = vfx_params(kind)[key]
+    return (f"{v:g}" if abs(v - round(v)) > 1e-9 else f"{int(round(v))}") + unit
+
+
+def _c_effect(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
+    kind = raw.get("kind")
+    if kind not in vfxmod.KINDS:
+        raise Refused(f"unknown video effect {kind!r} (the bin has {', '.join(vfxmod.KINDS)})")
+    sid = raw.get("id")
+    if sid is not None and str(sid) in sim.overlays:
+        raise Refused("video effects apply to shots on V1: a clip on V2+ renders as shot")
+    seg = sim.shot(sid)
+    K = vfxmod.KINDS[kind]
+    ui = vfx_params(kind)
+    who = _cap(sim.label(seg["id"]))
+    stack = [dict(e) for e in vfxmod.stack(seg.get("controls"))]
+    have = next((e for e in stack if e["kind"] == kind), None)
+    clean: dict = {"op": "effect", "id": seg["id"], "kind": kind}
+    if raw.get("remove"):
+        if have is None:
+            raise Refused(f"{sim.label(seg['id'])} has no {K.name} to clear")
+        clean["remove"] = True
+        seg["controls"] = {**(seg.get("controls") or {}),
+                           "vfx": [e for e in stack if e["id"] != have["id"]]}
+        return clean, f"{who}: clear {K.name}"
+    params = raw.get("params") or {}
+    if not isinstance(params, dict):
+        raise Refused("`params` is an object of the effect's values")
+    cp: dict = {}
+    words: list[str] = []
+    for k, v in params.items():
+        if k in K.choices:
+            if v not in K.choices[k]:
+                raise Refused(f"{K.name} {k} is one of {', '.join(K.choices[k])}")
+            cp[k] = v
+            words.append(f"{vfxmod.CHOICE_LABELS.get(k, {}).get(v, v)}")
+            continue
+        if k not in ui:
+            raise Refused(f"{K.name} has no {k!r} (it has {', '.join([*ui, *K.choices])})")
+        label, lo, hi, unit = ui[k]
+        x = _r(_number(params, k, lo, hi, f"{K.name} {label}", unit), 3)
+        cp[k] = x
+        words.append(f"{label} {_vfx_num(kind, k, x)}")
+    keys = raw.get("keys") or {}
+    if not isinstance(keys, dict):
+        raise Refused("`keys` is {param: [[t, value], …]}")
+    ck: dict = {}
+    length = dur(seg)
+    last = max(0.0, _jround((length - 1.0 / sim.rate) * sim.rate) / sim.rate)
+    for k, lst in keys.items():
+        if k not in ui:
+            raise Refused(f"{K.name} has no stopwatch for {k!r} (it has {', '.join(ui)})")
+        label, lo, hi, unit = ui[k]
+        if not isinstance(lst, list) or not lst:
+            raise Refused(f"keys.{k} needs [[t, value], …]")
+        if len(lst) > MAX_KEYS:
+            raise Refused(f"at most {MAX_KEYS} keyframes on a property")
+        out: list[list[float]] = []
+        for kk in lst:
+            if not isinstance(kk, (list, tuple)) or len(kk) != 2:
+                raise Refused("each key is [t, value]")
+            t, v = _f(kk[0]), _f(kk[1])
+            if t is None or v is None:
+                raise Refused("each key is [t, value], both numbers")
+            if t < -1e-6 or t > last + 0.5 / sim.rate:
+                raise Refused(f"a key at {t:g} s is outside the shot (0 to {last:.2f} s from its first frame)")
+            if not (lo - 1e-9 <= v <= hi + 1e-9):
+                raise Refused(f"{K.name} {label} is {lo:g} to {hi:g}{unit}; {v:g} is outside it")
+            tg = _r(_jround(max(0.0, t) * sim.rate) / sim.rate, 6)
+            if any(abs(c[0] - tg) < 0.5 / sim.rate for c in out):
+                raise Refused(f"two keys on the frame at {tg:.2f} s")
+            out.append([tg, _r(v, 3)])
+        out.sort(key=lambda x: x[0])
+        ck[k] = out
+        words.append(f"{label} keyframes {' → '.join(_vfx_num(kind, k, c[1]) for c in out[:4])}"
+                     f"{' …' if len(out) > 4 else ''}")
+    on = raw.get("on")
+    if on is not None and not isinstance(on, bool):
+        raise Refused("`on` is true or false")
+    if have is None and len(stack) >= vfxmod.MAX_EFFECTS:
+        raise Refused(f"a shot takes at most {vfxmod.MAX_EFFECTS} video effects")
+    if have is not None and not cp and not ck and (on is None or on == (not have.get("off"))):
+        raise Refused(f"{sim.label(seg['id'])} has its {K.name} already: say what to change in it")
+    if cp:
+        clean["params"] = cp
+    if ck:
+        clean["keys"] = ck
+    if on is not None:
+        clean["on"] = on
+        words.append("on" if on else "bypassed (fx off)")
+    if have is None:
+        new = {"id": vfxmod.next_id(kind, [e["id"] for e in stack]), "kind": kind}
+        if on is False:
+            new["off"] = True
+        seg["controls"] = {**(seg.get("controls") or {}), "vfx": [*stack, new]}
+    line = f"{who}: {'add ' if have is None else ''}{K.name}" + (f" — {', '.join(words)}" if words else "")
+    return clean, line
+
+
 def _c_curve(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
     seg = sim.shot(raw.get("id"))
     ch = raw.get("channel", "master")
@@ -1047,6 +1180,7 @@ CHECK = {
     "razor": _c_razor, "ripple_delete": _c_ripple_delete, "trim": _c_trim, "roll": _c_roll,
     "slip": _c_slip, "speed": _c_speed, "marker": _c_marker, "in_out": _c_in_out,
     "track_add": _c_track_add, "overlay": _c_overlay, "set": _c_set, "keys": _c_keys,
+    "effect": _c_effect,
     "curve": _c_curve, "wheel": _c_wheel, "look": _c_look, "match": _c_match,
     "transition": _c_transition, "fade": _c_fade, "design_effect": _c_design_effect,
     "export": _c_export,
