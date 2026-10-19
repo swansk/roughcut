@@ -30,6 +30,10 @@
  *                  current shot's.
  *   prefetch(id)   the player parked this shot for the next cut (app.js armNext): fetch
  *                  its LUT and put it in its own texture now, so the cut only binds it.
+ *   preview(block, {untilSave})   draw every shot through the LUT baked from this colour
+ *                  block (held in memory, not saved: an AI review's look or Color Match,
+ *                  verdict 10 punch 7); preview(null) goes back to the saved LUTs.
+ *   previewing     true while a block is under preview
  *   ready          true once the canvas has a context (tests read it)
  *   draw()         redraw now (a paused monitor gets no frame callback) — Effect Controls
  *                  calls it after every change so its preview is on the next frame
@@ -758,6 +762,11 @@ onmessage = (e) => {
     shot: null,              // the segment id the monitor is on
     lut: null,               // the current shot's {n, identity, data} or null
     cache: new Map(),        // id → the LUT record, or the promise fetching it
+    pcol: null,              // the colour block under preview (JSON), or null (preview below)
+    pcache: new Map(),       // id → the preview's LUT record, or the promise fetching it
+    pepoch: 0,               // bumps per invalidate: a preview bake from before it is not cached
+    pkeep: null,             // the last block previewed and its LUTs, while ◐ shows Before
+    puntil: false,           // the preview stands in until the next save lands (Accept)
     keys: 0,                 // LUT records are keyed by a serial (renderer textures)
     gen: 0,                  // bumps per setShot / invalidate: a late fetch is ignored
     frameGen: 0,             // bumps per re-arm of the frame callback
@@ -1242,7 +1251,50 @@ onmessage = (e) => {
     data: new Uint8Array([0, 0, 0, 255, 0, 0, 0, 255, 0, 255, 255, 0,
                           0, 0, 255, 255, 0, 255, 0, 255, 255, 255, 255, 255]) };
 
+  /* The look's preview (verdict 10, punch 7). An AI review's look or Color Match is not
+   * in any LUT the server has baked — those are baked from the colour block on disk, and
+   * nothing under review is saved. `preview(block)` hands this module the block the board
+   * holds in memory: every shot the monitor shows then takes the LUT baked from that
+   * block (POST /api/lut/{id}: the server's own `shot_fn`, the one GET and the render
+   * bake with, so the After picture is the one Accept saves and the export makes),
+   * cached apart from the saved LUTs, which stay; `preview(null)` puts them back.
+   * `{untilSave: true}` (Accept): the block stands in until the next save lands
+   * (`invalidate`), so the accepted look does not blink back to Before while the
+   * autosave writes it. */
+  const lutCache = () => (G.pcol ? G.pcache : G.cache);
+  function fetchPreview(id) {
+    const cache = G.pcache, pe = G.pepoch;
+    if (cache.has(id)) return Promise.resolve(cache.get(id));
+    const p = fetch(`/api/lut/${encodeURIComponent(id)}?n=${LUT_N}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: `{"colour":${G.pcol}}`,
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        const rec = d ? toRecord(d) : IDENTITY;
+        if (pe === G.pepoch) cache.set(id, rec);
+        return rec;
+      })
+      .catch(() => {
+        if (pe === G.pepoch && cache.get(id) === p) cache.delete(id);
+        return IDENTITY;
+      });
+    cache.set(id, p);
+    return p;
+  }
+  function preview(block, opts = {}) {
+    const next = block && typeof block === 'object' ? JSON.stringify(block) : null;
+    G.puntil = !!(next && opts && opts.untilSave);
+    if (next === G.pcol) return Promise.resolve(G.lut);
+    // ◐ Before / After flips between the saved LUTs and this block: the block's LUTs are
+    // kept while it is off, so After comes back without a second bake
+    if (G.pcol) G.pkeep = { col: G.pcol, cache: G.pcache };
+    G.pcol = next;
+    if (next) G.pcache = G.pkeep && G.pkeep.col === next ? G.pkeep.cache : new Map();
+    return setShot(G.shot);
+  }
+
   function fetchLut(id) {
+    if (G.pcol) return fetchPreview(id);
     if (G.cache.has(id)) return Promise.resolve(G.cache.get(id));
     const epoch = G.epoch;            // a save (invalidate) while this is in flight: not cached
     const p = fetch(`/api/lut/${encodeURIComponent(id)}?n=${LUT_N}`)
@@ -1292,7 +1344,7 @@ onmessage = (e) => {
     }
     // Prefetched (the usual cut while playing): the record is here, the texture made —
     // taken in this task, so the cut's first graded frame has its own shot's LUT.
-    const hit = G.cache.get(G.shot);
+    const hit = lutCache().get(G.shot);
     const rec = hit && typeof hit.then !== 'function' ? hit : await fetchLut(G.shot);
     if (gen !== G.gen) return;          // the monitor moved on while this was loading
     G.lut = rec;
@@ -1308,7 +1360,7 @@ onmessage = (e) => {
     const sid = String(id);
     if (sid.startsWith('tmp-')) return;
     fetchLut(sid).then((rec) => {
-      if (!G.ok || !rec || rec.identity || G.cache.get(sid) !== rec) return;
+      if (!G.ok || !rec || rec.identity || lutCache().get(sid) !== rec) return;
       if (G.worker) {
         if (G.sentKey === rec.key) return;
         G.worker.postMessage({ t: 'lut', key: rec.key, n: rec.n, data: rec.data });
@@ -1376,6 +1428,11 @@ onmessage = (e) => {
   function invalidate() {
     G.cache.clear();
     G.epoch++;
+    // the preview's LUTs were baked against the cut on disk too; Accept's stands in no more
+    G.pcache = new Map();
+    G.pkeep = null;
+    G.pepoch++;
+    if (G.puntil) { G.pcol = null; G.puntil = false; }
     // the records are new objects with new keys: the old textures are only weight now
     if (G.worker) G.worker.postMessage({ t: 'forget' });
     else if (G.R) G.R.forget();
@@ -1486,6 +1543,8 @@ onmessage = (e) => {
     setShot,
     prefetch,
     invalidate,
+    preview,
+    get previewing() { return !!G.pcol; },
     setMix,
     get mix() { return G.mix ? { id: G.mix.id, w: G.mix.w, graded: mixIsGraded() } : null; },
     draw: settle,

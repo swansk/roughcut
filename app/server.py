@@ -405,6 +405,43 @@ def api_lut(sid: str, n: int = 17) -> JSONResponse:
                          "table":[round(float(v), 5) for v in table.reshape(-1)]})
 
 
+@app.post("/api/lut/{sid}")
+async def api_lut_preview(sid: str, request: Request, n: int = 17) -> JSONResponse:
+    """The shot's LUT for a colour block the board holds and has not saved: the AI
+    review's Before / After for a look or a Color Match on the Program (verdict 10, punch
+    7). `{colour}` replaces the EDL's block, validated as a save validates it; the cut
+    and everything else are the disk's. Baked by the same `shot_fn` as GET and the
+    render, off the event loop, and nothing is written — so the picture under review is
+    the one Accept saves and the export makes."""
+    body = await request.json()
+    block = body.get("colour") if isinstance(body, dict) else None
+    try:
+        spec = colourmod.validate_colour(block or {}, looks_library())
+    except ValueError as exc:
+        raise HTTPException(400, f"colour: {exc}")
+    n = max(2, min(int(n), 33))
+
+    def bake() -> dict | None:
+        edl = read_edl()
+        ensure_segment_ids(edl)
+        if spec:
+            edl["colour"] = spec
+        else:
+            edl.pop("colour", None)
+        res = shot_fn(edl, sid)
+        if res is None:
+            return None
+        table = colourmod.cube_table(res["fn"], n)
+        return {"id": sid, "size": n, "identity": res["identity"], "look": res["look"],
+                "strength": res["strength"], "balance": res["balance"], "preview": True,
+                "table": [round(float(v), 5) for v in table.reshape(-1)]}
+
+    out = await asyncio.to_thread(bake)
+    if out is None:
+        raise HTTPException(404, f"no shot {sid}")
+    return JSONResponse(out)
+
+
 # ---------------------------------------------------------------- proxies
 
 
