@@ -402,3 +402,10 @@ next judge runs, and the next judge rules it honest or lenient.
   are inside the window but unseen; without the rule they added ~58 words). BINLOOK2 measured that on `b7848ec`
   the new rule gives exactly the old numbers on every screen, so it changes no earlier count; it is stricter on what
   counts as seen only where something is actually scrolled away.
+
+- 2026-10-18 (lead, after verdict 10's ruling): **the journey's crash retry, logged late.** Wave 13 SMALL4 made the
+  journey retry a step once when Chromium itself crashed (a renderer crash or a crash signal; never SIGKILL, SIGTERM,
+  a clean exit or a closed page), and the step line says so; the gate then read GREEN. Verdict 10 ruled it lenient
+  in part, because a retried crash ended GREEN and the change was never logged here. **From wave 14 a retried step
+  makes the gate AMBER** (lane POLISH10), so a crash can never pass silently; a GREEN journey means no retry. Also
+  logged: the gate and the journey give their browsers no D-Bus (verdict 10: honest).

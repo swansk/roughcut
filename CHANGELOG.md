@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **Redesign verdict 10: FAIL, 15 of 16 at 8-9, the judge's gate GREEN** (`judge/verdict-10.md` on 9470064): dimension 10 at 7 (a Designed Effects check ran 12+ min in the server at "0%", event-loop holds up to 996 ms, slow uploads, one accepted AI colour change not on disk); K2, K3 open. Ruled: the inView rule, the wave-13 budgets and no D-Bus honest; the journey's crash retry lenient in part (logged now; a retried step will make the gate AMBER). Wave 14 lanes in judge/WAVE14.md.
 - **Loop state: CANVAS2 merged; the lead's full gate on 69fb0f0 is GREEN; judge 10 next** (judge/LOOP.md).
 - **Merge: wave 13 lane CANVAS2** (lean shader programs, the worker's own frame queue, the tour ring still while playing, timecode text nodes reused, the ruler rebuilt only on change, meters at most every 30 ms, playheads at ~15 Hz while playing, dissolve pairs at MIX_W, followers' rate changes at most every 250 ms; posters: `/media/poster?near=1` shows the nearest still on disk at once, 29-119 ms after a seek on Killington's building shots, was 0.7-1.7 s). Lead fix in the merge: the Program asks for the nearest still only while the clip has nothing that plays (a clip with a proxy or preview answers the exact frame at once), so a settled trim is one poster request again (test_ui_flow's nudge test).
 - **Loop state: wave 13 merged except CANVAS2, and the wave-14 queue** (judge/LOOP.md).
