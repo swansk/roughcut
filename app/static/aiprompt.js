@@ -66,6 +66,10 @@
     return g ? (GEN_WORDS[g[1].toLowerCase()] || 'Generated clip') : stem(c);
   }
   const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const named = (text) => {
+    try { if (typeof clipNamed === 'function') return clipNamed(text); } catch (e) { /* app.js not yet run */ }
+    return String(text == null ? '' : text);
+  };
   const secs = (t) => `${(Math.round(Math.max(0, Number(t) || 0) * 10) / 10).toFixed(1)}s`;
   const clock = (ms) => {
     const s = Math.max(0, Math.floor(ms / 1000));
@@ -436,9 +440,14 @@
       if (d.answered) {
         const a = d.answered;
         if (!a.accepted) return { line: 'Rejected — nothing changed', act: '', what: '' };
-        const line = a.accepted === a.total ? `${plural(a.accepted, 'change')} applied` : `${a.accepted} of ${a.total} applied`;
+        // a design request is never "applied" (verdict 12, punch 5): it is being designed,
+        // and its proposal waits in Designed Effects (Show opens it there)
+        const des = a.designs || 0, cuts = a.accepted - des;
+        const applied = !cuts ? '' : !des && a.accepted !== a.total ? `${a.accepted} of ${a.total} applied`
+          : `${plural(cuts, 'change')} applied`;
+        const line = [applied, des ? designLine(a) : ''].filter(Boolean).join(' · ');
         // how to undo it, while the accept is still the last thing on the undo stack
-        return { line, act: '', what: '', hint: a.top ? `${IS_MAC ? '⌘Z' : 'Ctrl+Z'} undoes` : '' };
+        return { line, act: des ? 'Show' : '', what: des ? 'fx' : '', hint: a.top ? `${IS_MAC ? '⌘Z' : 'Ctrl+Z'} undoes` : '' };
       }
       return { line: `${plural(n, 'change')} ready`, act: 'Review', what: 'review' };
     }
@@ -447,6 +456,15 @@
         : { line: 'Re-cutting the sequence', act: 'Show', what: 'plan' };
     }
     return { line: 'Answered', act: 'Show', what: 'answer' };
+  }
+
+  /* The designs an accept asked for, as they stand (fx.js tells, `rc:ai-designs`). */
+  function designLine(a) {
+    const n = a.designs, ready = a.ready || 0, failed = a.failed || 0;
+    const them = n === 1 ? 'it' : 'them';
+    if (failed && failed >= n) return `${n === 1 ? 'the effect' : `the ${n} effects`} could not be designed — see Designed Effects`;
+    if (ready + failed >= n) return `${plural(ready, 'effect')} designed${failed ? `, ${failed} failed` : ''} — review ${ready === 1 ? 'it' : 'them'} in Designed Effects`;
+    return `${plural(n, 'effect')} being designed — review ${them} in Designed Effects`;
   }
 
   function resultHtml(d) {
@@ -472,6 +490,7 @@
     else if (what === 'review') review(AI.result);
     else if (what === 'plan') showPlan(AI.result);
     else if (what === 'answer') showPop('answer');
+    else if (what === 'fx' && window.dock && typeof dock.open === 'function') dock.open('fx');
   }
 
   /* ------------------------------------------------------------ floating bits */
@@ -704,6 +723,9 @@
     if (gen !== AI.gen) return;
     stopTimers();
     AI.result = { ...d, job: AI.job, asked: AI.text, scope: AI.scope, planReady: d.plan_state === 'done' };
+    // the model's words say a shot as the editor does, never its id (verdict 12, punch 6):
+    // the line's hover, the answer and the review all read these (app.js `clipNamed`)
+    for (const k of ['summary', 'text']) if (typeof AI.result[k] === 'string') AI.result[k] = named(AI.result[k]);
     if (d.answer && Array.isArray(d.answer.accepted)) {            // reviewed already (another tab)
       const n = d.answer.accepted.length;
       AI.result.answered = { accepted: n, rejected: (d.answer.rejected || []).length,
@@ -724,7 +746,17 @@
     if (!d || !AI.result || AI.result.job !== d.job) return;
     const acc = (d.accepted || []).length, rej = (d.rejected || []).length;
     AI.result.answered = { accepted: acc, rejected: rej, total: acc + rej, label: d.label || '',
-      top: !!(acc && d.committed) };
+      top: !!(acc && d.committed), designs: Number(d.designs) || 0, ready: 0, failed: 0 };
+    paintStatus();
+  }
+
+  /* How the accept's designs stand (fx.js `request`): the line follows them. */
+  function onDesigns(e) {
+    const d = e && e.detail;
+    const a = AI.result && AI.result.answered;
+    if (!d || !a || !a.designs || d.label !== a.label) return;
+    a.ready = d.ready;
+    a.failed = d.failed;
     paintStatus();
   }
 
@@ -1218,6 +1250,7 @@
     window.addEventListener('resize', () => { closeFloating(); closePop(); });
     window.addEventListener('rcsource', paintScope);
     window.addEventListener('rc:assist-answered', onAnswered);
+    window.addEventListener('rc:ai-designs', onDesigns);
     if (window.tl && typeof tl.on === 'function') {
       tl.on('select', paintScope);
       tl.on('markers', paintScope);

@@ -31,13 +31,17 @@
  *   value typed in its row (effects.set vignette_*); look / match → app.js colourEdit, as
  *   the colour pane's selects and buttons; transition / fade → tl.addTransition /
  *   tl.addFade; design_effect → the Designed Effects tool on that shot, its Design
- *   pressed (its own proposal and review follow); export → the Export dialog, filled in
- *   and its Export pressed — only after Accept.
+ *   pressed (fx.js `request`; its own proposal and review follow); export → the Export
+ *   dialog, filled in and its Export pressed — only after Accept.
  *
  * One undo entry: `tl.batch(label, fn)` wraps them all (timeline.js); the tl.begin /
  * commit / cancel the human paths make while they run nest inside it and fold into its
  * one entry. Markers and In / Out are on the timeline's undo stack (timeline.js's
- * snapshot), so they ride the same entry: one accept is one undo step.
+ * snapshot), so they ride the same entry: one accept is one undo step. Design requests
+ * ride it too — or, when nothing else changed the cut, an entry of their own (tl.mark):
+ * its Ctrl+Z takes the requests back (Designed Effects discards them) and never reaches
+ * past them to an older edit (verdict 12, punch 5). They are never called "applied":
+ * the line says they are being designed, and where to review them.
  *
  * The review shows every op before it lands: the cut's ops as the ghost lane under V1
  * (tlLanes.showGhost, the server's simulation of the accepted ops on the board's cut,
@@ -62,6 +66,13 @@
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
   const MIN_LEN = 0.2;
+  /* The model's words, and any line that falls back to an id, say a shot as the editor
+   * does — "shot 22 (CLIP_05)", never "g5848fde311" (verdict 12, punch 6): app.js
+   * `clipNamed`, reached by name. */
+  const named = (text) => {
+    try { if (typeof clipNamed === 'function') return clipNamed(text); } catch (e) { /* app.js not yet run */ }
+    return String(text == null ? '' : text);
+  };
 
   /* app.js's top-level bindings share the global lexical scope; reached by name, guarded */
   /* eslint-disable no-undef */
@@ -146,6 +157,8 @@
     return {
       map,
       later: [],
+      designs: [],         // design_effect ops: {shot, note}, asked for once the cut has landed
+      asked: null,         // fx.request's handle for them (the accept's undo entry takes them back)
       id: (x) => (x == null ? x : map.get(String(x)) || String(x)),
       shot(x, what = 'id') {
         const t = TL();
@@ -343,7 +356,9 @@
     },
     design_effect(op, c) {
       const s = c.shot(op.id);
-      c.later.push(() => designEffect(s.id, op.note));
+      const k = c.designs.length;
+      c.designs.push({ shot: s.id, note: op.note });
+      c.later.push(() => c.asked.press(k));
     },
     export(op, c) {
       if (!app.segs().length) refuse('the sequence is empty');
@@ -359,7 +374,7 @@
     if (!t || typeof t.batch !== 'function') {
       return { applied: 0, refused: list.map((_, i) => ({ i, why: 'the timeline is not loaded' })), after: Promise.resolve([]) };
     }
-    const label = opts.label || labelFor(list);
+    const label = withDesigns(opts.label || labelFor(list), list);
     const ctx = makeCtx();
     const refused = [];
     let applied = 0;
@@ -377,6 +392,18 @@
     if (!out.ok) {
       return { applied: 0, refused: list.map((_, i) => ({ i, why: 'another edit is in progress — finish it first' })), after: Promise.resolve([]) };
     }
+    // Verdict 12, punch 5: the design requests are part of the accept's one undo entry —
+    // the batch's when the cut changed too, else one of their own (tl.mark: it puts nothing
+    // back on the board; Designed Effects follows its undo and takes the requests back,
+    // fx.js `request`), so the next Ctrl+Z never reaches past them to an older edit.
+    let committed = !!out.committed;
+    const designs = ctx.designs.length;
+    if (designs) {
+      if (!committed && typeof t.mark === 'function') committed = !!t.mark(label);
+      const fxm = window.fx;
+      ctx.asked = fxm && typeof fxm.request === 'function' ? fxm.request(label, ctx.designs, { undoable: committed })
+        : { press: async () => { throw new Error('Designed Effects is not loaded'); } };
+    }
     const later = ctx.later.slice();
     const done = (async () => {
       const out = [];
@@ -385,7 +412,19 @@
       }
       return out;
     })();
-    return { applied, refused, after: done, label, committed: !!out.committed };
+    return { applied, refused, after: done, label, committed, designs };
+  }
+
+  /* An accept with design requests always says so in its entry's name ("AI: In/Out +
+   * effect"), so the entry Designed Effects follows (by name) is never one without them —
+   * a name shortened to "+ 3 more" becomes "AI: 4 edits + 1 effect". */
+  function withDesigns(label, ops) {
+    const d = ops.filter((op) => op && op.op === 'design_effect').length;
+    if (!d) return label;
+    const groups = String(label).replace(/^AI: /, '').split(' + ');
+    if (groups.some((g) => /^(\d+ )?effects?$/.test(g))) return label;
+    const rest = ops.filter((op) => op && op.op).length - d;
+    return `AI: ${rest} edit${rest === 1 ? '' : 's'} + ${d} effect${d === 1 ? '' : 's'}`;
   }
 
   /* The undo entry's name for an op list (verdict 9, punch 3: "undo: AI: Shot 1 is only
@@ -448,26 +487,6 @@
       if (Date.now() > end) return null;
       await sleep(step);
     }
-  }
-
-  /* Designed Effects, as a person asks it: the shot selected, the tool open on it, the
-   * note typed, Design pressed (once it carries its price). */
-  async function designEffect(id, note) {
-    const t = TL();
-    t.select([id], { source: 'api' });
-    if (window.dock && dock.open) dock.open('fx');
-    const fx = window.fx;
-    if (!fx || !fx.state) throw new Error('Designed Effects is not loaded');
-    if (!await until(() => String(fx.state.shot) === String(id))) throw new Error('Designed Effects did not open on that shot');
-    fx.state.note = note;
-    fx.state.designOpen = true;
-    if (typeof fx.refresh === 'function') await fx.refresh();
-    const box = await until(() => $('#fxNote'));
-    if (box) { box.value = note; box.dispatchEvent(new Event('input', { bubbles: true })); }
-    const go = await until(() => { const b = $('#fxDesign'); return b && !b.disabled ? b : null; }, 15000);
-    if (!go) throw new Error('Design has no price yet — the note is in Designed Effects, press Design there');
-    go.click();
-    return { ok: true, op: 'design_effect' };
   }
 
   /* Export, as a person makes one: the dialog, its preset, its Frame Size / Frame Rate /
@@ -616,8 +635,8 @@
 
   function rowHtml(op, i) {
     const fam = FAMILY[op.op] || 'timeline';
-    const line = R.lines[i] || describe(op);
-    const block = R.blocked.get(i);
+    const line = named(R.lines[i] || describe(op));
+    const block = R.blocked.has(i) ? named(R.blocked.get(i)) : undefined;
     const on = !!R.verdict[i] && !block;
     const shows = CUT_OPS.has(op.op) ? 'shown as the ghost lane under V1 until you accept'
       : livePreview(op) ? 'shown on the Program monitor (◐ Before / After) until you accept'
@@ -716,18 +735,18 @@
     if (!['ops', 'plan', 'answer'].includes(res.kind)) {
       // a job that failed or was stopped: say so, never an empty review
       const why = res.status === 'cancelled' ? 'Stopped — nothing was changed.'
-        : `The AI could not answer: ${res.error || res.detail || 'no detail'}`;
+        : `The AI could not answer: ${named(res.error || res.detail || 'no detail')}`;
       el.innerHTML = `${head}<div class="air-answer air-failed">${esc(why)}</div>
         <div class="air-foot">${cost}<span class="air-grow"></span><button type="button" class="air-btn" data-act="close" data-testid="ai-review-close">Close</button></div>`;
       return;
     }
     if (res.kind === 'answer') {
-      el.innerHTML = `${head}<div class="air-answer">${esc(res.text || res.summary || '')}</div>
+      el.innerHTML = `${head}<div class="air-answer">${esc(named(res.text || res.summary || ''))}</div>
         <div class="air-foot">${cost}<span class="air-grow"></span><button type="button" class="air-btn" data-act="close" data-testid="ai-review-close">Close</button></div>`;
       return;
     }
     if (res.kind === 'plan') {
-      el.innerHTML = `${head}<div class="air-sum">${esc(res.summary || 'Re-cutting the sequence')}</div>
+      el.innerHTML = `${head}<div class="air-sum">${esc(named(res.summary || 'Re-cutting the sequence'))}</div>
         <div class="air-plan" data-testid="ai-plan"><span class="air-spin" aria-hidden="true"></span><span class="air-plan-what">${esc(R.planWhat || 'the proposal opens here when it is ready')}</span></div>
         <div class="air-foot">${cost}<span class="air-grow"></span><button type="button" class="air-btn" data-act="close" data-testid="ai-review-close">Close</button></div>`;
       return;
@@ -744,8 +763,8 @@
       looks ? `<button type="button" class="air-ab${R.after ? ' on' : ''}" data-act="ab" data-testid="ai-before-after" aria-pressed="${R.after}" title="the Program monitor shows the colour and Effect Controls changes (After) or the shot as it is (Before) — nothing is saved until you accept">◐ ${R.after ? 'After' : 'Before'}</button>` : '',
       exp ? `<span class="air-pv air-file" data-testid="ai-export-what" title="the Export dialog writes this file when you accept — never over an existing one (it becomes -2, -3 …)">writes ${esc(exportWords(exp))}</span>` : ''].filter(Boolean).join('');
     el.innerHTML = `${head}
-      ${res.summary ? `<div class="air-sum">${esc(res.summary)}</div>` : ''}
-      <ol class="air-ops">${R.ops.map(rowHtml).join('')}${refused.map((x) => `<li class="air-op refused" data-testid="ai-op-refused" data-op="${esc(x.op || '')}"><span class="air-fam" aria-hidden="true">⊘</span><span class="air-line">${esc(String(x.op || 'an op').replace('_', ' '))} not applied: ${esc(x.why)}</span></li>`).join('')}</ol>
+      ${res.summary ? `<div class="air-sum">${esc(named(res.summary))}</div>` : ''}
+      <ol class="air-ops">${R.ops.map(rowHtml).join('')}${refused.map((x) => `<li class="air-op refused" data-testid="ai-op-refused" data-op="${esc(x.op || '')}"><span class="air-fam" aria-hidden="true">⊘</span><span class="air-line">${esc(String(x.op || 'an op').replace('_', ' '))} not applied: ${esc(named(x.why))}</span></li>`).join('')}</ol>
       ${preview ? `<div class="air-preview">${preview}</div>` : ''}
       <div class="air-foot">
         <button type="button" class="air-btn" data-act="reject" data-testid="ai-reject-all" title="put everything back as it was — nothing is written (Esc)">Reject all</button>
@@ -1047,14 +1066,16 @@
   /* The review on the record, and said to the page: the AI prompt's line (aiprompt.js)
    * turns "3 changes ready · Review" into what landed ("3 of 4 applied · Undo",
    * "Rejected — nothing changed"), so the same answer is never reviewed — and applied —
-   * twice; `label` / `committed` name the undo entry the accept made. */
+   * twice; `label` / `committed` name the undo entry the accept made, `designs` how many
+   * of the accepted ops are design requests (never "applied": verdict 12, punch 5). */
   const answered = new Map();      // job → ops accepted, once its review is answered
   function answer(acc, rej, made = {}) {
     const job = R.res && R.res.job;
     if (!job) return;
     answered.set(job, acc.length);
     window.dispatchEvent(new CustomEvent('rc:assist-answered', {
-      detail: { job, accepted: acc, rejected: rej, label: made.label || '', committed: !!made.committed } }));
+      detail: { job, accepted: acc, rejected: rej, label: made.label || '', committed: !!made.committed,
+                designs: made.designs || 0 } }));
     fetch(`/api/assist/${encodeURIComponent(job)}/answer`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'omit',
       body: JSON.stringify({ accepted: acc, rejected: rej }),
@@ -1070,8 +1091,8 @@
     clearTx();
     // the entry is named for what the ops are, never the model's summary cut to fit (the
     // summary stays the review's own line)
-    const label = labelFor(idx.map((i) => R.ops[i]));
-    const out = applyOps(idx.map((i) => R.ops[i]), { label });
+    const out = applyOps(idx.map((i) => R.ops[i]), { label: labelFor(idx.map((i) => R.ops[i])) });
+    const label = out.label || '';                 // with its design requests named (withDesigns)
     const failed = new Set(out.refused.map((x) => idx[x.i]));
     const took = idx.filter((i) => !failed.has(i));
     // the accepted look shows through the block it made until its save lands (then the
@@ -1081,13 +1102,18 @@
       else if (grade.previewing) grade.preview(null);
     }
     const rej = R.ops.map((_, i) => i).filter((i) => !took.includes(i));
-    answer(took, rej, { label, committed: out.committed });
+    answer(took, rej, { label, committed: out.committed, designs: out.designs || 0 });
     const n = took.length;
+    // a design request is not an applied edit (verdict 12, punch 5: "✓ 2 changes applied"
+    // though nothing was): it is being designed, and its proposal waits in Designed Effects
+    const d = out.designs || 0, cuts = n - d;
+    const designing = d ? `${d === 1 ? 'an effect' : `${d} effects`} being designed — review ${d === 1 ? 'it' : 'them'} in Designed Effects` : '';
     const said = out.refused.length
-      ? `applied ${n} of ${idx.length} — ${out.refused[0].why}`
-      : `applied ${n === 1 ? 'the edit' : `${n} edits`} — ${app.undoKey()} undoes ${n === 1 ? 'it' : 'them'}`;
+      ? `${[cuts ? `applied ${cuts} of ${idx.length}` : '', designing].filter(Boolean).join(' · ') || 'nothing applied'} — ${named(out.refused[0].why)}`
+      : `${[cuts ? `applied ${cuts === 1 ? 'the edit' : `${cuts} edits`}` : '', designing].filter(Boolean).join(' · ')}`
+        + (out.committed ? ` — ${app.undoKey()} undoes ${n === 1 ? 'it' : 'them'}` : '');
     closeQuiet();
-    app.toast(said, out.refused.length ? 6000 : 3000);
+    app.toast(said, out.refused.length ? 6000 : d ? 5000 : 3000);
     return out;
   }
 

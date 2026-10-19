@@ -435,3 +435,8 @@ next judge runs, and the next judge rules it honest or lenient.
   rAF frame clock and the worker's own clock only (the page-callback number stays in the record). The page clock
   overstates holds by up to ~12 ms (verdict 11) but was the stricter number: verdict 12's after-suite run would have
   failed on it at 68.4 ms. That part of the change is more lenient, and the previous entry should have said so.
+
+- 2026-10-19 (wave 16, lane AIHONEST; logged by the lead): **Ctrl+Shift+Z after undoing an AI design request asks the
+  designer again**, one design call per design: free on `claude_cli`, priced like Design on `anthropic_api`. A redo that
+  can spend is new; section S's rule (no price reads as spending on the subscription backend; agents never pause for a
+  shown price) is unchanged, and the redo's toast says it re-asks. For the judge to rule on.

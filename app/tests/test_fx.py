@@ -621,6 +621,28 @@ def test_revise_keeps_id_and_events_unless_the_note_moves_them(scripted):
     assert [ev["t"] for ev in fewer["events"]] == [1.5] and len(fewer["history"]) == 3
 
 
+def test_the_card_s_words_name_shots_never_by_id(scripted):
+    """Verdict 12, punch 6: a KILLINGTON title's card said "the continuation into shot
+    g0e2637544b needs its own matching effect". The design and revise prompts ask for
+    "shot N"; whatever the model writes, the name, why, limits and labels say each shot as
+    "shot N (CLIP)" against the cut — and the effect's own `shot` keeps its id."""
+    a, b = "g0000000001", "g5848fde311"
+    segs = [{**SEG, "id": a}, {**SEGS[1], "id": b}]
+    scripted({**DESIGNED, "name": f"title on {a}",
+              "why": f"a title over shot {a}; the continuation into shot {b} needs its own",
+              "limits": f"cannot reach into the next shot ({b})"})
+    e = fx.design("a title", segs[0], CLIP, SIDECAR, segments=segs, clips=CLIPS)
+    assert e["shot"] == a
+    assert e["name"] == "title on shot 1 (CLIP_A)"
+    assert e["why"] == "a title over shot 1 (CLIP_A); the continuation into shot 2 (CLIP_B) needs its own"
+    assert e["limits"] == "cannot reach into the next shot (shot 2)"
+    _, prompt = fx.build_design_prompt("a title", segs[0], CLIP, peaks=[], cut=segs)
+    assert "never its id" in prompt
+    assert "never its id" in fx.build_revise_prompt(e, "bigger")[1]
+    scripted({**DESIGNED, "why": f"bigger, still on {a}"})
+    assert fx.revise(e, "bigger", segs, CLIPS)["why"] == "bigger, still on shot 1 (CLIP_A)"
+
+
 # ---------------------------------------------------------------- the title slide's lessons (I12.9)
 
 def test_text_lines_reveal_and_the_shapes_clock(tmp_path):

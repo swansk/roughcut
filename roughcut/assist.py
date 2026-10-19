@@ -28,10 +28,11 @@ a model call; an assist is one short call, so it is not asked for a bar.)
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from . import actions, config
-from .firstpass import cost_words
+from .firstpass import clip_name, cost_words
 from .inference import complete
 
 ROLE = config.ROLE_SKELETON            # a judgement about the footage, as the Ask is
@@ -104,6 +105,67 @@ def _clip_name(clip: str) -> str:
     return str(clip)
 
 
+# ---------------------------------------------------------------- shots in words
+
+# A shot's id is the server's (`g` + ten hex digits, server.py `_mint`): the model needs it
+# for the ops, and the editor never sees it (verdict 12, punch 6: "The last shot
+# (g5848fde311) then moves to the start of the film"). The board's `clipNamed` (app.js)
+# does the same on whatever model text reaches the page.
+SHOT_ID = re.compile(r"\((g[0-9a-f]{10})\)|\b([Ss]hot\s+)?(g[0-9a-f]{10})\b")
+
+
+def shot_label(i: int, seg: dict) -> str:
+    """A shot as the editor reads it: its row in the sequence and its clip — "shot 4
+    (CLIP_02)", a generated clip by its Premiere name ("shot 9 (Black Video)")."""
+    return f"shot {i + 1} ({clip_name(seg.get('clip'))})"
+
+
+def name_shots(text: Any, segments: list[dict] | None) -> Any:
+    """`text` with every shot id in it said as the editor says the shot: "g5848fde311" →
+    "shot 22 (CLIP_05)", "Shot g5848fde311" → "Shot 22 (CLIP_05)" (the capital kept),
+    "(g5848fde311)" → "(shot 22)"; an id that is not in `segments` → "a shot" / "that
+    shot". Anything that is not a string comes back as it was."""
+    if not isinstance(text, str) or "g" not in text:
+        return text
+    index = {str(s.get("id")): (i, s) for i, s in enumerate(segments or []) if s.get("id")}
+
+    def rep(m: re.Match) -> str:
+        if m.group(1):                                   # "(g…)": the number alone
+            hit = index.get(m.group(1))
+            return f"(shot {hit[0] + 1})" if hit else "(another shot)"
+        pre, sid = m.group(2) or "", m.group(3)
+        # a capital where the model wrote one, or where a sentence starts
+        cap = pre[:1] == "S" or (not pre and re.search(r"(^|[.!?]\s+)$", text[:m.start()]) is not None)
+        hit = index.get(sid)
+        if hit is None:
+            word = "that shot" if pre else "a shot"
+        else:
+            # the clip follows unless the model already named it: "shot g… (CLIP_05)"
+            named = text[m.end():m.end() + 2] == " ("
+            word = f"shot {hit[0] + 1}" if named else shot_label(*hit)
+        return word[:1].upper() + word[1:] if cap else word
+
+    return SHOT_ID.sub(rep, text)
+
+
+def _named(out: dict, segments: list[dict]) -> dict:
+    """An answer's words — its summary, its text, the re-cut's brief, the lines, the
+    refusals and a design's note — with the shots named as the editor names them
+    (`name_shots`). The ops keep their ids: they are the tools' arguments, never shown."""
+    for k in ("summary", "text", "note"):
+        if k in out:
+            out[k] = name_shots(out[k], segments)
+    if isinstance(out.get("lines"), list):
+        out["lines"] = [name_shots(x, segments) for x in out["lines"]]
+    for r in out.get("refused") or []:
+        if isinstance(r, dict) and "why" in r:
+            r["why"] = name_shots(r["why"], segments)
+    for op in out.get("ops") or []:
+        if isinstance(op, dict) and op.get("op") == "design_effect" and "note" in op:
+            op["note"] = name_shots(op["note"], segments)
+    return out
+
+
 def sequence_block(state: dict) -> str:
     fps = float(state.get("fps") or 24.0)
     tc = lambda t: actions.timecode(t, fps)  # noqa: E731
@@ -165,7 +227,7 @@ def scope_block(scope: dict | None, state: dict) -> str:
     out: list[str] = []
     if kind == "selection":
         ids = [str(x) for x in (sc.get("ids") or [])]
-        named = [f"shot {index[i] + 1} ({i})" for i in ids if i in index]
+        named = [f"{shot_label(index[i], segs[index[i]])} [id {i}]" for i in ids if i in index]
         out.append("The selected shots: " + (", ".join(named) if named else "(none of them is in the cut any more)"))
     elif kind == "range":
         a, b = sc.get("in"), sc.get("out")
@@ -180,7 +242,7 @@ def scope_block(scope: dict | None, state: dict) -> str:
             for i, s in enumerate(segs):
                 d = actions.dur(s)
                 if t < b and t + d > a:
-                    inside.append(f"shot {i + 1} ({s.get('id')})")
+                    inside.append(f"{shot_label(i, s)} [id {s.get('id')}]")
                 t += d
             out.append(f"The range {a:.2f}–{b:.2f} s ({tc(a)}–{tc(b)}) of the sequence: "
                        + (", ".join(inside) if inside else "no shots"))
@@ -205,7 +267,7 @@ def scope_block(scope: dict | None, state: dict) -> str:
         for i, s in enumerate(segs):
             d = actions.dur(s)
             if t <= ph < t + d:
-                where = f" (shot {i + 1}, {(ph - t):.2f} s in)"
+                where = f" ({shot_label(i, s)}, {(ph - t):.2f} s in)"
                 break
             t += d
         out.append(f"The playhead is at {ph:.2f} s ({tc(ph)}){where}.")
@@ -296,6 +358,10 @@ JSON with `kind`:
   film, "make a teaser", "cut it to the music") — something better done by re-cutting than
   by a handful of edits. `note` is the brief for the re-cut, in the editor's terms.
 - "answer": the request is a question; `text` answers it from what is listed above. No ops.
+
+The editor reads `summary`, `text`, `note` and every design_effect `note`: there a shot is
+"shot N (CLIP)" — its row in the sequence and its clip without the extension, "shot 4
+(CLIP_02)" — never its id. Ids go only in the ops' id fields.
 """
 
 
@@ -364,4 +430,5 @@ def run(text: str, scope: dict | None, state: dict, clips: dict) -> dict:
         out["note"] = got.get("note") or text
     else:
         out["text"] = got["text"]
-    return out
+    # the editor's words name shots as the editor does, whatever the model wrote
+    return _named(out, state.get("segments") or [])

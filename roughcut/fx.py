@@ -1453,6 +1453,7 @@ def build_design_prompt(note: str, seg: dict, clip: dict, *, peaks: list[dict],
                         "one event per mark at those x, y — design the look and the sound, do not move them."]
     lines += ["", f"Every event's t must lie inside the shot: from {_secs(t0)} (its first frame) to before "
                   f"{_secs(t1)}. Answer with one JSON effect object only."]
+    lines += ["", SHOT_WORDS]
     return _system_design(), "\n".join(lines)
 
 
@@ -1489,8 +1490,32 @@ def build_revise_prompt(effect: dict, note: str) -> tuple[str, str]:
               + f"\n\nTHE NOTE: {note.strip()}\n\n"
               "Return the whole effect again with the note applied — the same shape (name, why, "
               "events, overlay, sound). Keep every event's t, x and y unless the note asks to "
-              "move, add or drop events. Answer with one JSON object only.")
+              "move, add or drop events. Answer with one JSON object only.\n\n" + SHOT_WORDS)
     return _system_design(), prompt
+
+
+# The card's words are read by the editor (verdict 12, punch 6: a KILLINGTON title's card
+# said "the continuation into shot g0e2637544b needs its own matching effect"): the model
+# is asked to name a shot by its row, and whatever it writes is said that way regardless
+# (`assist.name_shots`; the board's `clipNamed` does the same on the page).
+SHOT_WORDS = ("In name, why, limits and every event label, a shot is \"shot N\" — its place in the "
+              "cut, as THE CUT numbers it — never its id.")
+SHOT_TEXT = ("name", "why", "limits")
+
+
+def name_shots(effect: dict, segments: list[dict] | None) -> dict:
+    """The effect's words — its name, why, limits and event labels — with every shot id
+    said as "shot N (CLIP)" against `segments` (the cut the design was made on). The
+    `shot` field and the edits keep their ids."""
+    from roughcut.assist import name_shots as words
+    for k in SHOT_TEXT:
+        if isinstance(effect.get(k), str):
+            effect[k] = words(effect[k], segments)
+    effect["name"] = str(effect.get("name") or "effect")[:40]
+    for ev in effect.get("events") or []:
+        if isinstance(ev, dict) and isinstance(ev.get("label"), str):
+            ev["label"] = words(ev["label"], segments)
+    return effect
 
 
 def _now() -> str:
@@ -1631,6 +1656,7 @@ def design(note: str, seg: dict, clip: dict, sidecar: dict | None, *,
                 e.pop("_drop", None)
             effect["events"] = survivors
             effect = validate_effect(effect, segments or [seg], clips, keep_meta=False)
+    name_shots(effect, segments or [seg])
     created = _now()
     effect["created"] = created
     effect["history"] = [{"note": note, "at": created}]
@@ -1656,7 +1682,7 @@ def revise(effect: dict, note: str, segments: list[dict], clips: dict | None = N
         new["events"] = answer["events"]
     new["status"] = "proposed"
     new["note"] = note
-    new = validate_effect(new, segments, clips)
+    new = name_shots(validate_effect(new, segments, clips), segments)
     new["history"] = list(effect.get("history") or []) + [{"note": note, "at": _now()}]
     return new
 

@@ -35,7 +35,7 @@ def test_the_prompt_says_a_vignette_is_lumetris_vignette(board):
     # and Sharpen is in the bin's kinds, with the words that ask for it
     assert "sharpen (Blur & Sharpen › Sharpen: amount 0..500)" in p
     assert "sharper / crisper → effect sharpen" in p
-    assert f"The selected shots: shot 1 ({a})" in p
+    assert f"The selected shots: shot 1 (CLIP_A) [id {a}]" in p
 
 
 def test_a_vignette_answer_is_one_lumetri_op_reviewed_in_one_line(board):

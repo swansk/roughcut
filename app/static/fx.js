@@ -107,6 +107,8 @@
     sounded: 0,              // how many times a sound was started (tests read it)
     prevT: null,             // the live clip time at the last frame
     prevV: null,             // the video element it belonged to
+    designs: 0,              // Design presses that reached the server (or failed there)
+    lastDesign: null,        // {job, shot, note} | {job: null, why}: the last press's answer
   };
 
   /* ------------------------------------------------------------ the api */
@@ -125,7 +127,8 @@
   async function refresh() {
     let d;
     try { d = await api('GET', '/api/fx'); } catch (e) { return; }
-    S.effects = Array.isArray(d.effects) ? d.effects : [];
+    // a design whose AI request was taken back (Ctrl+Z) is never drawn while its discard lands
+    S.effects = Array.isArray(d.effects) ? d.effects.filter((e) => !asks.gone.has(e.id)) : [];
     if (S.sel && !byId(S.sel.id)) S.sel = null;     // the selected hit may be gone with its effect
     // The server checks every design, revise and nudge by itself (INTAKE M16 I16.5); a
     // proposal made before it did is checked once here — free, never a model call.
@@ -415,10 +418,12 @@
     if (!ev) return;
     if (ev.kind === 'commit') {
       followUndo.undone.length = 0;
+      asks.undone.length = 0;
       const x = followUndo.expect;
       if (x && ev.label === x.label) { followUndo.done.push(x); followUndo.expect = null; }
       return;
     }
+    if (ev.kind === 'undo' || ev.kind === 'redo') followAsks(ev);    // an AI accept's design requests
     if ((ev.kind !== 'undo' && ev.kind !== 'redo') || !/^effect: /.test(String(ev.label || ''))) return;
     const from = ev.kind === 'undo' ? followUndo.done : followUndo.undone;
     let k = from.length - 1;
@@ -450,15 +455,226 @@
     if (S.reference) body.reference = S.reference;
     const w = windowFor(shot);
     if (w) body.window = [w.t0, w.t1];
+    let d;
     try {
-      await api('POST', '/api/fx/design', body);
+      d = await api('POST', '/api/fx/design', body);
     } catch (err) {
+      S.designs += 1;
+      S.lastDesign = { job: null, why: err.message };
       say(err.message);
-      return;
+      return null;
     }
+    // the job this press started, for whoever pressed it (an AI request follows its own)
+    S.designs += 1;
+    S.lastDesign = { job: (d && d.job) || null, shot, note };
     S.reference = null;            // used
     paint(true);
     await pollJobs();
+    return S.lastDesign.job;
+  }
+
+  /* ------------------------------------------------------------ the AI's design requests */
+  /* Verdict 12, punch 5: "Accept read '✓ 2 changes applied' though nothing was applied. The
+   * next Ctrl+Z silently undid the In/Out + marker before it." An AI answer's design_effect
+   * ops, accepted, ask this tool for designs as a person does — the shot selected, the note
+   * typed, Design pressed (once it carries its price), one design at a time as the button
+   * allows — and the accept is ONE undo entry with the requests in it: the batch's when the
+   * answer changed the cut too, else one of their own (tl.mark, actions.js `applyOps`).
+   * Ctrl+Z on that entry takes the request back: a design not asked for yet is not asked,
+   * one still being designed is discarded the moment it lands (its card never shows), one
+   * already a proposal is discarded now — and the toast says so. Ctrl+Shift+Z keeps one
+   * still being designed and asks again for each it discarded (one design call each, at
+   * the price on Design). Entries are found by label, newest first, as followUndo finds an
+   * accept's; a new edit empties the redo side. `rc:ai-designs` tells the AI prompt's line
+   * how they stand. */
+  const asks = { done: [], undone: [], byJob: new Map(), gone: new Set() };
+  const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  async function until(fn, ms = 8000, step = 60) {
+    const end = Date.now() + ms;
+    for (;;) {
+      let v = null;
+      try { v = fn(); } catch (e) { v = null; }
+      if (v) return v;
+      if (Date.now() > end) return null;
+      await sleep(step);
+    }
+  }
+
+  function request(label, items, opts = {}) {
+    const h = { label: String(label || ''), withdrawn: false,
+                items: (items || []).map((x) => ({ shot: String(x.shot), note: String(x.note || ''),
+                                                   job: null, fx: null, state: 'queued', why: '' })) };
+    // followed only when the accept made its entry (an entry held open refuses tl.mark):
+    // an unfollowed request must never be taken for another entry of the same name
+    if (opts.undoable !== false) {
+      asks.done.push(h);
+      if (asks.done.length > 100) asks.done.shift();
+    }
+    return { label: h.label, press: (k) => pressOne(h, h.items[k]), state: () => askState(h) };
+  }
+
+  function askState(h) {
+    const n = (s) => h.items.filter((it) => s.includes(it.state)).length;
+    return { label: h.label, total: h.items.length, designing: n(['queued', 'asking', 'running']),
+             ready: n(['landed']), failed: n(['failed']), discarded: n(['skipped', 'discarded']),
+             withdrawn: h.withdrawn };
+  }
+  function tellAsks(h) {
+    window.dispatchEvent(new CustomEvent('rc:ai-designs', { detail: askState(h) }));
+  }
+
+  async function pressOne(h, it) {
+    if (!it) return { ok: false, op: 'design_effect', why: 'no such design' };
+    if (h.withdrawn) { it.state = 'skipped'; tellAsks(h); return { ok: false, op: 'design_effect', why: 'undone before it was asked' }; }
+    it.state = 'asking';
+    let job;
+    try {
+      job = await askDesigner(h, it);
+    } catch (err) {
+      it.state = 'failed';
+      it.why = err.message;
+      tellAsks(h);
+      throw err;
+    }
+    if (!job) {
+      if (!h.withdrawn) return pressOne(h, it);        // undone and redone while it waited
+      it.state = 'skipped';
+      tellAsks(h);
+      return { ok: false, op: 'design_effect', why: 'undone before it was asked' };
+    }
+    it.job = job;
+    it.state = 'running';
+    asks.byJob.set(job, { h, it });
+    tellAsks(h);
+    return { ok: true, op: 'design_effect', job };
+  }
+
+  /* Designed Effects, as a person asks it: the shot selected, the tool open on it, the
+   * note typed, Design pressed once it carries its price. Null when the request was taken
+   * back before Design was pressed. */
+  async function askDesigner(h, it) {
+    const t = TL();
+    if (t && typeof t.select === 'function') t.select([it.shot], { source: 'api' });
+    if (window.dock && typeof dock.open === 'function') dock.open('fx');
+    if (!await until(() => String(S.shot) === it.shot)) throw new Error('Designed Effects did not open on that shot');
+    // one design at a time, as the button allows: the one before lands first
+    const before = () => [...asks.byJob.entries()].some(([id, x]) => x.it.state === 'running' && x.it.job === id)
+      || (S.busy && S.busy.fx_kind === 'design');
+    await until(() => h.withdrawn || !before(), 600000, 250);
+    if (h.withdrawn) return null;
+    if (String(S.shot) !== it.shot) {
+      if (t && typeof t.select === 'function') t.select([it.shot], { source: 'api' });
+      if (!await until(() => String(S.shot) === it.shot)) throw new Error('Designed Effects did not open on that shot');
+    }
+    S.note = it.note;
+    S.designOpen = true;
+    await refresh();
+    const box = await until(() => $('#fxNote'));
+    if (box) { box.value = it.note; box.dispatchEvent(new Event('input', { bubbles: true })); }
+    const go = await until(() => {
+      if (h.withdrawn) return 'back';
+      const b = $('#fxDesign');
+      return b && !b.disabled ? b : null;
+    }, 15000);
+    if (go === 'back') return null;
+    if (!go) throw new Error('Design has no price yet — the note is in Designed Effects, press Design there');
+    const n = S.designs;
+    go.click();
+    const got = await until(() => (S.designs > n ? S.lastDesign : null), 20000);
+    if (!got || !got.job) throw new Error(got && got.why ? got.why : 'the design did not start');
+    return got.job;
+  }
+
+  /* A requested design's job finished (pollJobs): a proposal now, or a failure — and,
+   * when its request was taken back meanwhile, discarded before its card is drawn. */
+  function landed(a, j) {
+    const { h, it } = a;
+    if (it.job !== j.id) { asks.byJob.delete(j.id); return; }   // an earlier ask of this design
+    if (it.state !== 'running') return;
+    if (j.state === 'failed') {
+      it.state = 'failed';
+      it.why = j.detail || 'the design failed';
+    } else {
+      it.fx = j.result && j.result.id ? String(j.result.id) : null;
+      it.state = 'landed';
+      if (h.withdrawn) {
+        if (it.fx) asks.gone.add(it.fx);
+        discardOne(it).then(() => refresh());
+      }
+    }
+    tellAsks(h);
+  }
+  // a design whose request was taken back: its landing is not announced (the undo said it)
+  const quietJob = (id) => { const a = asks.byJob.get(id); return !!(a && (a.h.withdrawn || a.it.job !== id)); };
+
+  async function discardOne(it) {
+    if (!it.fx) { it.state = 'discarded'; return true; }
+    asks.gone.add(it.fx);
+    try {
+      await api('POST', '/api/fx/discard', { id: it.fx });
+      it.state = 'discarded';
+      return true;
+    } catch (err) {
+      asks.gone.delete(it.fx);                  // accepted meanwhile: it stays, and says so
+      it.why = err.message;
+      return false;
+    }
+  }
+
+  /* Ctrl+Z on the accept: the request taken back, said after the timeline's own
+   * "undone: …" (which it would otherwise replace). */
+  function withdraw(h) {
+    h.withdrawn = true;
+    const live = h.items.filter((it) => it.state !== 'failed');
+    const now = [];
+    for (const it of h.items) {
+      if (it.state === 'queued') it.state = 'skipped';
+      else if (it.state === 'landed') now.push(discardOne(it));
+      // asking / running: not asked, or discarded the moment it lands (`landed`)
+    }
+    const n = live.length;
+    setTimeout(() => say(n ? `undone: ${h.label} — ${n === 1 ? 'the design is' : `the ${n} designs are`} discarded`
+      : `undone: ${h.label}`, 5000), 0);
+    Promise.all(now).then((oks) => {
+      const kept = oks.filter((ok) => !ok).length;
+      if (kept) say(`${plural(kept, 'design')} could not be discarded (accepted already) — remove ${kept === 1 ? 'it' : 'them'} in Designed Effects`, 6000);
+      if (now.length) refresh();
+      tellAsks(h);
+    });
+    tellAsks(h);
+  }
+
+  /* Ctrl+Shift+Z on the accept: the request back — one still being designed stays, each
+   * one discarded is asked for again. */
+  function reinstate(h) {
+    h.withdrawn = false;
+    let n = 0;
+    for (const it of h.items) {
+      if (it.state === 'failed') continue;
+      n += 1;
+      if (it.state === 'skipped' || it.state === 'discarded') { it.state = 'queued'; it.job = null; it.fx = null; }
+      else if (it.state === 'landed' && it.fx) asks.gone.delete(it.fx);   // its discard failed: still there
+    }
+    setTimeout(() => say(`redone: ${h.label} — ${plural(n, 'effect')} being designed — review ${n === 1 ? 'it' : 'them'} in Designed Effects`, 5000), 0);
+    tellAsks(h);
+    (async () => {
+      for (const it of h.items) {
+        if (it.state !== 'queued') continue;
+        try { await pressOne(h, it); } catch (err) { say(err.message, 5000); }
+      }
+    })();
+  }
+
+  function followAsks(ev) {
+    const back = ev.kind === 'undo';
+    const from = back ? asks.done : asks.undone;
+    let k = from.length - 1;
+    while (k >= 0 && from[k].label !== ev.label) k -= 1;
+    if (k < 0) return;
+    const [h] = from.splice(k, 1);
+    (back ? asks.undone : asks.done).push(h);
+    if (back) withdraw(h); else reinstate(h);
   }
 
   /* ------------------------------------------------------------ jobs */
@@ -481,17 +697,30 @@
       if (check && j.state === 'running' && j.fx_id) checking.add(j.fx_id);
       if (j.state === 'running' && !running && !check) running = j;
       const finished = j.state === 'done' || j.state === 'failed';
+      const asked = finished && asks.byJob.get(j.id);
+      if (asked) landed(asked, j);                   // an AI request's design came back
       if (finished && before !== j.state) {
         changed = true;
         // a design that came back: "+ design another effect" starts from an empty note
         if (j.fx_kind === 'design' && j.state === 'done' && S.ticks) S.note = '';
-        if (S.ticks && !(check && j.state === 'done')) {     // a check's answer is on its card
+        // a check's answer is on its card; a design taken back (Ctrl+Z) is said by the undo
+        if (S.ticks && !(check && j.state === 'done') && !quietJob(j.id)) {
           say(j.state === 'done' ? `${j.label}: ${j.detail || 'done'}`
             : `${j.label} failed — ${j.detail || 'no detail'}`, 6000);
         }
       }
     }
     for (const id of [...S.jobs.keys()]) if (!seen.has(id)) S.jobs.delete(id);
+    // a requested design whose row left the list before this board saw it end (a hidden
+    // tab polls slowly; a finished job lingers 12 s): its own record says how it ended
+    for (const [id, a] of asks.byJob) {
+      if (a.it.state !== 'running' || a.it.job !== id) continue;
+      if (seen.has(id)) { a.seen = true; continue; }
+      if (!a.seen && (a.misses = (a.misses || 0) + 1) < 5) continue;
+      fetch(`/api/job/${encodeURIComponent(id)}`).then((r) => (r.ok ? r.json() : { state: 'failed', detail: 'the design job is gone' }))
+        .then((j) => { if (j && (j.state === 'done' || j.state === 'failed')) { landed(a, j); refresh(); } })
+        .catch(() => { /* asked again next poll */ });
+    }
     S.ticks += 1;
     const key = (j) => (j ? `${j.id}:${j.detail || ''}:${j.milestone || ''}` : '');
     const was = key(S.busy);
@@ -565,11 +794,18 @@
       `<li class="fxev${i === sel ? ' sel' : ''}" data-i="${i}" title="x ${Number(ev.x).toFixed(2)} y ${Number(ev.y).toFixed(2)} · click: park the monitor here, then click the picture to move it">`
       + `<button class="nudge" data-d="-1" title="one frame earlier">◀</button>`
       + `<span class="t">${filmT(e, ev.t)}</span>`
-      + (ev.label ? `<span class="hint">${esc(ev.label)}</span>` : '')
+      + (ev.label ? `<span class="hint">${esc(named(ev.label))}</span>` : '')
       + `<button class="nudge" data-d="1" title="one frame later">▶</button>`
       + `<button class="nudge del" data-act="delevent" title="not one — take it out">✕</button></li>`).join('');
     return `<ul class="fxevents">${rows}</ul>`
       + (sel >= 0 ? `<div class="fxpick hint">click the picture to move moment ${sel + 1}</div>` : '');
+  }
+
+  /* The model's words on a card say a shot as the editor does (verdict 12, punch 6: "the
+   * continuation into shot g0e2637544b…"): app.js `clipNamed`, reached by name. */
+  function named(text) {
+    try { if (typeof clipNamed === 'function') return clipNamed(text); } catch (e) { /* app.js not yet run */ }
+    return String(text == null ? '' : text);
   }
 
   /* Behind "why? ▸": Karl's note, what the machine made of it, what it could not do, the
@@ -582,9 +818,9 @@
     if (e.proof_url) extras.push(`<a href="${esc(e.proof_url)}" target="_blank" rel="noopener">proof</a>`);
     if (e.strip_url) extras.push(`<a href="${esc(e.strip_url)}" target="_blank" rel="noopener">strip</a>`);
     return `<div class="fxwhybox">`
-      + (e.note ? `<div class="fxnote">“${esc(e.note)}”</div>` : '')
-      + (e.says && e.why ? `<div class="hint">${esc(e.why)}</div>` : '')
-      + (e.limits && e.status !== 'proposed' ? `<div class="hint">couldn't: ${esc(e.limits)}</div>` : '')
+      + (e.note ? `<div class="fxnote">“${esc(named(e.note))}”</div>` : '')
+      + (e.says && e.why ? `<div class="hint">${esc(named(e.why))}</div>` : '')
+      + (e.limits && e.status !== 'proposed' ? `<div class="hint">couldn't: ${esc(named(e.limits))}</div>` : '')
       + (v && Array.isArray(v.checks) && v.checks.length ? `<ul class="fxchecks">${v.checks.map(checkRow).join('')}</ul>` : '')
       + (extras.length ? `<div class="fxextras hint">${extras.join(' · ')}</div>` : '')
       + (e.ref_url ? `<img class="fxrefimg" src="${esc(e.ref_url)}" alt="the reference drawn on the frame" title="the frame you drew on — the marks are the anchors">` : '')
@@ -600,7 +836,7 @@
     const proposed = e.status === 'proposed';
     const removed = e.status === 'removed';
     const prev = Array.isArray(e.previous) ? e.previous.length : 0;
-    const says = e.says || e.why || '';
+    const says = named(e.says || e.why || '');
     const moments = hasMoments(e) && !removed && (proposed || S.momentsOpen.has(e.id));
     const why = `<button class="fxlink" data-act="why">why? ${S.whyOpen.has(e.id) ? '▾' : '▸'}</button>`;
     const change = `<button data-act="iterate" title="tell the model what to change — the effect comes back as a proposal">`
@@ -626,12 +862,12 @@
         + `<button data-act="revise"${revisePriced() ? '' : ' disabled'} title="one model call — the effect comes back as a proposal">Go${revisePriced() ? ` · ${rcCost.tag(S.revisePrice.usd, S.revisePrice)}` : S.revisePriceFailed ? ' · price unavailable' : ''}</button></div>`
       : '';
     return `<div class="fxcard ${esc(e.status)}" data-id="${esc(e.id)}">`
-      + `<div class="fxhead"><b class="fxname">${esc(e.name || 'effect')}</b>${chip(e)}</div>`
+      + `<div class="fxhead"><b class="fxname">${esc(named(e.name || 'effect'))}</b>${chip(e)}</div>`
       + (says ? `<div class="fxsays"${proposed ? '' : ` title="${esc(says)}"`}>${esc(says)}</div>` : '')
       // what the model says it did not do, on the waiting card itself: "✓ checked" is the
       // free check of what was made, not of what was asked, and this shortfall is what
       // Accept vs Change turns on — behind why? ▸ it read as checked and complete
-      + (proposed && e.limits ? `<div class="fxlimits">didn't: ${esc(e.limits)}</div>` : '')
+      + (proposed && e.limits ? `<div class="fxlimits">didn't: ${esc(named(e.limits))}</div>` : '')
       + checkLine(e)
       + (moments ? momentsHtml(e) : '')
       + btns + iter
@@ -1755,6 +1991,9 @@
     audio: (id) => { const a = S.audio.get(id); return a && a.el ? a.el : null; },
     sketch: { start: startSketch, use: useSketch, cancel: cancelSketch, undo: undoStroke },
     frameXY,
+    // an AI accept's design_effect ops (actions.js): `request(label, [{shot, note}], {undoable})`
+    // → {press(k), state()}; the accept's undo entry `label` takes them back (verdict 12, punch 5)
+    request,
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mount);
   else mount();

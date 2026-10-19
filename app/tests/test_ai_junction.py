@@ -324,7 +324,7 @@ def test_a_selection_scopes_the_ask_and_one_accept_of_two(browser, live_server, 
         pg.keyboard.type("slow it down and darken it")
         pg.keyboard.press("Enter")
         pg.locator("[data-testid=ai-review] [data-testid=ai-op-row]").first.wait_for(timeout=15000)
-        assert "The selected shots: shot 2 (shot-b)" in MODEL.asks[0]
+        assert "The selected shots: shot 2 (CLIP_B) [id shot-b]" in MODEL.asks[0]
         pg.locator("[data-testid=ai-op-row][data-op-index='1'] [data-testid=ai-op-reject]").click()
         assert pg.locator("[data-testid=ai-accept-all]").inner_text().strip() == "Accept 1 of 2"
         pg.locator("[data-testid=ai-accept-all]").click()
