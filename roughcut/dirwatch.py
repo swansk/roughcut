@@ -26,6 +26,7 @@ import ctypes
 import ctypes.util
 import fnmatch
 import os
+import re
 import struct
 import threading
 from pathlib import Path
@@ -51,6 +52,20 @@ EVENT = struct.Struct("iIII")
 IGNORE = ("*.part", "*.part.*", "*.tmp", "*.tmp.*", ".*")
 
 
+def _matcher(pats) -> "re.Pattern[str] | None":
+    """One compiled regex for a set of fnmatch patterns (case-sensitive, as fnmatchcase),
+    made when a watch is armed: `changes` runs on the event loop and matches each event
+    once, never through fnmatch's or re's caches (verdict 12 punch 7: a Killington hold
+    was sampled in re's cache eviction under `changes`)."""
+    pats = tuple(pats)
+    if not pats:
+        return None
+    return re.compile("|".join(f"(?:{fnmatch.translate(p)})" for p in pats))
+
+
+_IGNORE_RE = _matcher(IGNORE)
+
+
 class DirWatch:
     """Watches (dir, name patterns) targets; `changes()` lists what changed since."""
 
@@ -58,6 +73,7 @@ class DirWatch:
         self.lock = threading.Lock()
         self.fd: int | None = None
         self.wds: dict[int, tuple[Path, tuple[str, ...]]] = {}
+        self._res: dict[int, "re.Pattern[str] | None"] = {}     # wd -> its names, compiled
         try:
             libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
             self._add = libc.inotify_add_watch
@@ -100,6 +116,7 @@ class DirWatch:
             for wd in set(self.wds) - set(wds):
                 self._rm(self.fd, wd)
             self.wds = wds
+            self._res = {wd: _matcher(pats) for wd, (_d, pats) in wds.items()}
 
     def _drain(self) -> list[tuple[int, int, str]]:
         out: list[tuple[int, int, str]] = []
@@ -143,9 +160,12 @@ class DirWatch:
                 if mask & (IN_DELETE_SELF | IN_MOVE_SELF):
                     out.append((d, ""))
                     continue
-                if any(fnmatch.fnmatchcase(name, g) for g in IGNORE):
+                if _IGNORE_RE.match(name):
                     continue
-                if any(fnmatch.fnmatchcase(name, p) for p in pats):
+                rx = self._res.get(wd)
+                if rx is None and pats:      # armed before `_res` existed (never, but safe)
+                    rx = self._res[wd] = _matcher(pats)
+                if rx is not None and rx.match(name):
                     out.append((d, name))
             return out
         finally:
