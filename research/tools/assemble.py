@@ -60,6 +60,8 @@ from collections import Counter
 from fractions import Fraction
 from pathlib import Path
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from roughcut import colour, edits, effects, fx    # noqa: E402  (after sys.path)
 from roughcut import tracks as tracksmod           # noqa: E402
@@ -444,7 +446,9 @@ def ctl_num(controls: dict | None, key: str, default: float) -> float:
 # the picture after the retime and the `fps` conform starts at frame 0 = 0 s, and the
 # sound after `atempo` and `aresample=first_pts=0` at sample 0 = 0 s.
 
-KEYED_PROPS = ("position_x", "position_y", "scale", "rotation", "opacity", "volume_db")
+KEYED_PROPS = ("position_x", "position_y", "scale", "rotation", "opacity", "volume_db",
+               # Lumetri › Vignette (wave 15, VIGNETTE): `vignette_graph`
+               *colour.VIGNETTE_FIELDS)
 
 
 def keys_of(controls: dict | None, prop: str) -> list[tuple[float, float]] | None:
@@ -488,6 +492,8 @@ def static_prop(controls: dict | None, prop: str) -> float:
     """A keyable property's static (un-keyed) value, in the keys' own units."""
     c = controls or {}
     pos = c.get("position") or [0.5, 0.5]
+    if prop in colour.VIGNETTE_FIELDS:
+        return ctl_num(c, prop, colour.VIGNETTE_FIELDS[prop][2])
     return {"position_x": float(pos[0]), "position_y": float(pos[1]),
             "scale": ctl_num(c, "scale", 100.0), "rotation": ctl_num(c, "rotation", 0.0),
             "opacity": ctl_num(c, "opacity", 100.0),
@@ -533,7 +539,7 @@ def held_controls(controls: dict | None, a: float, b: float) -> dict | None:
         pos[0] = held.get("position_x", pos[0])
         pos[1] = held.get("position_y", pos[1])
         out["position"] = pos
-    for prop in ("scale", "rotation", "opacity", "volume_db"):
+    for prop in ("scale", "rotation", "opacity", "volume_db", *colour.VIGNETTE_FIELDS):
         if prop in held:
             out[prop] = held[prop]
     return out
@@ -700,6 +706,137 @@ def creative_vf(controls: dict | None) -> list[str]:
     if hsl:
         out.append(f"lut3d=file={hsl_cube(hsl)}:interp=tetrahedral")
     return out
+
+
+# ------------------------------------------- Lumetri › Vignette (redesign wave 15, VIGNETTE)
+#
+# THE formula is roughcut/colour.py's ("Lumetri › Vignette"); grade.js's shader is its
+# twin. The export applies the formula's last line in Y'CbCr, where darkening or
+# lightening an R'G'B' pixel by s is the same affine map of its Y'CbCr —
+# Y' = 16 + (Y − 16)(1 − s) + 219·s·[Amount > 0], C' = 128 + (C − 128)(1 − s) — so the
+# picture never leaves 4:2:0 for it: one `lut2` of the picture and a mask frame (a table
+# of 256 × 256 per plane, built once), the mask's Y at each pixel and its Cb = Cr the mean
+# of each 2 × 2. The usual vignette's shape is still: its mask is the weight w itself
+# (255·w), written once per frame size and shape under VIGNETTE_DIR (content-addressed;
+# lut2 holds the mask's one frame for the whole part), and the Amount is in lut2's
+# expressions — re-set on the frames where a keyed Amount changes (`sendcmd`, the table
+# rebuilt). A keyed shape (Midpoint, Roundness or Feather changing over the part) is a
+# mask per frame instead, signed (128 + 127·(Amount/5)·w), drawn at a quarter of the frame
+# (at most VIGNETTE_KEYED_MAX_W wide) beside the part and scaled up: the mask is smooth,
+# a feather of 0 is the one place the scale softens it, by a few pixels. It runs on the
+# graded picture (Lumetri's last step) before the video effects, the designed effects and
+# Motion, as Premiere's Lumetri Color sits above the effects below it in the stack.
+
+VIGNETTE_DIR = Path(tempfile.gettempdir()) / "roughcut-vignette"
+VIGNETTE_KEYED_DIV, VIGNETTE_KEYED_MAX_W = 4, 480
+VIGNETTE_SHAPE = colour.VIGNETTE_FIELDS.keys() - {"vignette_amount"}
+
+
+def vignette_at(controls: dict | None, t: float) -> tuple[float, float, float, float]:
+    """(amount, midpoint, roundness, feather) at film time `t` from the shot's start:
+    each one's keys when it has them, else its static value."""
+    return tuple(value_at(keys_of(controls, k), t) if keys_of(controls, k) else static_prop(controls, k)
+                 for k in colour.VIGNETTE_FIELDS)
+
+
+def _mask_planes(code: np.ndarray) -> bytes:
+    """A mask's codes (0..255 floats, H × W, both even) as one Y'CbCr 4:2:0 frame."""
+    y = np.clip(np.floor(code + 0.5), 0, 255).astype(np.uint8)
+    hh, ww = code.shape
+    c = code.reshape(hh // 2, 2, ww // 2, 2).mean(axis=(1, 3))
+    c = np.clip(np.floor(c + 0.5), 0, 255).astype(np.uint8)
+    return y.tobytes() + c.tobytes() + c.tobytes()
+
+
+def _y4m_head(w: int, h: int, rate: Fraction) -> bytes:
+    return f"YUV4MPEG2 W{w} H{h} F{rate.numerator}:{rate.denominator} Ip A1:1 C420mpeg2\n".encode()
+
+
+def vignette_still(w: int, h: int, shape: tuple[float, float, float]) -> Path:
+    """The weight 255·w of a still shape (midpoint, roundness, feather) at w × h: one mask
+    frame, written once per frame size and shape."""
+    import hashlib
+    key = hashlib.sha1(json.dumps([w, h, *[round(v, 6) for v in shape]]).encode()).hexdigest()[:16]
+    path = VIGNETTE_DIR / f"vig-{key}.y4m"
+    if not path.exists():
+        VIGNETTE_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(f".{os.getpid()}.tmp")
+        tmp.write_bytes(_y4m_head(w, h, Fraction(1)) + b"FRAME\n"
+                        + _mask_planes(255.0 * colour.vignette_mask(w, h, *shape)))
+        os.replace(tmp, path)
+    return path
+
+
+def vignette_exprs(amount: float) -> tuple[str, str]:
+    """lut2's Y and C expressions of the picture x and the mask y = 255·w for an Amount
+    (no commas: `sendcmd` takes them as they are)."""
+    k = abs(amount) / 5.0
+    lift = 219.0 * k if amount > 0 else 0.0
+    return (f"16.5+(x-16)*(1-{k:.6g}*y/255)+{lift:.6g}*y/255",
+            f"128.5+(x-128)*(1-{k:.6g}*y/255)")
+
+
+def vignette_graph(controls: dict | None, w: int, h: int, rate: Fraction, frames: int,
+                   vin: str, vout: str, tag: str, dest: Path | None) -> str | None:
+    """Lumetri › Vignette from `[vin]` to `[vout]` (Y'CbCr 4:2:0), or None when it draws
+    nothing. A keyed one writes its commands (a keyed Amount) or its masks (a keyed
+    shape) beside `dest`."""
+    c = held_controls(controls, 0.0, (max(1, frames) - 1) / float(rate))
+    if not colour.vignette_on(c):
+        return None
+    per_frame = [vignette_at(c, n / float(rate)) for n in range(max(1, frames))]
+    if all(abs(v[0]) < 1e-9 for v in per_frame):
+        return None
+    if not any(keys_of(c, k) for k in VIGNETTE_SHAPE):
+        y_e, c_e = vignette_exprs(per_frame[0][0])
+        src = f"movie=filename={filter_path(vignette_still(w, h, per_frame[0][1:]))}"
+        cmd = ""
+        if keys_of(c, "vignette_amount") and dest is not None:
+            lines, last = [], round(per_frame[0][0], 4)
+            for n, v in enumerate(per_frame[1:], 1):
+                a = round(v[0], 4)
+                if a == last:
+                    continue
+                ye, ce = vignette_exprs(a)
+                lines.append(f"{(n - 0.5) / float(rate):.6f} [enter] lut2@{tag} c0 {ye}, "
+                             f"[enter] lut2@{tag} c1 {ce}, [enter] lut2@{tag} c2 {ce};")
+                last = a
+            if lines:
+                cf = dest.with_name(f"{dest.stem}.{tag}.cmd")
+                cf.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                cmd = f"sendcmd=f={filter_path(cf)},"
+        return (f"{src}[{tag}m];[{vin}]{cmd}null[{tag}p];"
+                f"[{tag}p][{tag}m]lut2@{tag}=c0='{y_e}':c1='{c_e}':c2='{c_e}'[{vout}]")
+    if dest is None:
+        return None
+    mw = max(2, min(w // VIGNETTE_KEYED_DIV, VIGNETTE_KEYED_MAX_W) // 2 * 2)
+    mh = max(2, round(mw * h / w / 2) * 2)
+    u = (2.0 * (np.arange(mw) + 0.5) / mw - 1.0)[None, :]
+    v = (2.0 * (np.arange(mh) + 0.5) / mh - 1.0)[:, None]
+    path = dest.with_name(f"{dest.stem}.{tag}.y4m")
+    last, plane = None, b""
+    with open(path, "wb") as fh:
+        fh.write(_y4m_head(mw, mh, rate))
+        for vals in per_frame:
+            if vals != last:
+                a, m, r, f = vals
+                plane = _mask_planes(128.0 + 127.0 * (a / 5.0) * colour.vignette_weight(u, v, w / h, m, r, f))
+                last = vals
+            fh.write(b"FRAME\n" + plane)
+    sig = "abs(y-128)/127"
+    return (f"movie=filename={filter_path(path)},scale={w}:{h}:flags=bilinear,format=yuv420p[{tag}m];"
+            f"[{vin}][{tag}m]lut2@{tag}=c0='16.5+(x-16)*(1-{sig})+219*gt(y,128)*(y-128)/127'"
+            f":c1='128.5+(x-128)*(1-{sig})':c2='128.5+(x-128)*(1-{sig})'[{vout}]")
+
+
+def vignette_describe(c: dict) -> str | None:
+    """The render log's phrase for the shot's vignette, or None."""
+    if not colour.vignette_on(c):
+        return None
+    vals = vignette_at(c, 0.0)
+    keyed = [k.split("_", 1)[1] for k in colour.VIGNETTE_FIELDS if keys_of(c, k)]
+    return ("vignette " + " ".join(f"{n} {v:g}" for n, v in zip(colour.VIGNETTE_PARTS, vals))
+            + (f" (keyed {'/'.join(keyed)})" if keyed else ""))
 
 
 def volume_db(controls: dict | None) -> float:
@@ -1211,10 +1348,15 @@ def encode_part(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path
     # the video effects (verdict 10 punch 8) on the graded picture, ahead of the designed
     # effects and Motion: `vfx_graph` from the conform's [vsrc] to [vbase]
     vg = vfx_graph(controls, video["w"], video["h"], rate, frames, "vsrc", "vbase", dest)
+    # Lumetri › Vignette (wave 15, VIGNETTE): the last of the grade, before the effects
+    graded = "vsrc" if vg else "vbase"
+    vig = vignette_graph(controls, video["w"], video["h"], rate, frames, "vlum", graded, "vig", dest)
     graph = [f"[0:v]{video_filter(video, normalise, lut, speed, controls, gpu)}"
-             f"[{'vsrc' if vg else 'vbase'}]",
+             f"[{'vlum' if vig else graded}]",
              f"[0:a]{audio_filter(gain_db + volume_db(controls), speed)}"
              f"{',' + vol if vol else ''}[abase]"]
+    if vig:
+        graph.append(vig)
     if vg:
         graph.append(vg)
     if shot_effects:
@@ -1337,9 +1479,19 @@ def _handle_input(graph: list[str], bl: dict, video: dict, k: int, frames: int,
     off, n = bl["offset"], bl["frames"]
     chain = video_filter(video, bl.get("normalise"), bl.get("lut"), bl["speed"],
                          bl.get("controls"), None)
+    head = f"[{k}:v]{chain}"
+    # its Lumetri › Vignette (wave 15) too, at the value it has at that end of its shot
+    hc = bl.get("controls")
+    if colour.vignette_on(hc):
+        vals = vignette_at(hc, 0.0 if bl.get("incoming") else 1e9)
+        vig = vignette_graph(dict(zip(colour.VIGNETTE_FIELDS, vals)), video["w"], video["h"],
+                             rate, 1, f"{tag}l", f"{tag}g", f"{tag}v", None)
+        if vig:
+            graph += [f"{head}[{tag}l]", vig]
+            head = f"[{tag}g]null"
     pad_s = (frames / float(rate)) + 2.0
     take, pre = bl.get("take", n), bl.get("pre", 0)
-    graph.append(f"[{k}:v]{chain},tpad=stop_mode=clone:stop_duration=2,trim=end_frame={take},"
+    graph.append(f"{head},tpad=stop_mode=clone:stop_duration=2,trim=end_frame={take},"
                  f"setpts=PTS-STARTPTS,tpad=start={off + pre}:start_mode=clone:"
                  f"stop_mode=clone:stop_duration={pad_s:.3f}[{tag}]")
 
@@ -2108,6 +2260,9 @@ def describe_controls(c: dict) -> str:
         bits.append("wheels " + "/".join(k for k in colour.WHEEL_NAMES if c["wheels"].get(k)))
     if c.get("hsl"):
         bits.append("hsl secondary")
+    vd = vignette_describe(c)
+    if vd:
+        bits.append(vd)
     if c.get("fx_off"):
         bits.append(f"fx off {len(c['fx_off'])}")
     if c.get("fx_order"):
