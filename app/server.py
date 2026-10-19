@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import gc
 import json
 import math
 import mimetypes
@@ -13806,6 +13807,12 @@ def main() -> int:
     if args.host not in ("127.0.0.1", "localhost", "::1"):
         print(f"  !! listening on {args.host}: anyone who can reach this machine can "
               f"open the board (no login)", flush=True)
+    # Wave 15 (verdict 11 punch 4): a full collection walks every object alive, and it
+    # holds the GIL, so the event loop with it (121 ms of the loop thread's CPU inside one
+    # 647 ms hold on Killington; ~70 000 objects here, nearly all the imports' and never
+    # garbage: 44-58 ms a collection, 0 once frozen). What is alive now is kept out of it.
+    gc.collect()
+    gc.freeze()
     uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
     return 0
 
