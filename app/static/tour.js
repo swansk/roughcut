@@ -146,7 +146,7 @@
   const FIRSTPASS = {
     name: () => (window.rcFirstPass && rcFirstPass.label ? rcFirstPass.label() : 'Run first pass'),
     what: 'Hears and looks at every clip, picks the best moments and proposes a rough cut.',
-    change: 'Nothing until you accept: the cut it proposes waits on a Proposal track. A re-run keeps the shots you edited by hand.',
+    change: 'Nothing until you accept: the cut it proposes waits on a Proposal track. A re-run keeps the shots you cut by hand, and every kept shot keeps its grade.',
     price: fpPrice,
   };
   const PROMPT = {

@@ -3956,7 +3956,7 @@ def firstpass_state() -> dict:
              not in then]
     stale = []
     if since and not pending:
-        stale.append(f"{len(since)} shot{'s' if len(since) != 1 else ''} edited by hand "
+        stale.append(f"{len(since)} shot{'s' if len(since) != 1 else ''} cut by hand "
                      "since")
     # Footage added since the run (wave 12 IMPORT: imported, uploaded or dropped into the
     # folder): by name when the record kept the names, else by count. The board offers
