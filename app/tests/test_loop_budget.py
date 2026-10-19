@@ -444,3 +444,49 @@ def test_a_stop_replies_once_its_signals_are_out(tmp_path, project, monkeypatch)
             stubborn.kill()
         server.FIRSTPASS.clear()
 
+
+def test_a_gap_is_cut_from_the_bins_black_master(tmp_path, project, monkeypatch):
+    """A gap's black was an encode inside /api/gap (~35 ms a second of black; 587 ms for a
+    gap on a loaded Killington box). With the bin's black master on disk a gap is its head,
+    a stream copy: no encode, the length on the frame grid, black and silent as before."""
+    from fastapi.testclient import TestClient
+    import server
+
+    server.configure(None, project["footage"], None, tmp_path / "work", proxies=False,
+                     visual=tmp_path / "no-visual")
+    monkeypatch.setattr(server, "GAP_MASTER_S", 30.0)
+    assert server.ensure_black_master() is not None
+    runs: list[list[str]] = []
+    real_run = subprocess.run
+
+    def watched(cmd, *a, **kw):
+        # this bin's generated clips' ffmpegs only (other tests' threads may run their own)
+        if isinstance(cmd, list) and cmd and cmd[0] == "ffmpeg" \
+                and str(server.generated_dir()) in " ".join(map(str, cmd)):
+            runs.append(cmd)
+        return real_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(server.subprocess, "run", watched)
+    with TestClient(server.app) as c:
+        t0 = time.perf_counter()
+        r = c.post("/api/gap", json={"seconds": 7.33})
+        took = time.perf_counter() - t0
+    assert r.status_code == 200, r.text
+    g = r.json()
+    assert len(runs) == 1 and "copy" in runs[0] and "libx264" not in runs[0], runs
+    assert not any("lavfi" in x for x in runs[0])
+    print(f"a 7.33 s gap from the master in {took * 1000:.0f} ms")
+    path = server.generated_dir() / g["clip"]
+    probe = json.loads(real_run(["ffprobe", "-v", "error", "-show_entries",
+                                 "stream=codec_type,nb_frames,duration,width,height",
+                                 "-of", "json", str(path)], capture_output=True, text=True).stdout)
+    v = next(s for s in probe["streams"] if s["codec_type"] == "video")
+    assert int(v["nb_frames"]) == 176 and (v["width"], v["height"]) == (server.GEN_W, server.GEN_H)
+    assert any(s["codec_type"] == "audio" for s in probe["streams"])
+    assert g["record"]["duration"] == pytest.approx(176 / server.GEN_FPS, abs=0.01)
+    assert g["record"]["summary"]["generated"] == "generated: black 7.3 s"
+    # past the master's length: the encode, as before
+    runs.clear()
+    with TestClient(server.app) as c:
+        assert c.post("/api/gap", json={"seconds": 31.0}).status_code == 200
+    assert runs and "libx264" in runs[0]

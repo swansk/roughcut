@@ -11873,21 +11873,91 @@ def materialise_generated(spec: dict) -> Path:
                    f"color=c=0x{hexcolour}:s={GEN_W}x{GEN_H}:r={GEN_FPS}:d={seconds:.3f}",
                    "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
                    "-t", f"{seconds:.3f}", *_GEN_ENCODE, str(tmp)]
-        r = subprocess.run(cmd, capture_output=True, text=True)
+        # black: the head of the bin's black master, copied (no encode: ~50 ms, where the
+        # encode is ~35 ms a second of black and 587 ms for a gap on a loaded Killington box)
+        copied = kind == "black" and _black_from_master(seconds, tmp)
+        r = None if copied else subprocess.run(cmd, capture_output=True, text=True)
         if png is not None:
             png.unlink(missing_ok=True)
-        if r.returncode != 0 or not tmp.exists() or not tmp.stat().st_size:
+        if r is not None and (r.returncode != 0 or not tmp.exists() or not tmp.stat().st_size):
             tmp.unlink(missing_ok=True)
             raise RuntimeError(f"generated clip failed ({name}): {r.stderr[-300:]}")
         tmp.replace(dest)
         record = {k: spec.get(k) for k in ("kind", "seconds", "color", "from_clip", "at")}
         record["clip"] = name
-        record["duration"] = probe_duration(dest) or seconds
+        # a copy's length is its frames' (whole GEN_FPS frames, the picture the cut trims)
+        record["duration"] = (round(math.ceil(seconds * GEN_FPS - 1e-6) / GEN_FPS, 2) if copied
+                              else probe_duration(dest) or seconds)
         generated_spec_path(name).write_text(json.dumps(record, indent=1), encoding="utf-8")
     return dest
 
 
 GAP_MAX_S = 3600.0
+# The black a gap is made of, ready before it is asked for (wave 15 BUDGET, verdict 11
+# punch 4: /api/gap took 587 ms on a loaded Killington box, an encode of N seconds of
+# black inside the request). One master per bin, GAP_MASTER_S of black at the generated
+# clips' size and rate with no B-frames (any head of it decodes on its own), made once in
+# the background when the board opens a bin; a gap up to that long is its head, a stream
+# copy. Longer, or before the master is there: the encode, as before.
+GAP_MASTER_S = 120.0
+_BLACK_MASTER = {"lock": threading.Lock()}
+
+
+def black_master_path() -> Path:
+    # not `gen_*`: never listed among the clips (generated_clips)
+    return generated_dir() / f"black-master.{GEN_W}x{GEN_H}.{GEN_FPS}.v1.mp4"
+
+
+def ensure_black_master() -> Path | None:
+    """The bin's black master on disk (made now if missing, niced in the background
+    scope); None when another thread is making it or the encode failed."""
+    dest = black_master_path()
+    if dest.exists() and dest.stat().st_size:
+        return dest
+    if not _BLACK_MASTER["lock"].acquire(blocking=False):
+        return None
+    try:
+        if dest.exists() and dest.stat().st_size:
+            return dest
+        tmp = dest.with_name(f"{dest.stem}.{os.getpid()}.part.mp4")
+        with procscope.active(media_scope()):
+            r = subprocess.run(
+                ["ffmpeg", "-v", "error", "-y", "-nostdin", "-f", "lavfi", "-i",
+                 f"color=c=0x000000:s={GEN_W}x{GEN_H}:r={GEN_FPS}:d={GAP_MASTER_S:.0f}",
+                 "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-t", f"{GAP_MASTER_S:.0f}",
+                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20", "-pix_fmt", "yuv420p",
+                 "-r", str(GEN_FPS), "-bf", "0", "-g", str(GEN_FPS * 10),
+                 "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-ac", "2",
+                 "-shortest", "-movflags", "+faststart", str(tmp)],
+                capture_output=True, text=True)
+        if r.returncode != 0 or not tmp.exists() or not tmp.stat().st_size:
+            tmp.unlink(missing_ok=True)
+            print(f"  !! black master: {r.stderr[-200:]}", flush=True)
+            return None
+        tmp.replace(dest)
+        return dest
+    finally:
+        _BLACK_MASTER["lock"].release()
+
+
+def _black_from_master(seconds: float, tmp: Path) -> bool:
+    """`tmp` = the first `seconds` of the bin's black master (a stream copy); False when
+    there is no master yet (one is started) or the copy failed."""
+    master = black_master_path()
+    if not (master.exists() and master.stat().st_size):
+        if STATE.get("proxies_enabled", True):      # nothing built behind a suite's back
+            threading.Thread(target=ensure_black_master, daemon=True, name="black master").start()
+        return False
+    if seconds > GAP_MASTER_S - 1.0:
+        return False
+    r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-i", str(master),
+                        "-t", f"{seconds:.3f}", "-c", "copy", "-movflags", "+faststart", str(tmp)],
+                       capture_output=True, text=True)
+    if r.returncode == 0 and tmp.exists() and tmp.stat().st_size:
+        return True
+    tmp.unlink(missing_ok=True)
+    return False
+
 
 
 @app.post("/api/gap")
@@ -13514,6 +13584,8 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
     else:
         threading.Thread(target=ensure_proxies, args=(clips,), daemon=True).start()
         kick_previews()          # posters and playable previews for every clip, first
+        # the black a gap is cut from, before the first gap (a few seconds, niced, once)
+        threading.Thread(target=ensure_black_master, daemon=True, name="black master").start()
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
