@@ -456,8 +456,11 @@ def test_m_adds_a_marker_and_shift_m_jumps_to_it(page):
     assert len(marks) == 2
     assert marks[0] == pytest.approx(1.5, abs=0.5 / FPS) and marks[1] == pytest.approx(3.0, abs=0.5 / FPS)
     assert page.locator("#tl .tl-ruler .tl-marker").count() == 2
-    page.keyboard.press("m")                         # one marker per frame
-    assert len(page.evaluate("tl.markers()")) == 2
+    page.keyboard.press("m")                         # one marker per frame: M on one is
+    assert len(page.evaluate("tl.markers()")) == 2   # its Marker dialog (verdict 12, punch 4)
+    assert page.locator("[data-testid=marker-dialog]").is_visible()
+    page.keyboard.press("Escape")
+    assert not page.locator("[data-testid=marker-dialog]").is_visible()
     page.evaluate("tl.seek(0.2)")
     page.keyboard.press("Shift+M")
     assert page.evaluate("tl.state.playhead") == pytest.approx(marks[0], abs=0.011)

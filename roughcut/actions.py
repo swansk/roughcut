@@ -37,7 +37,11 @@ THE OPS (each maps to the human path named after the arrow)
     slip          {id, by}                   → the Slip tool (Y): in and out move together by
                                                  `by` clip seconds; the length holds
     speed         {id, rate}                 → tl.setSpeed   0.1–4 (0.5 = half speed)
-    marker        {at}                       → tl.addMarker  (M)
+    marker        {at, name?, comment?, colour?, duration?}  → tl.addMarker (M), and the
+                                                 Marker dialog's Name / Comments / Marker
+                                                 Color / Duration (film seconds; 0 a point);
+                                                 at a marker already there, its dialog's OK
+                                                 (tl.editMarker): it is named / recoloured
     in_out        {in?, out?}                → tl.setSeqIn / setSeqOut (I / O); null clears
     track_add     {kind: video|audio}        → tl.addTrack   Sequence › Add Track
     overlay       {clip, in, out, at, track?} → tl.addOverlay  a clip on V2 (or an added
@@ -243,7 +247,7 @@ Timeline
   {{"op":"roll","a","b","by"}}                   move the edit between shot a and the next shot b by `by` film seconds (+ later)
   {{"op":"slip","id","by"}}                      slide a shot's in and out together by `by` clip seconds
   {{"op":"speed","id","rate"}}                   playback rate {MIN_SPEED:g}–{MAX_SPEED:g} (0.5 = slow motion at half speed)
-  {{"op":"marker","at"}}                         a sequence marker
+  {{"op":"marker","at","name"?,"comment"?,"colour"?,"duration"?}}   a sequence marker (M) at film time `at`, as Premiere's Marker dialog has it: a name (≤ {tracksmod.MARKER_NAME_MAX} characters), comments, a colour ({", ".join(c.title() for c in tracksmod.MARKER_COLOURS)}; default Green) and a duration in film seconds (omit for a point). On a marker already at `at`, it names / recolours that one
   {{"op":"in_out","in"?,"out"?}}                 the sequence In / Out (film seconds; null clears one)
   {{"op":"track_add","kind":"video"|"audio"}}    add a track (V3…, A3…)
   {{"op":"overlay","clip","in","out","at","track"?}}  a clip over the cut on V2 (or an added track) at film time `at`
@@ -391,7 +395,9 @@ class _Sim:
             self.clips[str(name)] = d
             self.clip_rates[str(name)] = (tracksmod.timebase_value(c.get("fps"))
                                           if isinstance(c, dict) else None)
-        self.markers = sorted(t for t in (_f(m) for m in state.get("markers") or []) if t is not None)
+        # the markers' times (an EDL marker is a bare time or {t, name?, …}: tracks.py)
+        self.markers = sorted(t for t in (tracksmod.marker_time(m) for m in state.get("markers") or [])
+                              if t is not None)
         self.seq_in = _f(state.get("in"))
         self.seq_out = _f(state.get("out"))
         tr = state.get("tracks")
@@ -833,11 +839,56 @@ def _c_speed(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
 
 
 def _c_marker(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
+    """A marker (M) with what Premiere's Marker dialog gives it (verdict 12, punch 4: "a
+    marker called best trick" could not be named): a name, comments, a colour and a
+    duration. At a marker already there, the fields name / recolour that one (the hand's
+    M on a marker → its dialog → OK); with none, it is refused as before."""
     at = _film_time(raw, "at", sim)
+    clean: dict = {"op": "marker", "at": at}
+    bits: list[str] = []
+    name = raw.get("name")
+    if name not in (None, ""):
+        if not isinstance(name, str):
+            raise Refused("a marker's `name` is text")
+        name = " ".join(name.split())[: tracksmod.MARKER_NAME_MAX]
+        if name:
+            clean["name"] = name
+            bits.append(f"“{name}”")
+    colour = raw.get("colour", raw.get("color"))
+    if colour not in (None, ""):
+        try:
+            clean["colour"] = tracksmod.marker_colour(colour)
+        except ValueError as exc:
+            raise Refused(str(exc))
+        if clean["colour"] != "green" or "name" not in clean:
+            bits.append(clean["colour"].title())
+    d = raw.get("duration", raw.get("dur"))
+    if d not in (None, ""):
+        d = _f(d)
+        if d is None or d < 0:
+            raise Refused("a marker's `duration` is film seconds, 0 or more")
+        if d > 0:
+            d = max(sim.frame(), sim.on_grid(d))
+            if at + d > sim.total() + sim.frame() / 2:
+                raise Refused(f"a {d:.2f} s marker at {timecode(at, sim.fps)} runs past the end "
+                              f"of the sequence ({sim.total():.2f} s)")
+            clean["duration"] = _r(d)
+            bits.append(f"{d:.2f} s long")
+    comment = raw.get("comment")
+    if comment not in (None, ""):
+        if not isinstance(comment, str):
+            raise Refused("a marker's `comment` is text")
+        comment = comment.strip()[: tracksmod.MARKER_COMMENT_MAX]
+        if comment:
+            clean["comment"] = comment
+            bits.append(f"comment “{comment[:60]}{'…' if len(comment) > 60 else ''}”")
+    where = timecode(at, sim.fps)
     if any(abs(m - at) < 0.5 / sim.fps for m in sim.markers):
-        raise Refused(f"there is a marker at {timecode(at, sim.fps)} already")
+        if len(clean) == 2:
+            raise Refused(f"there is a marker at {where} already")
+        return clean, f"The marker at {where}: " + ", ".join(bits)
     sim.markers = sorted(sim.markers + [at])
-    return {"op": "marker", "at": at}, f"Marker at {timecode(at, sim.fps)}"
+    return clean, f"Marker at {where}" + (": " + ", ".join(bits) if bits else "")
 
 
 def _c_in_out(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
