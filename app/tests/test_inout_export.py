@@ -12,7 +12,11 @@ every track of it. The Export dialog sends only the range's V1 shots (export.js
     and its keys move with the cut) and leaves out those outside it;
   * a shot the In cuts into carries its keys moved earlier (export.js `shiftKeys`), so a
     key before the In was a negative time and the export a 400 ("t must be 0.."): the
-    keys before 0 are one key at 0 now, with the value the shot had there.
+    keys before 0 are one key at 0 now, with the value the shot had there;
+  * the In and Out were kept to 0.01 s (timeline.js `onFrame`): at 59.94 an In at a
+    shot's first frame (1.63497 s) was 1.63, the shot before's last frame, and an In
+    inside a shot whose 0.01 s rounds up started the export a frame late. They are on the
+    edit grid every cut uses now (`tl.onGrid`), and so is the EDL's `in` / `out`.
 
 The renders are real (assemble.py through `/api/render`, the Match Sequence preset at the
 clips' own 320×180) and are read back with ffprobe / a frame sample. ROUGHCUT_GPU=0: the
@@ -23,8 +27,10 @@ from __future__ import annotations
 
 import json
 import re
+import socket
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -37,6 +43,8 @@ sys.path.insert(0, str(ROOT / "app"))
 from conftest import _sidecar  # noqa: E402
 
 CLIP_S = 10.0
+NTSC60 = "60000/1001"
+F60 = 60000 / 1001
 
 
 def _clip(path: Path, video: str, audio: str, rate: str = "24") -> None:
@@ -82,6 +90,11 @@ def proj(tmp_path_factory) -> dict:
                    SILENT, "24"),
         # A3's: grey, its sound 880 Hz from 0.5 s
         "CLIP_T": ("gray", LATE_TONE, "24"),
+        # a 59.94 sequence: red, then a clip whose every frame is its own grey
+        # (16 + 7·(N mod 32)), so a sampled frame says which frame it is
+        "CLIP_R60": ("red", SILENT, NTSC60),
+        "CLIP_N60": ("black,format=yuv420p,geq=lum='16+mod(N\\,32)*7':cb=128:cr=128",
+                     SILENT, NTSC60),
     }
     for stem, (video, audio, rate) in clips.items():
         _clip(footage / f"{stem}.MP4", video, audio, rate)
@@ -167,6 +180,29 @@ def _video(path: Path) -> dict:
                         "-show_entries", "stream=r_frame_rate,nb_read_frames", "-of", "json",
                         str(path)], capture_output=True, text=True, check=True)
     return json.loads(r.stdout)["streams"][0]
+
+
+def _grey(path: Path, t: float | None = None, frame: int | None = None) -> float:
+    """The mean grey of one frame: at `t`, or the `frame`-th decoded."""
+    cmd = ["ffmpeg", "-v", "error", "-nostdin"]
+    if t is not None:
+        cmd += ["-ss", f"{t:.4f}"]
+    cmd += ["-i", str(path)]
+    if frame is not None:
+        cmd += ["-vf", f"select=eq(n\\,{frame}),scale=32:18", "-fps_mode", "passthrough"]
+    else:
+        cmd += ["-vf", "scale=32:18"]
+    cmd += ["-frames:v", "1", "-f", "rawvideo", "-pix_fmt", "gray", "-"]
+    r = subprocess.run(cmd, capture_output=True)
+    assert r.returncode == 0 and len(r.stdout) == 32 * 18, r.stderr[-300:]
+    return sum(r.stdout) / len(r.stdout)
+
+
+def _which_frame(film: Path, src: Path, near: int) -> int:
+    """Which frame of `src` (CLIP_N60, every frame its own grey) the film's first frame is."""
+    g = _grey(film, frame=0)
+    cands = {k: _grey(src, frame=k) for k in range(max(0, near - 3), near + 4)}
+    return min(cands, key=lambda k: abs(cands[k] - g))
 
 
 # ---------------------------------------------------------------- the clock (no render)
@@ -292,3 +328,142 @@ def test_an_in_inside_a_keyed_shot_exports_with_the_value_it_had_there(api, proj
     r, g, b = _rgb(film, 0.0)
     assert 90 < r < 170 and g < 30 and b < 30, (r, g, b)           # half red over black
     assert _colour(film, 2.5) == "red"                              # the ramp's end: all of it
+
+
+# ---------------------------------------------------------------- the board at 59.94
+
+pw_api = pytest.importorskip("playwright.sync_api", reason="playwright not installed")
+
+# 59.94: red for 98 frames (1.635 s, frame 98 starts at 1.63497 s), then CLIP_N60 from its
+# frame 0 for 240 frames
+EDL60 = {
+    "variant": "T", "title": "inout 59.94", "orient": "none", "story": "", "target_s": [1, 30],
+    "fps": 59.94,
+    "segments": [{"id": "r1", "clip": "CLIP_R60.MP4", "in": 0.0, "out": 1.635, "why": "red"},
+                 {"id": "n1", "clip": "CLIP_N60.MP4", "in": 0.0, "out": 4.004, "why": "frames"}],
+}
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+@pytest.fixture(scope="module")
+def live_server(proj):
+    import uvicorn
+    import server
+    server.configure(proj["edl"], proj["footage"], proj["sidecars"], proj["work"],
+                     proxies=False, visual=proj["work"] / "no-visual", assets=proj["assets"])
+    server.ensure_proxies(["CLIP_R60.MP4", "CLIP_N60.MP4"])
+    port = _free_port()
+    srv = uvicorn.Server(uvicorn.Config(server.app, host="127.0.0.1", port=port, log_level="error"))
+    thread = threading.Thread(target=srv.run, daemon=True)
+    thread.start()
+    for _ in range(100):
+        if srv.started:
+            break
+        time.sleep(0.1)
+    assert srv.started, "server did not start"
+    yield f"http://127.0.0.1:{port}"
+    srv.should_exit = True
+    thread.join(timeout=10)
+
+
+@pytest.fixture(scope="module")
+def browser(live_server):
+    with pw_api.sync_playwright() as pw:
+        b = pw.chromium.launch()
+        yield b
+        b.close()
+
+
+@pytest.fixture
+def page(browser, live_server, proj):
+    import server
+    server.configure(proj["edl"], proj["footage"], proj["sidecars"], proj["work"],
+                     proxies=False, visual=proj["work"] / "no-visual", assets=proj["assets"])
+    proj["edl"].write_text(json.dumps(EDL60, indent=1), encoding="utf-8")
+    ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+    pg = ctx.new_page()
+    errors: list[str] = []
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    pg.goto(live_server)
+    pg.wait_for_selector("#tl .blk")
+    pg.wait_for_selector("#tlKeys", state="attached")
+    pg.evaluate("localStorage.clear(); tl.setSeqIn(null); tl.setSeqOut(null); tl.clearHistory()")
+    pg.click("#tl .tl-ruler", position={"x": 5, "y": 5})     # the timeline is the panel in focus
+    yield pg
+    ctx.close()
+    assert errors == [], errors
+
+
+def _disk(proj) -> dict:
+    return json.loads(proj["edl"].read_text(encoding="utf-8"))
+
+
+def _mark(page, edge: str, frame: int) -> float:
+    """The playhead on sequence frame `frame` (its own start, as a step of → puts it), then
+    the I or O key."""
+    page.evaluate(f"tl.seek({frame} * 1001 / 60000)")
+    page.keyboard.press(edge)
+    return page.evaluate("tl.state.seqIn" if edge == "i" else "tl.state.seqOut")
+
+
+def test_i_and_o_at_59_94_land_on_the_edit_grid_and_the_edl_keeps_them_there(page, proj):
+    """Frame 98 (the second shot's first) starts at 1.63497 s: to 0.01 s the In was 1.63,
+    inside frame 97: the red shot's last, the shot the In was in."""
+    assert page.evaluate("tl.fps()") == pytest.approx(59.94)
+    assert page.evaluate("tl.total()") == pytest.approx(5.639)
+    at_cut = _mark(page, "i", 98)
+    assert at_cut == 1.635 == page.evaluate("tl.onGrid(1.63497)"), at_cut
+    out = _mark(page, "o", 158)
+    assert out == page.evaluate("tl.onGrid(158 * 1001 / 60000)") == 2.636, out
+    assert page.evaluate("[tl.isOnGrid(tl.state.seqIn), tl.isOnGrid(tl.state.seqOut)]") == [True, True]
+    # the In is the second shot's, not the red one's before it
+    assert page.evaluate("tl.shotAt(tl.state.seqIn).id") == "n1"
+    # mid-shot: frame 100 is 1.66833 s — 1.67 to 0.01 s, a frame's fifth late
+    mid = _mark(page, "i", 100)
+    assert mid == 1.6683 and page.evaluate(f"tl.isOnGrid({mid})"), mid
+    # tl.setSeqIn / setSeqOut themselves are on the grid, whoever calls them
+    assert page.evaluate("tl.setSeqOut(2.6359667)") == 2.636
+    assert page.evaluate("tl.setSeqIn(1.6683333)") == 1.6683
+    page.evaluate("async () => { await roughcutFlush(); await tl.saveSeq(); }")
+    end = time.time() + 8
+    while time.time() < end and (_disk(proj).get("in"), _disk(proj).get("out")) != (1.6683, 2.636):
+        time.sleep(0.1)
+    assert (_disk(proj).get("in"), _disk(proj).get("out")) == (1.6683, 2.636), _disk(proj)
+
+
+def _export_dialog(page, name: str) -> str:
+    page.keyboard.press("Control+m")
+    page.wait_for_selector("[data-testid=export-dialog] [data-testid=export-go]", timeout=5000)
+    assert page.input_value("#exRange") == "inout"
+    page.select_option("[data-testid=export-preset]", "match")
+    page.fill("[data-testid=export-name]", name)
+    page.fill("#exFolder", "inout-tests")
+    page.click("[data-testid=export-go]")
+    page.wait_for_selector("[data-testid=export-done]", timeout=240000)
+    path = page.get_attribute("[data-testid=export-done]", "data-path")
+    page.keyboard.press("Escape")
+    return path
+
+
+def test_an_in_out_export_at_59_94_starts_on_the_ins_own_frame(page, proj):
+    """I at the second shot's first frame and O 60 frames on: the film is that shot's frames
+    0-59. I two frames into it (1.66833 s, 1.67 to 0.01 s): the film starts on its frame 2,
+    never 3 — export.js cut the shot at 0.035 s, after frame 2's 0.03337 s."""
+    src = proj["footage"] / "CLIP_N60.MP4"
+    _mark(page, "i", 98)
+    _mark(page, "o", 158)
+    film = Path(_export_dialog(page, "in out 59.94 cut"))
+    v = _video(film)
+    assert v["r_frame_rate"] == NTSC60 and int(v["nb_read_frames"]) == 60, v
+    assert _colour(film, 0.0).startswith("other") or _colour(film, 0.0) == "black"   # not red
+    assert _which_frame(film, src, 0) == 0
+    _mark(page, "i", 100)
+    film = Path(_export_dialog(page, "in out 59.94 mid"))
+    v = _video(film)
+    assert v["r_frame_rate"] == NTSC60 and int(v["nb_read_frames"]) == 58, v
+    assert _which_frame(film, src, 2) == 2
