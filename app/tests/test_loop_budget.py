@@ -93,3 +93,34 @@ def test_stale_cli_facts_answer_at_once_and_are_asked_again_behind(monkeypatch):
     while server._CLI_FACTS["facts"]["version"] != "new" and time.time() < deadline:
         time.sleep(0.02)
     assert server.cli_facts()["version"] == "new" and len(calls) == 1
+
+
+def test_an_upload_the_disk_refuses_fails_whole_and_leaves_nothing(tmp_path, project, monkeypatch):
+    """The writer thread's error is the request's: the file is failed, its part file
+    gone, the batch ended — as a short body is."""
+    from fastapi.testclient import TestClient
+    import server
+
+    class Full:
+        def __init__(self, f):
+            self.f = f
+
+        def write(self, b):
+            raise OSError(28, "No space left on device")
+
+        def close(self):
+            self.f.close()
+    real = server._UploadWriter.__init__
+    monkeypatch.setattr(server._UploadWriter, "__init__",
+                        lambda self, f, up: real(self, Full(f), up))
+    server.configure(None, project["footage"], None, tmp_path, proxies=False,
+                     visual=tmp_path / "no-visual")
+    data = b"\0" * (9 << 20)                              # more than one UPLOAD_WRITE piece
+    with TestClient(server.app, raise_server_exceptions=False) as c:
+        plan = c.post("/api/upload", json={"files": [{"name": "full.mp4", "size": len(data)}]}).json()
+        r = c.put(f"/api/upload/{plan['batch']}/0", content=data)
+        assert r.status_code == 500
+        assert c.get(f"/api/job/{plan['batch']}").json()["state"] == "failed"
+    up = server.UPLOADS[plan["batch"]]
+    assert up["rows"][0]["state"] == "failed" and up["rows"][0]["why"] == "OSError"
+    assert not list(tmp_path.rglob("*.part"))

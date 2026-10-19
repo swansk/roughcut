@@ -11741,12 +11741,64 @@ async def api_upload_plan(request: Request) -> JSONResponse:
     return JSONResponse({"batch": batch, "files": out, "bytes": total, "job": batch})
 
 
+class _UploadWriter:
+    """One file's bytes to disk on a thread of its own (wave 14, verdict 10: a 110 MB
+    drop ran at ~1.25 MB/s while the server was busy). The request hands it whole
+    UPLOAD_WRITE pieces without waiting; it joins and writes them, counts them onto the
+    batch's bar and keeps the batch alive, so a chunk arriving costs the event loop an
+    append and nothing else, and reading the network overlaps writing the disk."""
+
+    DEPTH = 8                    # pieces in flight: a slow disk slows the reading, not RAM
+
+    def __init__(self, f, up: dict) -> None:
+        import queue
+        self.f, self.up = f, up
+        self.q: "queue.Queue" = queue.Queue(maxsize=self.DEPTH)
+        self.error: BaseException | None = None
+        self.thread = threading.Thread(target=self._run, name="upload writer", daemon=True)
+        self.thread.start()
+
+    def _run(self) -> None:
+        while True:
+            piece = self.q.get()
+            if piece is None:
+                return
+            if self.error is not None:
+                continue
+            try:
+                self.f.write(b"".join(piece))
+            except BaseException as exc:  # noqa: BLE001 — the request raises it
+                self.error = exc
+            up = self.up
+            now = up["last"] = time.time()
+            if now - up.get("ticked", 0.0) > 0.25:      # the job's bar, four times a second
+                up["ticked"] = now
+                _upload_tick(up)
+
+    async def put(self, piece: list[bytes]) -> None:
+        import queue
+        try:
+            self.q.put_nowait(piece)
+        except queue.Full:
+            await asyncio.to_thread(self.q.put, piece)
+
+    def finish(self) -> None:
+        """On a worker: the last piece written, the file closed; raises a write's error.
+        Twice is once."""
+        if self.thread.is_alive():
+            self.q.put(None)
+            self.thread.join()
+        self.f.close()
+        if self.error is not None:
+            raise self.error
+
+
 @app.put("/api/upload/{batch}/{i}")
 async def api_upload_file(batch: str, i: int, request: Request) -> JSONResponse:
-    """One file's bytes, streamed to disk as they arrive: written in UPLOAD_WRITE pieces
-    on a worker thread into the uploads' `.incoming/` (unwatched), renamed into place
-    whole, then added to the bin. A short body, a long one, a closed connection or the
-    batch's Stop leaves nothing behind."""
+    """One file's bytes, streamed to disk as they arrive: handed in UPLOAD_WRITE pieces
+    to a writer thread (`_UploadWriter`) into the uploads' `.incoming/` (unwatched),
+    renamed into place whole, then added to the bin. A short body, a long one, a closed
+    connection or the batch's Stop leaves nothing behind."""
     up = UPLOADS.get(batch)
     if up is None or up.get("bin") != STATE["footage"].name:
         raise HTTPException(404, "no such upload")
@@ -11760,41 +11812,50 @@ async def api_upload_file(batch: str, i: int, request: Request) -> JSONResponse:
         raise HTTPException(409, f"{row['clip']} is {row['state']}")
     updir = mediamod.uploads_dir(STATE["work"], STATE["footage"].name)
     incoming = updir / ".incoming"
-    await asyncio.to_thread(incoming.mkdir, parents=True, exist_ok=True)
     part = incoming / f"{row['clip']}.{batch}.part"
     dest = updir / row["clip"]
     row.update(state="uploading", got=0)
     up["last"] = time.time()
-    f = await asyncio.to_thread(open, part, "wb")
+
+    def opened():
+        incoming.mkdir(parents=True, exist_ok=True)
+        return open(part, "wb")
+    writer = _UploadWriter(await asyncio.to_thread(opened), up)
     held: list[bytes] = []
     n_held = 0
+    size = row["size"]
     try:
         async for chunk in request.stream():
             if not chunk:
                 continue
             row["got"] += len(chunk)
-            now = up["last"] = time.time()
-            if now - up.get("ticked", 0.0) > 0.25:      # the job's bar, four times a second
-                up["ticked"] = now
-                _upload_tick(up)
-            if row["got"] > row["size"]:
-                raise HTTPException(413, f"more than the {row['size']} bytes announced")
-            if job["state"] in progress.TERMINAL:
-                raise HTTPException(409, "the upload was stopped")
+            if row["got"] > size:
+                raise HTTPException(413, f"more than the {size} bytes announced")
             held.append(chunk)
             n_held += len(chunk)
             if n_held >= UPLOAD_WRITE:
-                data, held, n_held = b"".join(held), [], 0
-                await asyncio.to_thread(f.write, data)
+                if job["state"] in progress.TERMINAL:
+                    raise HTTPException(409, "the upload was stopped")
+                if writer.error is not None:
+                    raise writer.error
+                await writer.put(held)
+                held, n_held = [], 0
         if held:
-            await asyncio.to_thread(f.write, b"".join(held))
-        await asyncio.to_thread(f.close)
-        if row["got"] != row["size"]:
-            raise HTTPException(400, f"{row['got']} of {row['size']} bytes arrived")
+            await writer.put(held)
+        await asyncio.to_thread(writer.finish)
+        if job["state"] in progress.TERMINAL:
+            raise HTTPException(409, "the upload was stopped")
+        if row["got"] != size:
+            raise HTTPException(400, f"{row['got']} of {size} bytes arrived")
         await asyncio.to_thread(os.replace, part, dest)
     except BaseException as exc:           # a disconnect, a Stop, a bad length: no trace
-        await asyncio.to_thread(f.close)
-        await asyncio.to_thread(part.unlink, missing_ok=True)
+        def drop():
+            try:
+                writer.finish()
+            except BaseException:  # noqa: BLE001 — the first error is the one reported
+                pass
+            part.unlink(missing_ok=True)
+        await asyncio.to_thread(drop)
         row.update(state="failed", got=0,
                    why=str(getattr(exc, "detail", "") or type(exc).__name__)[:120])
         _upload_tick(up)
