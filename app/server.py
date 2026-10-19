@@ -9349,14 +9349,62 @@ def build_preview(src: Path, dest: Path, orient: str,
     tmp = dest.with_suffix(f".{os.getpid()}.{threading.get_ident()}.part.mp4")
     err = ""
     for name, args in paths:
-        r = subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", *args, *tail,
-                            str(tmp)], capture_output=True, text=True)
-        if r.returncode == 0 and tmp.exists() and tmp.stat().st_size:
+        rc, stderr = _preview_run(["ffmpeg", "-v", "error", "-y", "-nostdin", *args, *tail,
+                                   str(tmp)])
+        if rc == 0 and tmp.exists() and tmp.stat().st_size:
             tmp.replace(dest)
             return name
-        err = r.stderr[-300:]
+        err = stderr[-300:]
         tmp.unlink(missing_ok=True)
     raise RuntimeError(f"preview failed for {src.name}: {err}")
+
+
+_PREVIEW_PROGRESS = threading.local()
+_PROGRESS_LINE = re.compile(r"^[a-z0-9_]+=")
+
+
+@contextmanager
+def preview_progress(cb: Callable[[float], None] | None):
+    """`build_preview` on this thread in the block reports its encode as it goes: `cb(output
+    seconds)` at every ffmpeg progress report (a head's: the wait line's estimate)."""
+    prev = getattr(_PREVIEW_PROGRESS, "cb", None)
+    _PREVIEW_PROGRESS.cb = cb
+    try:
+        yield
+    finally:
+        _PREVIEW_PROGRESS.cb = prev
+
+
+def _preview_run(cmd: list[str]) -> tuple[int, str]:
+    """`cmd` (an ffmpeg) run to its end: (returncode, its error text). With a progress
+    callback on this thread (`preview_progress`), ffmpeg reports every HEAD_PROGRESS_S on its
+    stdout (`-progress pipe:1`, its errors merged in) and each `out_time_us` is handed on as
+    it comes."""
+    cb = getattr(_PREVIEW_PROGRESS, "cb", None)
+    if cb is None:
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        return r.returncode, r.stderr
+    full = [cmd[0], "-progress", "pipe:1", "-stats_period", f"{HEAD_PROGRESS_S:g}", "-nostats",
+            *cmd[1:]]
+    err: list[str] = []
+    proc = subprocess.Popen(full, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, bufsize=1)
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            if line.startswith("out_time_us="):
+                v = line[len("out_time_us="):].strip()
+                if v.lstrip("-").isdigit():
+                    try:
+                        cb(int(v) / 1e6)
+                    except Exception:  # noqa: BLE001 — a report must never cost the encode
+                        pass
+            elif not _PROGRESS_LINE.match(line):
+                err.append(line)
+                del err[:-20]
+    finally:
+        rc = proc.wait()
+    return rc, "".join(err)
 
 
 def needs_preview(clip: str) -> bool:
@@ -9609,14 +9657,36 @@ HEAD_NAME = re.compile(r"^(?P<stem>[A-Za-z0-9._-]+)\.head(?P<a>\d+)\.(?P<v>[a-z0
 # encode is HEAD_START_S of start-up and the measured seconds per footage second
 # (`head_rate`, HEAD_RATE until one is measured: 8 s of a 4K HEVC GoPro clip took 1.8-3.5 s
 # on the GPU here at load 6-14, 0.1-0.3 s a second past the start-up), slower in proportion
-# past HEAD_LOAD_CORES x the cores busy (14 s took 7.3 s at load 16 on 6 cores), and
+# past HEAD_LOAD_CORES x the cores busy (14 s took 7.3 s at load 16 on 6 cores; 8 s took
+# 3.5-4.0 s at load 2.8-14 in wave 16: below that the load says little), and
 # HEAD_PLAY_S more until its first frame is on screen (the board's long-poll answers, the
 # buffer loads the head and shows its frame: 0.3-0.5 s on Killington).
 HEAD_START_S = 1.0
-HEAD_RATE = {True: 0.15, False: 1.0}
-HEAD_PLAY_S = 0.5
-HEAD_LOAD_CORES = 1.5
+# Verdict 12 punch 10: "~3 s" at +0.6 s and "~1 s" at +5 s for a head that played at +5-8 s.
+# The judge's four fresh-import heads (8 s of KX_03, a 4K HEVC GoPro clip, with the bin's
+# own previews being made beside it) took 3.6-4.0 s at load 2.8-9.7, 0.33-0.38 s a footage
+# second past the start-up — not the 0.15 this said before a head was measured. The first
+# head of a session is the one that is waited on, and it is usually never measured (the
+# one made for the clip's end, after the insert, is stopped by the seek). Wave 16's own
+# trials (load 12-19): 3.5-5.4 s.
+HEAD_RATE = {True: 0.36, False: 1.0}
+# ...and from the head made to its picture on the board (the long-poll answers, the buffer
+# loads the head, its frame shows): 0.3-0.5 s on a quiet Killington box, 0.4-0.9 s in
+# wave 16's trials at load 12-19; and between the encode's last report and the head being
+# made (the muxer's faststart rewrite, the GPU's teardown, the process's exit): 0.2-0.6 s,
+# measured per head after the first (`head_tail`).
+HEAD_PLAY_S = 0.6
+HEAD_LOAD_CORES = 2.5
 HEAD_STOP_S = 0.2        # a head for a time the monitor left, stopped before the next starts
+# Once frames flow the estimate is the encode's own: ffmpeg reports its output time every
+# HEAD_PROGRESS_S (`-progress`), and the seconds left are the footage seconds left at the
+# speed it has made them since its first report (after HEAD_PROGRESS_MIN_S of them), plus
+# the tail (`head_tail`, HEAD_TAIL_S until measured). Before then: the prior, never below
+# HEAD_LEFT_MIN_S.
+HEAD_PROGRESS_S = 0.25
+HEAD_PROGRESS_MIN_S = 0.4
+HEAD_TAIL_S = 0.5
+HEAD_LEFT_MIN_S = 1.0
 
 
 def _head_load() -> float:
@@ -9693,15 +9763,40 @@ def heads_building() -> bool:
         return any(str(k).startswith("head:") for k in MEDIA["building"])
 
 
-def _head_est(span: tuple[float, float]) -> float:
+def _head_encode(span: tuple[float, float]) -> float:
+    """The prior for a head's encode once its frames flow (its start-up not counted)."""
     rate = MEDIA.get("head_rate") or HEAD_RATE[bool(MEDIA.get("gpu"))]
-    return HEAD_START_S + max(0.5, span[1] - span[0]) * rate * _head_load()
+    return max(0.5, span[1] - span[0]) * rate * _head_load()
+
+
+def _head_est(span: tuple[float, float]) -> float:
+    return HEAD_START_S + _head_encode(span)
+
+
+def _head_left(build: dict, now: float) -> float:
+    """Encode seconds left of a head under way (`build`: its head_build entry, `t0` set):
+    from its progress once frames flow (`p0`, `p`: (monotonic, footage seconds made) of its
+    first and newest report), else the prior less how long it has run — and while no frame
+    has come out, never less than the encode's own prior: a start-up running long is not
+    nearly done (verdict 12: "~1 s" for seconds on end)."""
+    span = build["span"]
+    p0, p = build.get("p0"), build.get("p")
+    if p0 is not None and p is not None and p[0] - p0[0] >= HEAD_PROGRESS_MIN_S and p[1] > p0[1]:
+        speed = (p[1] - p0[1]) / (p[0] - p0[0])            # footage seconds a second
+        left = (max(0.0, (span[1] - span[0]) - p[1])) / speed - (now - p[0])
+        return max(0.1, left) + (MEDIA.get("head_tail") or HEAD_TAIL_S)
+    left = _head_est(span) - (now - build["t0"])
+    if p is None:                                          # no frame out yet
+        left = max(left, _head_encode(span))
+    elif p[1] > 0:                                         # frames flowing, too soon to time
+        left = max(left, _head_encode(span) * (1.0 - p[1] / max(0.5, span[1] - span[0])))
+    return max(HEAD_LEFT_MIN_S, left)
 
 
 def head_eta(clip: str) -> float | None:
-    """Seconds until the head being made for `clip` plays (its encode's estimate less how
-    long it has run, plus the head encode ahead of it in HEAD_SLOTS), or None when no head
-    is being made for it."""
+    """Seconds until the head being made for `clip` plays (what is left of its encode,
+    `_head_left`: measured from its progress once frames flow; plus the head encode ahead
+    of it in HEAD_SLOTS), or None when no head is being made for it."""
     stem = Path(clip).stem
     now = time.monotonic()
     with MEDIA["lock"]:
@@ -9718,10 +9813,9 @@ def head_eta(clip: str) -> float | None:
         # and the one for the newest time is made next (_build_heads)
         return round(HEAD_STOP_S + _head_est(head_span(clip, want)) + HEAD_PLAY_S, 1)
     if mine.get("t0") is not None:
-        return round(max(1.0, _head_est(mine["span"]) - (now - mine["t0"])) + HEAD_PLAY_S, 1)
+        return round(_head_left(mine, now) + HEAD_PLAY_S, 1)
     # waiting for the one slot: the running head's time left, then its own
-    ahead = [max(0.0, _head_est(b["span"]) - (now - b["t0"])) for b in builds.values()
-             if b.get("t0") is not None]
+    ahead = [_head_left(b, now) for b in builds.values() if b.get("t0") is not None]
     return round(min(ahead, default=0.0) + _head_est(mine["span"]) + HEAD_PLAY_S, 1)
 
 
@@ -9821,7 +9915,22 @@ def _build_head(clip: str, src: Path, dest: Path, span: tuple[float, float], ori
                     cur["t0"] = t0           # the encode began: head_eta counts from here
             if scope.cancelled:
                 raise RuntimeError("stopped before it started")
-            with procscope.active(scope), procscope.tagged(str(preview_path(stem))):
+
+            def made(out_s: float) -> None:
+                # ffmpeg's output time is clip time from the second frame on (build_preview's
+                # setpts puts the head's frames back at a..b; its first is at 0)
+                if out_s < span[0] - 0.05:
+                    return
+                done = min(span[1] - span[0], max(0.0, out_s - span[0]))
+                with MEDIA["lock"]:
+                    cur = (MEDIA.get("head_build") or {}).get(stem)
+                    if cur is not None and cur.get("scope") is scope:
+                        mark = (time.monotonic(), done)
+                        cur.setdefault("p0", mark)
+                        cur["p"] = mark
+
+            with procscope.active(scope), procscope.tagged(str(preview_path(stem))), \
+                    preview_progress(made):
                 how = build_preview(src, dest, orient, span=span)
             took = time.monotonic() - t0
             # what a head costs here, for the wait line's estimate (head_eta)
@@ -9829,6 +9938,11 @@ def _build_head(clip: str, src: Path, dest: Path, span: tuple[float, float], ori
             with MEDIA["lock"]:
                 old = MEDIA.get("head_rate")
                 MEDIA["head_rate"] = round(per if old is None else 0.6 * old + 0.4 * per, 4)
+                last = ((MEDIA.get("head_build") or {}).get(stem) or {}).get("p")
+                if last is not None:          # its last report to made: the tail
+                    tail = min(3.0, max(0.05, time.monotonic() - last[0]))
+                    old = MEDIA.get("head_tail")
+                    MEDIA["head_tail"] = round(tail if old is None else 0.6 * old + 0.4 * tail, 3)
             meta = {"stem": Path(clip).stem, "clip": clip, "a": span[0], "b": span[1],
                     "picture_v": PICTURE_V, "orient": orient, "src": _range_src_id(src),
                     "how": how, "built_s": round(took, 2), "made": time.time()}
