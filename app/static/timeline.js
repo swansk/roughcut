@@ -90,6 +90,10 @@
  *   tl.clearHistory()           Forget every undo and redo entry. For a cut the server
  *                               changed (an effect's edit accepted, read back in place):
  *                               an entry from before it would put the old cut back over it.
+ *   tl.mark(label)              Push one entry for a change outside the cut (an accepted
+ *                               Designed Effect that only draws): its undo / redo change
+ *                               nothing here and emit `change` under the label, which its
+ *                               owner follows. False while an entry is open.
  *   Every mutation below is undoable on its own when called outside begin/commit (it wraps
  *   itself with its own name as the label), goes through hooks.touch() so autosave and
  *   roughcutFlush behave exactly as before, repaints the board and emits `change`.
@@ -3265,6 +3269,25 @@
     paintUndo();
   }
 
+  /* One entry for a change made outside the cut (verdict 11, punch 2): an accepted
+   * Designed Effect that only draws or sounds (a title, a vignette) changes no shot, so a
+   * commit pushed nothing and Ctrl+Z could not take it back. The entry's before and after
+   * are the cut as it is (the recorded one under an AI review's After): its undo and redo
+   * put nothing back on the board, and the `change` they emit under its label is how its
+   * owner follows them (fx.js → POST /api/fx/undo, /api/fx/redo). Refused (false) while
+   * an entry is open. */
+  function markEntry(label) {
+    if (pending) return false;
+    const now = unrec || snapshot();
+    const name = String(label || 'edit');
+    undoStack.push({ label: name, before: now, after: now });
+    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+    redoStack.length = 0;
+    paintUndo();
+    emit('change', { label: name, kind: 'commit' });
+    return true;
+  }
+
   /* ------------------------------------------------------------ mutations */
   function mutate(kind, fn) {
     if (cutLocked()) return refuseLocked(trackState('V1').lock ? 'V1' : 'A1');
@@ -4087,6 +4110,7 @@
     state, el, mount, render, on,
     byId, indexOf, idAt, dur, speedOf, filmStart, total, shotAt, timeToX, xToTime, eventTime, snapsFor,
     begin, commit, cancel, batch, unrecorded, undo, redo, clearHistory,
+    mark: markEntry,                // an entry for a change outside the cut (fx.js's Accept)
     setRange, move, split, remove, insert, setSpeed, insertAt, overwrite,
     select, syncSel, seek, setPlayhead, zoomTo, fit,
     forSave, needsRekey, afterSave, applyIds, idFor, putTurn, saveHeaders, seqForFlush, seqDirty,

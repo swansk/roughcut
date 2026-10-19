@@ -316,14 +316,17 @@
         if (edits && typeof window.roughcutFlush === 'function') await window.roughcutFlush();
         await api('POST', '/api/fx/accept', { id: e.id });
         if (window.tlLanes && typeof tlLanes.clearGhost === 'function') tlLanes.clearGhost();
-        // the read-back's undo entry is this accept's: known by its commit, the moment it
-        // is made (a Ctrl+Z can come before the rest of the refresh has)
-        if (edits) followUndo.expect = { id: e.id, label: `effect: ${e.name}` };
-        const back = !edits || await refreshCut(e);
+        // ONE undo entry `effect: <name>`, always (verdict 11, punch 2): the read-back of
+        // an edit to the cut, or, for an effect that only draws or sounds (a title, a
+        // vignette: no shot changes), an entry of its own (tl.mark). Known by its commit
+        // the moment it is made (a Ctrl+Z can come before the rest of the refresh has),
+        // under the label the stack shows (`shortName`, so a long name still matches).
+        const label = undoLabel(e);
+        followUndo.expect = { id: e.id, label };
+        const back = edits ? await refreshCut(e, label) : markAccept(label);
         followUndo.expect = null;
         if (!back) return;
-        say(edits ? `${e.name}: accepted — in the cut · ${undoWord()} undoes the edit`
-          : `${e.name}: accepted — in the cut`);
+        say(`${e.name}: accepted — in the cut · ${undoWord()} undoes it`);
         await refresh();
       } else if (name === 'discard') {
         await api('POST', '/api/fx/discard', { id: e.id });
@@ -356,17 +359,29 @@
    * "one accept is one undo step"): Ctrl+Z puts the cut back as it was before Accept,
    * and Ctrl+Shift+Z brings the edit back. */
   // the undo button reads "undo: effect: <name> (Ctrl+Z)" in ≤ 40 characters, on a whole word
-  // (verdict 9 punch 3: undo labels are never a sentence cut mid-word)
-  function shortName(name, max = 22) {
+  // (verdict 9 punch 3: undo labels are never a sentence cut mid-word): "undo: effect: " and
+  // " (Ctrl+Z)" are 23 of them, so a name of up to 17 shows whole and a longer one is cut
+  // to its whole words in 16 and an ellipsis (verdict 11 punch 2: it was cut at 22, and
+  // "soft feathered vignette" read 46 characters)
+  function shortName(name, max = 17) {
     const n = String(name || 'effect').trim().replace(/\s+/g, ' ');
     if (n.length <= max) return n;
-    const cut = n.slice(0, max + 1).replace(/\s+\S*$/, '');
-    return (cut || n.slice(0, max)).replace(/[\s,;:.\-–—]+$/, '') + '…';
+    const room = max - 1;                          // the ellipsis is the last one
+    const cut = n.slice(0, room + 1).replace(/\s+\S*$/, '');
+    return (cut && cut.length <= room ? cut : n.slice(0, room)).replace(/[\s,;:.\-–—]+$/, '') + '…';
   }
   const undoWord = () => (/Mac|iPhone|iPad/.test(navigator.platform || '') ? '⌘Z' : 'Ctrl+Z');
-  async function refreshCut(e) {
+  const undoLabel = (e) => `effect: ${shortName(e.name)}`;
+  /* An accept that changes no shot: its own entry on the timeline's stack. Without a
+   * timeline (a page with no board) the accept still stands; there is no stack to join. */
+  function markAccept(label) {
+    const t = TL();
+    if (t && typeof t.mark === 'function') t.mark(label);
+    return true;
+  }
+  async function refreshCut(e, label = undoLabel(e)) {
     if (typeof window.roughcutRefresh === 'function') {
-      try { await window.roughcutRefresh({ undo: `effect: ${shortName(e.name)}` }); return true; } catch (err) { /* reload below */ }
+      try { await window.roughcutRefresh({ undo: label }); return true; } catch (err) { /* reload below */ }
     }
     if (typeof location === 'undefined') return true;
     say(`${e.name}: the cut changed — reloading`);

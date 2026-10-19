@@ -224,6 +224,38 @@ def test_accept_moves_it_into_the_edl_and_remove_takes_it_out(stubbed, client):
     assert client.get("/api/fx").json()["effects"] == []
 
 
+def test_an_overlay_only_accept_is_taken_back_and_put_back(stubbed, client):
+    """Verdict 11, punch 2: every accept is one undo entry on the board, and the board's
+    Ctrl+Z / Ctrl+Shift+Z call POST /api/fx/undo / redo. An accept with no edit to the cut
+    (the hit markers here; a title, a vignette) kept no record of what to take back, so
+    undo answered 404 "has no accepted edit to take back". Now it does: undo puts the
+    record back to proposed and the EDL as it was, redo makes both accepted again, and
+    a second undo or redo in a row changes nothing."""
+    project = stubbed
+    shot = _seed(project, client)
+    before = json.loads(project["edl"].read_text(encoding="utf-8"))
+    job = client.post("/api/fx/design", json={"shot": shot, "note": "hit markers"}).json()["job"]
+    fx_id = _wait(client, job)["result"]["id"]
+    assert client.post("/api/fx/accept", json={"id": fx_id}).status_code == 200
+    after = json.loads(project["edl"].read_text(encoding="utf-8"))
+    assert [e["id"] for e in after["effects"]] == [fx_id] and after["segments"] == before["segments"]
+
+    r = client.post("/api/fx/undo", json={"id": fx_id})
+    assert r.status_code == 200 and r.json() == {"ok": True, "state": "undone", "changed": True}
+    edl = json.loads(project["edl"].read_text(encoding="utf-8"))
+    assert edl == before                                       # no `effects`, the cut the same
+    lst = client.get("/api/fx").json()["effects"]
+    assert [(x["id"], x["status"]) for x in lst] == [(fx_id, "proposed")]
+    assert client.post("/api/fx/undo", json={"id": fx_id}).json()["changed"] is False
+
+    r = client.post("/api/fx/redo", json={"id": fx_id})
+    assert r.status_code == 200 and r.json()["state"] == "done"
+    assert json.loads(project["edl"].read_text(encoding="utf-8")) == after
+    lst = client.get("/api/fx").json()["effects"]
+    assert [(x["id"], x["status"]) for x in lst] == [(fx_id, "accepted")]
+    assert client.post("/api/fx/redo", json={"id": fx_id}).json()["changed"] is False
+
+
 def test_remove_keeps_the_effect_for_restore_and_accept_keeps_the_previous_for_revert(stubbed, client):
     """Karl: effects applied long term must be reversible, and more can go on top."""
     project = stubbed
