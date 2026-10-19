@@ -525,7 +525,11 @@ def test_the_app_bar_clips_nothing_and_a_fresh_bin_has_one_first_action(live_ser
     pg.wait_for_function("window.flowBar && flowBar.state() && window.rcFirstPass"
                          f" && rcFirstPass.state() && rcFirstPass.state().state === '{fp['state']}'",
                          timeout=15000)
-    pg.wait_for_function(f"document.querySelectorAll('#progress .job').length === {len(jobs)}",
+    # while a pass runs, the jobs it is made of (its index, the Ask writing its cut) are
+    # read on its control, not a pill each (verdict 10, punch 9: app.js `passJob`)
+    running = fp.get("state") == "running"
+    pills = [j for j in jobs if not (running and (j["kind"] == "index" or j.get("firstpass")))]
+    pg.wait_for_function(f"document.querySelectorAll('#progress .job').length === {len(pills)}",
                          timeout=10000)
     pg.wait_for_timeout(800)
     shots = os.environ.get("ROUGHCUT_HEADER_SHOTS")
@@ -551,7 +555,7 @@ def test_the_app_bar_clips_nothing_and_a_fresh_bin_has_one_first_action(live_ser
         assert "Index the footage" not in pg.locator("header").inner_text()
     else:
         # every job is an icon and its %, the name in its hover
-        for j in jobs:
+        for j in pills:
             row = pg.locator(f"#progress .job[data-job={j['id']}]")
             assert row.locator(".jnums").inner_text().startswith(f"{round(j['pct'])}%")
             assert not row.locator(".jname").is_visible()
@@ -574,6 +578,11 @@ def test_the_app_bar_clips_nothing_and_a_fresh_bin_has_one_first_action(live_ser
         # (lane PASS: "First pass · n/12", n = clips heard AND looked at — 0 here)
         assert label == "First pass · 0/12", label
         assert chip.count() == 0 and blue == [], blue
+        # one readout per job family: the pass's index is its control's time left, the
+        # editor's own Ask keeps its pill
+        assert [j["id"] for j in pills] == ["hd-ask"]
+        assert pg.locator('[data-testid="firstpass-left"]').inner_text() == "~80 min left"
+        assert pg.locator("#progress .job[data-job=hd-index]").count() == 0
     assert errors == []
     pg.unroute_all(behavior="ignoreErrors")
     ctx.close()
