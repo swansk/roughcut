@@ -161,7 +161,8 @@ def test_the_perf_line_names_the_graded_canvas():
 
 RETRIED = {"n": 2, "name": "firstpass", "ok": True,
            "words": "the page's renderer crashed (the browser still up · no FATAL line)"}
-SLOW = {"slowest_api": {"ms": 140, "method": "GET", "path": "/api/state"}}
+SLOW = {"slowest_api": {"ms": 140, "method": "GET", "path": "/api/state"},
+        "slowest_loop": {"ms": 22.9, "where": {"loop": "", "busy": []}}}
 
 
 def _journey_json(tmp_path: Path, line: str, retried: list | None, **kw) -> Path:
@@ -179,8 +180,41 @@ def test_a_journey_with_no_retry_is_green(tmp_path):
     out = _journey_json(tmp_path, "journey ✓ 24 steps · 53 s", [])
     green, line, amber = gate.journey_read(out, tmp_path / "journey.log", 0)
     assert green and not amber, line
-    assert line == "24 steps · 53 s · slowest request 0.14 s GET /api/state"
+    assert line == "24 steps · 53 s · slowest request 0.14 s GET /api/state · slowest loop hold 23 ms"
     assert gate.run_status([("journey", green, line)], {"journey"} if amber else set()) == ("GREEN", 0)
+
+
+def test_a_loop_hold_over_the_budget_turns_the_journey_red_and_says_where(tmp_path):
+    """Verdict 11 (REDESIGN-GOAL 2026-10-19): a request's `ms` leaves out an upload's body
+    wait, so a loop hold during one showed in no gate line. The journey line prints
+    `slowest_loop` and is RED over the logged 200 ms budget, naming where the loop was."""
+    import json
+    for ms, where, red, said in (
+            (199.0, {"loop": "server.py:2054 api_x"}, False, "slowest loop hold 199 ms"),
+            (231.4, {"loop": "server.py:2054 api_upload < server.py:2010 body"}, True,
+             "slowest loop hold 231 ms (over 200 ms: server.py:2054 api_upload < server.py:2010 body)"),
+            (692.0, {"loop": "", "busy": ["AnyIO worker thread (120 ms cpu): server.py:794 load_visual"]}, True,
+             "slowest loop hold 692 ms (over 200 ms: AnyIO worker thread (120 ms cpu): server.py:794 load_visual)"),
+            (450.0, {"loop": "", "busy": []}, True, "slowest loop hold 450 ms (over 200 ms: nothing in the server ran)")):
+        (tmp_path / f"h{ms:.0f}").mkdir()
+        out = _journey_json(tmp_path / f"h{ms:.0f}", "journey ✓ 24 steps · 53 s", [])
+        rec = json.loads((out / "journey.json").read_text())
+        rec["slow"] = {**SLOW, "slowest_loop": {"ms": ms, "where": where}}
+        (out / "journey.json").write_text(json.dumps(rec))
+        green, line, amber = gate.journey_read(out, tmp_path / "journey.log", 0)
+        assert green is not red and not amber, (ms, line)
+        assert line.endswith(said), (ms, line)
+        assert gate.run_status([("journey", green, line)], set())[0] == ("RED" if red else "GREEN")
+
+
+def test_a_server_that_never_measured_its_loop_says_so(tmp_path):
+    import json
+    out = _journey_json(tmp_path, "journey ✓ 24 steps · 53 s", [])
+    rec = json.loads((out / "journey.json").read_text())
+    rec["slow"] = {"slowest_api": SLOW["slowest_api"], "slowest_loop": None}
+    (out / "journey.json").write_text(json.dumps(rec))
+    green, line, _ = gate.journey_read(out, tmp_path / "journey.log", 0)
+    assert green and line.endswith("· slowest loop hold: not measured"), line
 
 
 def test_a_retried_step_makes_the_journey_amber_and_names_it(tmp_path):
