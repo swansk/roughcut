@@ -851,7 +851,8 @@ onmessage = (e) => {
     const m = G.mix;
     const mixing = !!(m && m.rec && m.w > 0 && m.video.readyState >= 2 && m.video.videoWidth);
     const playing = (!v.paused && !v.ended) || playerPlaying();
-    const [w, h] = drawSize(vw, vh, playing, mixing);
+    // (near a dissolve the canvas keeps the mix's size: mixNear)
+    const [w, h] = drawSize(vw, vh, playing, mixing || (playing && G.mixZone));
     const rec = raw || G.lut.identity ? IDENTITY_TABLE : G.lut;
     const parked = v.paused && !v.seeking
       ? `${v.id}|${v.currentSrc}|${v.currentTime}|${w}x${h}` : null;
@@ -1356,6 +1357,17 @@ onmessage = (e) => {
    * dissolves graded (the canvas, through identity tables here) held none over 67 (bin/ab3).
    * The shader's mix is the CSS one (both blend R'G'B' at the incoming weight), and paused
    * the layer is shown as before. */
+  /* The player is near a dissolve (app.js programMix: from MIX_ZONE_S before its incoming
+   * follower starts to MIX_ZONE_S after its window): while playing, the canvas is drawn at
+   * the mix's size all that time (drawSize), so it is not resized where the mix begins and
+   * ends. A resize there coincided with the mix's first frames, the cut's work and the park
+   * of the next shot, and held the canvas 80-110 ms and the live frames up to 100 ms on
+   * Killington (wave 14 PLAY4: every canvas hole over 67 ms in a graded dissolve's play sat
+   * on a 640 → 454 or 454 → 640 width change). */
+  function mixNear(on) {
+    G.mixZone = !!on;
+  }
+
   function mixDrawn() {
     if (!G.mix || !(G.mix.w > 0) || !G.mix.rec) return false;
     return mixIsGraded() || playerPlaying();
@@ -1512,6 +1524,7 @@ onmessage = (e) => {
     prefetch,
     invalidate,
     setMix,
+    mixNear,
     get mix() { return G.mix ? { id: G.mix.id, w: G.mix.w, graded: mixIsGraded() } : null; },
     draw: settle,
     probe,

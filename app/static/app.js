@@ -2178,6 +2178,7 @@ const TX_CATCH_S = 0.3;      // a drift is taken out over about this much film
 const TX_STEER = 0.6;        // the rate moves at most this far from the film's
 const TX_RATE_MS = 250;      // a steered rate changes at most this often (txFollow)
 const TX_OUT_BAND = 0.07;    // the kept outgoing buffer's dead band (film s): two frames
+const MIX_ZONE_S = 1.2;      // the grade's mix size this long before a dissolve's follower starts and after it
 
 function txFollow(el, seg, clipT, play, band = 1 / 60) {
   const spd = speedOf(seg);
@@ -2435,6 +2436,21 @@ function programMix(t, play, proposal) {
         progFollow(el, (side === 'in' ? b : a).clip, pre, 1, false, 0);
       }
     }
+  }
+  // Near a dissolve, while playing, the grade draws at the mix's size from MIX_ZONE_S before
+  // its incoming follower starts to MIX_ZONE_S after its window (grade.mixNear): the canvas
+  // is not resized where the mix begins or ends, on the frames that carry its first draws,
+  // the cut and the next shot's park
+  if (g && typeof g.mixNear === 'function') {
+    let zone = false;
+    if (play) {
+      const near = at || next;
+      const vid = (c) => c.video > 0 && !TX_DIPS.has(c.vkind);
+      if (near && vid(near.c) && t >= near.c.at - near.c.video - TX_PRE - MIX_ZONE_S) zone = true;
+      if (at && vid(at.c)) tx.zoneUntil = at.c.at + at.c.video + MIX_ZONE_S;
+      if (tx.zoneUntil != null && t < tx.zoneUntil) zone = true;
+    } else tx.zoneUntil = null;
+    g.mixNear(zone);
   }
   // the dissolve's picture: the grade draws it (both graded through their own LUTs), else
   // the follower's own layer at CSS opacity over the raw live buffer
@@ -2888,7 +2904,7 @@ function advance() {
     if (g !== player.gen || !segs[next + 1]) return;
     if (short) armUpcoming(next, g, Math.max(0, (nseg.out - nv.currentTime) / speedOf(nseg)));
     // into a dissolve's second half: the park waits for its end (afterTxWindow)
-    else afterFirstFrames(nv, () => afterTxWindow(next, g, () => { if (g === player.gen) armUpcoming(next, g); }));
+    else afterFirstFrames(nv, () => afterTxWindow(next, g, () => { if (g === player.gen) armUpcoming(next, g); }, 0.1));
   });
   const go = () => {
     if (g !== player.gen || !player.playing) return;
@@ -2934,7 +2950,7 @@ function advance() {
   };
   if (short) setTimeout(settle, (tl.dur(nseg) + 0.1) * 1000);
   // (inside a dissolve, after it: its ~100 ms of main thread held the followers' frames)
-  else afterFirstFrames(nv, () => afterFirstFrames(nv, () => afterTxWindow(next, g, settle), 1));
+  else afterFirstFrames(nv, () => afterFirstFrames(nv, () => afterTxWindow(next, g, settle, 0.35), 1));
   paintTransport();
   schedule();
 }
@@ -2945,13 +2961,16 @@ function advance() {
  * outgoing follower (three decoders in the window, TXHITCH's measured fourth). At once
  * when there is no dissolve there, when the monitor stops, or when the shot has too
  * little left after the window for the park and its preroll to land in time. */
-function afterTxWindow(i, g, fn) {
+function afterTxWindow(i, g, fn, after = 0) {
   const halves = window.tl && typeof tl.transitionHalves === 'function' ? tl.transitionHalves() : [];
   const c = halves[i - 1];
   const h = c ? txHalf(c) : 0;
   const seg = segs[i];
   if (!(h > 0) || !seg) { fn(); return; }
-  const end = c.at + h;                                      // film time the window ends
+  // film time the window ends, and `after` that (wave 14: the park of the shot after it and
+  // the inspector's rebuild went in the window's last frame together, a 50 ms frame on
+  // Killington and the live shot held 83 ms there; they go a few frames apart now)
+  const end = c.at + h + after;
   const room = filmStart(i) + tl.dur(seg) - end;             // film left in the shot after it
   if (room < roll.seek + roll.lat + Math.max(PREROLL_S, txLeadIn(segs[i + 1])) + 0.15) { fn(); return; }
   const wait = () => {
