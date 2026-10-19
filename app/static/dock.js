@@ -111,7 +111,10 @@
 
   function badge(name, n) {
     const b = $(`.ws-tab[data-tool="${name}"] .badge`);
+    const was = b ? b.textContent : '';
     if (b) b.textContent = n ? String(n) : '';
+    // a badge widens its tab: the group's default width is weighed against its strip again
+    if (b && was !== b.textContent && b.closest('#pInspector')) layout();
   }
 
   /* ================================================================ the header's height */
@@ -158,7 +161,9 @@
   // wide (the list, the section's padding, the panel's border and a scrollbar), taken
   // from the Timeline when the Timeline keeps SEL_TLW after it (1440 px windows and up;
   // narrower ones keep the Timeline whole and Selects shows the columns it has room for).
-  // The Project tab gives the width back.
+  // The Project tab gives the width back. Verdict 12, punch 8: the Timeline it leaves is
+  // never under what its own header row needs whole (`tlHeadNeed`: the panel's title and the
+  // AI prompt at its least: the chip's words, a 160 px input), whichever is more.
   const SELECTS_W = 592, SEL_TLW = 460;
   const SPLIT = 4;
   // The Assistant's full-height column (a waiting proposal's `ptall`, app.js; an AI review's
@@ -202,11 +207,14 @@
     const src = Math.round(clamp(frac.src == null ? (a.W - SPLIT) / 2 : frac.src * a.W,
       MIN.src, a.W - SPLIT - MIN.prog));
     const top = Math.round(clamp(frac.top * (a.H - SPLIT), MIN.top, a.H - SPLIT - MIN.tl));
-    // the bottom row: Project | Timeline | Effect Controls
-    const insp = Math.round(clamp(frac.insp * a.W, MIN.insp, a.W * 0.42));
+    // the bottom row: Project | Timeline | Effect Controls. At its default width Effect
+    // Controls holds its five tabs whole (at 1280 its 25.5 % read "Expo"); a width dragged
+    // narrower scrolls the strip, as every group's does.
+    const inspW = frac.insp === DEFAULTS.insp ? Math.max(frac.insp * a.W, tabsNeed('#pInspector')) : frac.insp * a.W;
+    const insp = Math.round(clamp(inspW, MIN.insp, a.W * 0.42));
     const room = a.W - 2 * SPLIT - insp;
     let proj = Math.round(clamp(frac.proj * a.W, MIN.proj, Math.min(a.W * 0.42, room - MIN.tlw)));
-    if (selectsOpen() && room - SELECTS_W >= SEL_TLW) proj = Math.max(proj, SELECTS_W);
+    if (selectsOpen() && room - SELECTS_W >= Math.max(SEL_TLW, tlHeadNeed())) proj = Math.max(proj, SELECTS_W);
     px = { proj, insp, src, top, prog: a.W - SPLIT - src, tl: a.H - SPLIT - top, tlw: room - proj };
     root.setProperty('--c-proj', `${proj}px`);
     root.setProperty('--c-insp', `${insp}px`);
@@ -217,6 +225,38 @@
 
   function saveLayout() { store.set(LAYOUT_KEY, { ...frac, v: LAYOUT_V }); }
   const selectsOpen = () => isOpen('bin');
+
+  /* A panel group's width for its tab strip whole: its borders, its header's padding and
+   * every tab at its own width (their badges as they are now). */
+  function tabsNeed(sel) {
+    const p = $(sel), head = p && p.querySelector(':scope > .ws-head');
+    const strip = head && head.querySelector('.ws-tabs');
+    if (!strip || !strip.getClientRects().length) return 0;
+    const n = (v) => parseFloat(v) || 0;
+    const pcs = getComputedStyle(p), hcs = getComputedStyle(head), scs = getComputedStyle(strip);
+    const tabs = [...strip.children].filter((t) => t.getClientRects().length);
+    return Math.ceil(n(pcs.borderLeftWidth) + n(pcs.borderRightWidth) + n(hcs.paddingLeft) + n(hcs.paddingRight)
+      + tabs.reduce((acc, t) => acc + t.getBoundingClientRect().width, 0)
+      + n(scs.columnGap) * Math.max(0, tabs.length - 1));
+  }
+
+  /* The Timeline panel's least width for its header row whole: its borders and padding, its
+   * title tab at its own width ("Timeline: <cut>", the label's hidden overflow counted) and
+   * the AI prompt at its least (aiprompt.js `rcAI.least()`; 0 before it has mounted). */
+  function tlHeadNeed() {
+    const p = $('#pTimeline'), head = p && p.querySelector(':scope > .ws-head');
+    if (!head || !window.rcAI || typeof rcAI.least !== 'function') return 0;
+    const ai = rcAI.least();
+    if (!ai) return 0;
+    const n = (v) => parseFloat(v) || 0;
+    const pcs = getComputedStyle(p), hcs = getComputedStyle(head);
+    const title = $$('#pTimeline > .ws-head .ws-tab').reduce((acc, t) => {
+      const l = t.querySelector('.lbl');
+      return acc + t.getBoundingClientRect().width + (l ? Math.max(0, l.scrollWidth - l.clientWidth) : 0);
+    }, 0);
+    return Math.ceil(n(pcs.borderLeftWidth) + n(pcs.borderRightWidth) + n(hcs.paddingLeft)
+      + n(hcs.paddingRight) + n(hcs.columnGap) + title + ai);
+  }
 
   function resetLayout(key) {
     if (key) frac[key] = DEFAULTS[key]; else frac = { ...DEFAULTS };
@@ -2253,6 +2293,8 @@
     const p = $('#progTitle .lbl'), t = $('#tlTitle .lbl');
     if (p) p.textContent = `Program${n}`;
     if (t) t.textContent = `Timeline${n}`;
+    // a longer title needs more of the row: the Selects width is weighed against it again
+    if (selectsOpen()) layout();
   }
 
   window.dock = {

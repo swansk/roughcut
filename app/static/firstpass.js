@@ -117,18 +117,28 @@
   }
 
   /* What a re-run keeps, in one line: "Keeps 3 shots you cut by hand · keeps the grade on
-   * every shot it keeps · may replace 19". Only a cut made by hand (a trim, razor, move,
-   * speed change or insert) locks a shot's place; a grade or an effect, by hand or from
-   * the AI, rides on whatever shot survives (verdict 11, punch 6: after an AI Color Match
-   * over the film this read "may replace 0"). */
+   * every shot it keeps · may replace 19". Only a cut (a trim, razor, move, speed change or
+   * insert) locks a shot's place; a grade or an effect, by hand or from the AI, rides on
+   * whatever shot survives (verdict 11, punch 6: after an AI Color Match over the film this
+   * read "may replace 0"). A cut the AI made and the editor accepted locks the shot too, and
+   * the words say who made it (verdict 12, punch 10: an AI trim read "cut by hand"): the
+   * server's `by` on each kept row, "ai" or "hand". */
   const KEEPS_GRADE = 'keeps the grade on every shot it keeps';
+  const byAI = (r) => r && r.by === 'ai';
+  function keptWho(keep) {
+    const ai = keep.filter(byAI).length, hand = keep.length - ai;
+    if (!ai) return `${plural(hand, 'shot')} you cut by hand`;
+    if (!hand) return `${plural(ai, 'shot')} edited by the AI`;
+    return `${plural(keep.length, 'edited shot')} (${hand} cut by hand, ${ai} by the AI)`;
+  }
   function keepLine(w) {
     const keep = (w && w.keep) || [], rep = (w && w.replace) || [];
     if (!keep.length && !rep.length) return 'No cut yet — it proposes a first one.';
     if (!FP.keepMine) {
-      return `Keeps none of your hand cuts · ${KEEPS_GRADE} · may replace all ${keep.length + rep.length}`;
+      const none = keep.some(byAI) ? 'Keeps none of the edited shots' : 'Keeps none of your hand cuts';
+      return `${none} · ${KEEPS_GRADE} · may replace all ${keep.length + rep.length}`;
     }
-    return `Keeps ${plural(keep.length, 'shot')} you cut by hand · ${KEEPS_GRADE} · may replace ${rep.length}`;
+    return `Keeps ${keptWho(keep)} · ${KEEPS_GRADE} · may replace ${rep.length}`;
   }
 
   /* Verdict 4: a re-run brought back a shot the editor had rejected. What it will not
@@ -143,7 +153,7 @@
 
   function shotLine(r) {
     return `shot ${r.pos} · ${clipName(r.clip, r.name)} ${clockS(r.in)}–${clockS(r.out)}`
-      + (r.words ? ` · ${r.words}` : '');
+      + (r.words ? ` · ${r.words}${byAI(r) ? ' by the AI' : ''}` : '');
   }
 
   /* ------------------------------------------------------------ the header control */
@@ -348,7 +358,7 @@
         `<li data-shot="${esc(r.id)}">${esc(shotLine(r))}</li>`).join('')}</ul>` : '';
     const toggleKeep = keep.length && !live
       ? `<label class="fp-keepmine"><input type="checkbox" data-fp="keepmine"${FP.keepMine ? ' checked' : ''}>`
-        + ' keep the shots I cut by hand, exactly</label>' : '';
+        + `${keep.some(byAI) ? ' keep the edited shots, exactly' : ' keep the shots I cut by hand, exactly'}</label>` : '';
     const p = s.proposal || {};
     const pending = !live && p.pending && p.job
       ? `<div class="fp-result">${esc(p.sentence || 'A proposed cut is waiting.')} `
@@ -418,7 +428,8 @@
       if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
       FP.watching = d.job;
       const k = (d.keep || []).length;
-      say(`first pass started — ${k ? `keeping ${plural(k, 'shot')} you cut by hand` : 'nothing changes until you accept'}`);
+      const kept = ((FP.s && FP.s.would && FP.s.would.keep) || []).filter((r) => (d.keep || []).includes(r.id));
+      say(`first pass started — ${k ? `keeping ${kept.length === k ? keptWho(kept) : plural(k, 'edited shot')}` : 'nothing changes until you accept'}`);
     } catch (e) {
       FP.err = `could not start: ${e.message || e}`;
     } finally {

@@ -146,7 +146,7 @@
   const FIRSTPASS = {
     name: () => (window.rcFirstPass && rcFirstPass.label ? rcFirstPass.label() : 'Run first pass'),
     what: 'Hears and looks at every clip, picks the best moments and proposes a rough cut.',
-    change: 'Nothing until you accept: the cut it proposes waits on a Proposal track. A re-run keeps the shots you cut by hand, and every kept shot keeps its grade.',
+    change: 'Nothing until you accept: the cut it proposes waits on a Proposal track. A re-run keeps the shots you or the AI cut, and every kept shot keeps its grade.',
     price: fpPrice,
   };
   const PROMPT = {
@@ -286,7 +286,7 @@
   }
 
   let card = null;                 // the card element (one, reused)
-  const hover = { el: null, timer: 0, shownAt: -1e9, title: null, watch: null, gen: 0 };
+  const hover = { el: null, timer: 0, check: 0, shownAt: -1e9, title: null, watch: null, gen: 0, quiet: null };
 
   function cardEl() {
     if (!card) {
@@ -367,18 +367,39 @@
     c.hidden = false;
     placeCard(el);
     stashTitle(el);
+    // a control redrawn or hidden under a still pointer sends no pointerout: its card goes
+    // with it rather than staying over whatever took its place
+    clearInterval(hover.check);
+    hover.check = setInterval(() => {
+      if (!hover.el || !hover.el.isConnected || !visible(hover.el)) hideCard();
+    }, 250);
   }
 
   function hideCard() {
     clearTimeout(hover.timer);
+    clearInterval(hover.check);
     hover.gen++;
     if (card && !card.hidden) { card.hidden = true; hover.shownAt = performance.now(); }
     restoreTitle(hover.el);
     hover.el = null;
   }
 
+  /* A control just clicked says nothing more until the pointer leaves it (verdict 12, punch
+   * 8: the first pass's card came back over the panel its click opened, and hid the line
+   * under Stop): the click took the card down, and a move inside the control, or the control
+   * redrawn under a still pointer, does not bring it back. */
+  const quieted = (hit) => !!(hover.quiet && (hit.el === hover.quiet.el
+    || (hit.spec === hover.quiet.spec && !hover.quiet.el.isConnected)));
+  function onDown(e) {
+    const hit = cardFor(e.target);
+    hover.quiet = hit ? { el: hit.el, spec: hit.spec } : null;
+    if (hover.el) hideCard();
+  }
+
   function onOver(e) {
     const hit = cardFor(e.target);
+    if (!hit && hover.el && !hover.el.contains(e.target)) { hideCard(); return; }
+    if (hit && quieted(hit)) return;
     if (!hit || hit.el === hover.el) return;
     const warm = (card && !card.hidden) || performance.now() - hover.shownAt < WARM_MS;
     hideCard();
@@ -389,8 +410,12 @@
     hover.timer = setTimeout(() => { if (gen === hover.gen) showCard(hit.el, hit.spec); }, warm ? 0 : HOVER_MS);
   }
   function onOut(e) {
-    if (!hover.el) return;
     const to = e.relatedTarget;
+    if (hover.quiet) {
+      const into = to instanceof Element ? cardFor(to) : null;
+      if (!(into && quieted(into))) hover.quiet = null;
+    }
+    if (!hover.el) return;
     if (to && hover.el.contains(to)) return;
     hideCard();
   }
@@ -613,6 +638,12 @@
    * (V1 / V2's lock, eye and target), which step 1 covered on a first land (verdict 9,
    * dimensions 1 and 16), and the monitors' transport rows. */
   const KEEP_CLEAR = ['#tl .tl-side', '#pSource .transport', '#pProgram .transport'];
+  /* …and what it is never placed over at all, wherever it ends up (verdict 12, punch 8: step
+   * 5's callout covered the Assistant's Accept, "ccept", and step 1's the Source's
+   * "preparing preview…"): the proposal's and the AI review's Accept / Discard, and the
+   * monitors' status lines. */
+  const NEVER_COVER = ['#acceptProposal', '#acceptAll', '#rejectProposal', '#playProposal',
+    '[data-testid="ai-accept-all"]', '[data-testid="ai-reject-all"]', '.monWait span', '#screenMsg'];
   const DOCK_MIN_W = 200;                 // px: narrowest the callout gets beside a dialog
 
   /* The modal dialog on top (Import, Export…), if one is up. A modal is in the top layer,
@@ -689,7 +720,11 @@
     }
     // and never on the track headers (behind a dialog's backdrop they do not matter)
     const clear = docked ? [] : KEEP_CLEAR.map((sel) => seenRect($(sel))).filter(Boolean);
-    const onClear = (x, y) => clear.some((r) => x < r.right && x + w > r.left && y < r.bottom && y + h > r.top);
+    // nor ever on an Accept or a status line (the anchor itself excepted: it is beside it)
+    const hard = docked ? [] : NEVER_COVER.flatMap((sel) => $$(sel))
+      .filter((e) => e !== anchor && !e.contains(anchor)).map(seenRect).filter(Boolean);
+    const hit = (rects, x, y) => rects.find((r) => x < r.right && x + w > r.left && y < r.bottom && y + h > r.top);
+    const onClear = (x, y) => !!hit(clear, x, y) || !!hit(hard, x, y);
     const inWindow = (x, y) => x >= m && y >= m && x + w <= innerWidth - m && y + h <= innerHeight - m;
     const fits = (x, y) => inWindow(x, y) && !onClear(x, y);
     // what the arrow points at: a control's middle; a whole panel's upper part (below its
@@ -710,8 +745,8 @@
     // (above the Source's transport rather than on it), the arrow still on the anchor
     const slide = ([sd, tx, ty]) => {
       let x0 = tx, y0 = ty;
-      for (let k = 0; k < 3; k++) {
-        const r = clear.find((c) => x0 < c.right && x0 + w > c.left && y0 < c.bottom && y0 + h > c.top);
+      for (let k = 0; k < 4; k++) {
+        const r = hit(clear, x0, y0) || hit(hard, x0, y0);
         if (!r) break;
         if (sd === 'above') y0 = r.top - gap / 2 - h;
         else if (sd === 'below') y0 = r.bottom + gap / 2;
@@ -724,11 +759,28 @@
     // no side clear of them: the first that is on screen; a panel almost as big as the
     // window: inside it, in its top-right corner (a dialog: its bottom-left, over the
     // places list, clear of its title bar and its buttons)
-    const [side, x, y] = tries.find(([, tx, ty]) => fits(tx, ty))
+    const free = (x0, y0) => inWindow(x0, y0) && !hit(hard, x0, y0);
+    let [side, x, y] = tries.find(([, tx, ty]) => fits(tx, ty))
       || ['above', 'below', 'left', 'right'].map((sd) => slide(bySide[sd])).find(([, tx, ty]) => fits(tx, ty))
-      || tries.find(([, tx, ty]) => inWindow(tx, ty))
+      || tries.find(([, tx, ty]) => free(tx, ty))
       || (docked ? ['inside', clampX(ar.left + gap), clampY(ar.bottom - h - 56)]
         : ['inside', clampX(ar.right - w - gap), clampY(ar.top + gap)]);
+    if (hit(hard, x, y)) {
+      // the last resort landed on an Accept or a status line: the nearest spot off them (and
+      // off the anchor), its arrow dropped (it no longer sits beside what it points at)
+      const off = (x0, y0) => free(x0, y0) && !(x0 < ar.right && x0 + w > ar.left && y0 < ar.bottom && y0 + h > ar.top);
+      const near = [];
+      for (const r of hard) {
+        near.push([clampX(x), r.bottom + gap / 2], [clampX(x), r.top - gap / 2 - h],
+          [r.right + gap / 2, clampY(y)], [r.left - gap / 2 - w, clampY(y)]);
+      }
+      for (let yy = m; yy + h <= innerHeight - m; yy += 24) {
+        for (let xx = m; xx + w <= innerWidth - m; xx += 24) near.push([xx, yy]);
+      }
+      const d = (p) => Math.hypot(p[0] - x, p[1] - y);
+      const best = near.filter(([x0, y0]) => off(x0, y0)).sort((a, b) => d(a) - d(b))[0];
+      if (best) [side, x, y] = ['inside', best[0], best[1]];
+    }
     T.root.style.left = `${Math.round(x)}px`;
     T.root.style.top = `${Math.round(y)}px`;
     T.root.dataset.side = side;
@@ -833,8 +885,8 @@
   function init() {
     document.addEventListener('pointerover', onOver, true);
     document.addEventListener('pointerout', onOut, true);
-    ['pointerdown', 'keydown'].forEach((ev) =>
-      document.addEventListener(ev, () => { if (hover.el) hideCard(); }, true));
+    document.addEventListener('pointerdown', onDown, true);
+    document.addEventListener('keydown', () => { if (hover.el) hideCard(); }, true);
     window.addEventListener('blur', () => { if (hover.el) hideCard(); });
     // a scroll moves the control from under its card: the card goes (one still waiting
     // for its delay is placed where the control is when it comes up)

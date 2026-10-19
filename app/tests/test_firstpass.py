@@ -164,6 +164,32 @@ def test_a_grade_or_an_effect_is_never_a_hand_edit():
         "g02": ["trim"], "g03": ["trim"]}
 
 
+def test_a_cut_the_ai_made_and_the_editor_accepted_is_marked_the_ais():
+    """Verdict 12, punch 10: an accepted AI trim and speed change read "cut by hand". The
+    assist records' accepted ops name the shots the AI cut (`ai_cuts`); a row whose every
+    edit is one of them is the AI's (`by: "ai"`), still a locked edit; a rejected op, a
+    grade op, and a row with an edit of the editor's own besides stay the editor's."""
+    recs = [
+        {"result": {"ops": [{"op": "trim", "id": "g02", "out": 46.0},
+                            {"op": "speed", "id": "g04", "rate": 0.5},
+                            {"op": "trim", "id": "g05", "in": 1.0},          # rejected
+                            {"op": "set", "id": "g01", "prop": "contrast", "value": 20}]},
+         "answer": {"accepted": [0, 1, 3], "rejected": [2]}},
+        {"result": {"ops": [{"op": "roll", "a": "g03", "b": "g04", "by": 0.5},
+                            {"op": "move", "ids": ["g05"], "before": "g01"}]},
+         "answer": {"accepted": [0, 1]}},
+        {"result": {"ops": [{"op": "trim", "id": "g01", "in": 9.0}]}},           # never answered
+        {"result": {"ops": "garbled"}, "answer": {"accepted": [0, 7, "x"]}},
+    ]
+    assert firstpass.ai_cuts(recs) == {"g02": {"trim"}, "g04": {"speed", "trim"},
+                                       "g03": {"trim"}, "g05": {"move"}}
+    rows = [{"id": "g02", "how": ["trim"]}, {"id": "g04", "how": ["speed"]},
+            {"id": "g03", "how": ["trim", "move"]}, {"id": "g01", "how": ["trim"]},
+            {"id": "g09", "how": ["add"]}]
+    assert [r["by"] for r in firstpass.mark_by(rows, firstpass.ai_cuts(recs))] == [
+        "ai", "ai", "hand", "hand", "hand"]
+
+
 def test_without_a_base_a_shot_is_the_machines_only_if_a_proposal_held_it():
     edl = _edl(CURRENT)
     rows = firstpass.manual_edits(edl, plans=[[{"clip": "CLIP_02.MP4", "in": 10.0,

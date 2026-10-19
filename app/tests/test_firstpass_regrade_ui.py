@@ -196,3 +196,66 @@ def test_an_ai_color_match_over_the_film_leaves_the_rerun_free_to_recut(page, li
     s = _state(live)
     assert s["state"] == "done" and [(m["id"], m["how"]) for m in s["manual_edits"]] == [
         (a, ["trim"])], s
+
+
+def test_an_accepted_ai_trim_and_speed_change_read_edited_by_the_ai(page, live, model):
+    """Verdict 12, punch 10: "an AI-made trim and speed change are listed as 'cut by hand'"
+    in the re-run panel. The AI's cut edits, reviewed and accepted, still lock their shots
+    (a cut is a cut), and the words say who made them: the kept line counts them apart,
+    each row says "… by the AI", the checkbox and the stale line too. A hand trim on
+    another shot still reads "cut by hand"."""
+    pg = page
+    # ---- a first pass, accepted: three shots, the machine's
+    _one_click_to_panel(pg)
+    pg.locator(RUN).click()
+    segs = _accept(pg, live, 3)
+    a, b, c = (s["id"] for s in segs)
+    pg.keyboard.press("Escape")
+    # ---- the AI trims shot 2 and slows shot 3; the editor accepts both in the review
+    _ai_accept(pg, model, [{"op": "trim", "id": b, "in": 2.75},
+                           {"op": "speed", "id": c, "rate": 0.5}])
+    disk = {x["id"]: x for x in _disk(live)["segments"]}
+    assert disk[b]["in"] == 2.75 and disk[c].get("speed") == 0.5, disk
+    # ---- and a hand trim on shot 1
+    _board_settled(pg)
+    body = [dict(x, out=1.75) if x["id"] == a else x for x in _disk(live)["segments"]]
+    r = httpx.put(live + "/api/project", json={"segments": body, "story": ""}, timeout=20)
+    assert r.status_code == 200, r.text
+    rows = {m["id"]: (m["how"], m["by"]) for m in _state(live)["manual_edits"]}
+    assert rows == {a: (["trim"], "hand"), b: (["trim"], "ai"), c: (["speed"], "ai")}, rows
+    s = _state(live)
+    assert s["state"] == "stale-after-edits", s
+    assert s["stale"][0] == "1 shot cut by hand and 2 shots edited by the AI since", s["stale"]
+    # ---- the panel: who cut each kept shot
+    pg.reload()
+    pg.wait_for_function("window.rcFirstPass && rcFirstPass.state()", timeout=20000)
+    _label(pg, "Re-run first pass")
+    text = _one_click_to_panel(pg)
+    assert ("Keeps 3 edited shots (1 cut by hand, 2 by the AI) · keeps the grade on every shot"
+            " it keeps · may replace 0") in text, text
+    assert "1 shot cut by hand and 2 shots edited by the AI since" in text, text
+    kept = {li.get_attribute("data-shot"): li.inner_text()
+            for li in pg.locator('[data-testid="firstpass-kept"] li').all()}
+    assert kept[a].endswith("· trimmed") and kept[b].endswith("· trimmed by the AI") \
+        and kept[c].endswith("· speed changed by the AI"), kept
+    assert "keep the edited shots, exactly" in text, text
+    # unticked: none of them kept, said without "your hand cuts"
+    pg.locator('[data-fp="keepmine"]').click()
+    pg.wait_for_function("(document.querySelector('[data-testid=\"firstpass-panel\"]') || {})"
+                         ".innerText.includes('Keeps none of the edited shots')", timeout=5000)
+    assert "may replace all 3" in pg.locator(PANEL).inner_text()
+    # ---- only the AI's: the line says so in its words
+    pg.locator('[data-fp="keepmine"]').click()
+    pg.keyboard.press("Escape")
+    _board_settled(pg)
+    first = next(x for x in segs if x["id"] == a)                     # shot 1 as accepted
+    body = [dict(x, out=first["out"]) if x["id"] == a else x for x in _disk(live)["segments"]]
+    assert httpx.put(live + "/api/project", json={"segments": body, "story": ""}, timeout=20).status_code == 200
+    assert {m["id"]: m["by"] for m in _state(live)["manual_edits"]} == {b: "ai", c: "ai"}
+    pg.reload()
+    pg.wait_for_function("window.rcFirstPass && rcFirstPass.state()", timeout=20000)
+    _label(pg, "Re-run first pass")
+    text = _one_click_to_panel(pg)
+    assert "Keeps 2 shots edited by the AI · keeps the grade on every shot it keeps · may replace 1" \
+        in text, text
+    assert "cut by hand" not in text, text

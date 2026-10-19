@@ -440,3 +440,11 @@ next judge runs, and the next judge rules it honest or lenient.
   designer again**, one design call per design: free on `claude_cli`, priced like Design on `anthropic_api`. A redo that
   can spend is new; section S's rule (no price reads as spending on the subscription backend; agents never pause for a
   shown price) is unchanged, and the redo's toast says it re-asks. For the judge to rule on.
+
+- 2026-10-19 (wave 16, lane LAYOUT2; logged by the lead): **two Lumetri UI timing tests now measure what the editor
+  sees.** test_lumetri_ui's 150 ms bars start at the input that changed the control's value and stop at the first frame
+  that shows it, read before that frame's own probe (the old clock counted Playwright's mouse round trips and the
+  probe's GPU read-back: 26-226 ms vs 1-31 ms on the same gestures). The waveform's bar is asserted as <= 9 frames
+  always, and <= 150 ms only when the box is under its core count (the scopes' own read-back at nice 19 cost 80-159 ms
+  at load 11-14). The first is a fix of the clock (honest); the second is more lenient on a loaded box, for the judge
+  to rule on.

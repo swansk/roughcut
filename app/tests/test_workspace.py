@@ -448,6 +448,134 @@ def test_no_chrome_is_cut_off(live_server, project, browser, size):
     ctx.close()
 
 
+# Verdict 12, punch 8: with Selects open (the tour's step 3 opens it) the Timeline is the
+# narrowest the default layout makes it, and its header read "Sequ…" for the scope chip,
+# "Ask the A" for the prompt, beside "A new cut is ready · Review"; its ruler labels read
+# as one run. The panel's own header row, its AI prompt and the line under it, whole.
+TL_HEAD_JS = """() => {
+  const box = (e) => { const r = e.getBoundingClientRect();
+    return {l: r.left, r: r.right, t: r.top, b: r.bottom, w: r.width}; };
+  const shown = (e) => e && e.getClientRects().length && getComputedStyle(e).display !== 'none';
+  const cut = [...document.querySelectorAll('#pTimeline > .ws-head, #pTimeline > .ws-head *, #aiUnder, #aiUnder *')]
+    .filter(e => shown(e) && e.clientWidth > 0 && e.scrollWidth > e.clientWidth + 0.5 && !(e instanceof SVGElement))
+    .map(e => `${e.id || e.className}: "${e.textContent.trim().slice(0, 40)}" ${e.scrollWidth} > ${e.clientWidth}`);
+  const chip = document.querySelector('[data-testid=ai-scope]'), l = chip.querySelector('.aip-scope-l');
+  const input = document.querySelector('[data-testid=ai-prompt-input]');
+  const field = input.closest('.aip-field'), st = document.querySelector('[data-testid=ai-status]');
+  const title = document.querySelector('#tlTitle'), lbl = title.querySelector('.lbl');
+  return {cut, chip: l.textContent, chipWhole: l.scrollWidth <= l.clientWidth + 0.5, chipBox: box(chip),
+          input: input.getBoundingClientRect().width, field: box(field), panel: box(document.querySelector('#pTimeline')),
+          title: box(title), titleWhole: lbl.scrollWidth <= lbl.clientWidth + 0.5, placeholder: input.placeholder,
+          status: shown(st) ? {...box(st), text: st.innerText, where: st.parentElement.id} : null,
+          tlw: dock.layout().tlw};
+}"""
+
+RULER_JS = """() => [...document.querySelectorAll('#tl .tl-ruler .major label')]
+  .filter(l => l.getClientRects().length).map(l => { const r = l.getBoundingClientRect();
+    return [l.textContent, r.left, r.right]; }).sort((a, b) => a[1] - b[1])"""
+
+
+def _tl_head_whole(h, where) -> None:
+    assert h["cut"] == [], (where, h["cut"])
+    assert h["chipWhole"] and "…" not in h["chip"], (where, h)          # the chip's words whole
+    assert h["input"] >= 160, (where, h)                               # room to type
+    assert h["titleWhole"], (where, h)                                 # "Timeline: <cut>" whole
+    p, f = h["panel"], h["field"]
+    assert f["l"] >= p["l"] - 0.5 and f["r"] <= p["r"] + 0.5, (where, h)
+    assert h["title"]["r"] <= h["chipBox"]["l"], (where, h)
+    s = h["status"]
+    if s:
+        # the line is whole and inside the panel, beside the field or under the header
+        assert s["l"] >= p["l"] - 0.5 and s["r"] <= p["r"] + 0.5, (where, s)
+        if s["where"] == "aiPrompt":
+            assert s["r"] <= f["l"] + 0.5 and s["l"] >= h["title"]["r"] - 0.5, (where, s, h)
+        else:
+            assert s["where"] == "aiUnder" and s["t"] >= f["b"] - 0.5, (where, s, h)
+
+
+def _ruler_apart(pg, where) -> list:
+    """The ruler's labels, each with >= 20 px of clear ruler before the next (timeline.js
+    LABEL_GAP: 24; the old fixed 84 px step left 17 beside a 67 px label, which read as one
+    run)."""
+    labels = pg.evaluate(RULER_JS)
+    for (a, b) in zip(labels, labels[1:]):
+        assert b[1] - a[2] >= 20, (where, "ruler labels run together", a, b, labels)
+    return labels
+
+
+@pytest.mark.parametrize("size", [(1440, 900), (1920, 1080)], ids=lambda s: f"{s[0]}x{s[1]}")
+def test_with_selects_open_the_timeline_header_and_ruler_are_whole(live_server, project, browser, size):
+    """The overflow check of `test_no_chrome_is_cut_off`, with Selects open (verdict 12, punch
+    8): nothing cut, the chip whole, the prompt's input >= 160 px, the Timeline title whole;
+    the Timeline is never narrower than its header row needs (dock.js `tlHeadNeed`). The AI's
+    line (focused: the price before ↵; an answer: "✓ Answered · Show") is whole, beside the
+    field when the header holds it, else in its row under the header. The ruler's labels
+    never overlap, at the fit zoom and zoomed from 2 to 3000 px/s."""
+    Path(project["edl"]).write_text(json.dumps(SEED, indent=1), encoding="utf-8")
+    ctx = browser.new_context(viewport={"width": size[0], "height": size[1]})
+    pg = ctx.new_page()
+    errors = []
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    pg.route("**/api/jobs", lambda r: r.fulfill(status=200, content_type="application/json",
+                                                 body=json.dumps({"jobs": FAKE_JOBS})))
+    pg.route("**/api/clips", _clips_with_one_unindexed)
+    # the AI's answer, scripted (no model call): an answer in words
+    pg.route("**/api/assist", lambda r: r.fulfill(status=200, content_type="application/json",
+                                                   body=json.dumps({"job": "ws12"}))
+             if r.request.method == "POST" else r.continue_())
+    pg.route("**/api/assist/ws12", lambda r: r.fulfill(
+        status=200, content_type="application/json",
+        body=json.dumps({"status": "done", "kind": "answer", "text": "A ski film.", "summary": "a ski film"})))
+    pg.goto(live_server)
+    pg.wait_for_selector("#tl .blk", timeout=15000)
+    pg.wait_for_selector("#projList tr.row", timeout=15000)
+    pg.locator(".ws-tab[data-tool=bin]").click()
+    pg.wait_for_selector('#pProject section[data-tool="bin"]:not([hidden])', timeout=5000)
+    pg.wait_for_timeout(600)
+    assert pg.evaluate(OVERFLOW_JS) == []
+    h = pg.evaluate(TL_HEAD_JS)
+    _tl_head_whole(h, (size, "selects"))
+    assert h["chip"] == "Sequence" and h["placeholder"].startswith("Ask the AI"), h
+    need = pg.evaluate("""() => { const t = document.querySelector('#tlTitle'), l = t.querySelector('.lbl');
+        return t.getBoundingClientRect().width + Math.max(0, l.scrollWidth - l.clientWidth) + rcAI.least(); }""")
+    assert h["panel"]["r"] - h["panel"]["l"] >= need, (h, need)
+    # a selected shot's chip, the longest scope words, whole too
+    pg.locator("#tl .blk").first.click()
+    pg.wait_for_function("document.querySelector('[data-testid=ai-scope]').innerText.trim().startsWith('Shot 1')",
+                         timeout=3000)
+    _tl_head_whole(pg.evaluate(TL_HEAD_JS), (size, "selection"))
+    pg.evaluate("tl.select([])")
+    # focused: the price before ↵, whole
+    pg.keyboard.press("Control+j")
+    pg.wait_for_function("(document.querySelector('[data-testid=ai-status] .aip-cost') || {}).textContent",
+                         timeout=5000)
+    pg.wait_for_timeout(200)
+    h = pg.evaluate(TL_HEAD_JS)
+    _tl_head_whole(h, (size, "focused"))
+    assert h["status"] and h["status"]["text"].strip() == "↵ ask · free on your plan", h
+    # an answer: the result line, whole, with its Show
+    pg.keyboard.type("what is this film about")
+    pg.keyboard.press("Enter")
+    pg.wait_for_selector("[data-testid=ai-result]", state="visible", timeout=5000)
+    pg.keyboard.press("Escape")
+    pg.wait_for_timeout(300)
+    h = pg.evaluate(TL_HEAD_JS)
+    _tl_head_whole(h, (size, "answered"))
+    assert h["status"] and "Answered" in h["status"]["text"] and "Show" in h["status"]["text"], h
+    # at 1440 the header has no room for it beside the field: under the header; at 1920 beside it
+    assert h["status"]["where"] == ("aiUnder" if size[0] == 1440 else "aiPrompt"), h
+    assert pg.evaluate(OVERFLOW_JS) == []
+    # the ruler: labels apart at the fit zoom and at every zoom from 2 to 3000 px/s
+    assert len(_ruler_apart(pg, (size, "fit"))) >= 2
+    for z in (2, 5, 9, 17, 33, 70, 150, 400, 1000, 3000):
+        pg.evaluate(f"tl.zoomTo({z})")
+        pg.wait_for_timeout(60)
+        _ruler_apart(pg, (size, z))
+    assert errors == []
+    pg.unroute_all(behavior="ignoreErrors")
+    ctx.close()
+
+
 # ---------------------------------------------------------------- the app bar (verdict 3, punch 8)
 #
 # One first action, nothing clipped. At 1440×900, in the four states the judge saw the

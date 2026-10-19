@@ -475,6 +475,9 @@ def test_a_double_click_opens_it_cancel_changes_nothing_and_delete_is_one_undo(p
     dlg.locator("[data-testid=marker-delete]").click()
     assert page.evaluate("tl.markers()") == [4.0]
     assert undo_title(page).startswith("undo: clear marker"), undo_title(page)
+    # the closed dialog keeps no focus, so the board's keys work at once (a Delete then
+    # Ctrl+Z did nothing 2 times in 3 when the focus stayed on the dialog's button)
+    assert page.evaluate("!document.querySelector('[data-testid=marker-dialog]').contains(document.activeElement)")
     page.keyboard.press("Control+z")
     assert page.evaluate("tl.markers()") == [{"t": 3.0, "name": "jump", "dur": 1.5}, 4.0]
     settle(page, project)
