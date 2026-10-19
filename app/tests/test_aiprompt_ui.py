@@ -697,6 +697,49 @@ def test_right_click_a_block_asks_about_it_or_looks_deeper(live_server, project,
     _close(pg)
 
 
+NARROW = {**SEED, "segments": [
+    {"id": "aip0000001", "clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0, "why": "first"},
+    {"id": "aip0000002", "clip": "CLIP_B.MP4", "in": 0.0, "out": 0.35, "why": "a flash"},
+    {"id": "aip0000003", "clip": "CLIP_C.MP4", "in": 0.5, "out": 2.5, "why": "third"}]}
+
+HIT_JS = """([x, y]) => { const n = document.elementFromPoint(x, y);
+  return n ? {edge: !!n.closest('#tl .tl-edge'), blk: (n.closest('#tl .blk') || {dataset: {}}).dataset.id || null} : null; }"""
+
+
+def test_right_click_a_narrow_block_or_a_trim_edge_opens_the_clips_menu(live_server, project, browser):
+    """Verdict 10, punch 9: right-click on a block narrower than ~15 px at fit zoom opened no
+    menu (a 14 px block gave nothing, a 26 px one the menu). The trim edges' columns
+    (timeline-trim.js `.tl-edge`, 16 px over each cut, above the blocks) cover the whole of
+    such a block and the ends of every other; the menu is the clip's under the pointer."""
+    pg = _open(browser, live_server, project, seed=NARROW)
+    pg.evaluate("tl.zoomTo(40)")                                      # 0.35 s = 14 px
+    pg.wait_for_function("document.querySelectorAll('#tl .tl-lane[data-lane=V1] > .tl-edge').length === 2"
+                         " && Math.abs(document.querySelector('#tl .blk[data-id=aip0000002]')"
+                         ".getBoundingClientRect().width - 14) < 1.5", timeout=5000)
+    box = lambda i: pg.locator(f'#tl .blk[data-id="aip000000{i}"]').bounding_box()   # noqa: E731
+    narrow, first, third = box(2), box(1), box(3)
+    menu = pg.locator('[data-testid="ai-context-menu"]')
+    y = narrow["y"] + narrow["height"] / 2
+    spots = [  # (x, the block whose menu it is, what is under the pointer)
+        (narrow["x"] + narrow["width"] / 2, "aip0000002", "the narrow block's middle"),
+        (narrow["x"] + 2, "aip0000002", "the narrow block, just past its in point"),
+        (first["x"] + first["width"] - 3, "aip0000001", "shot 1's out edge"),
+        (third["x"] + 3, "aip0000003", "shot 3's in edge"),
+    ]
+    for x, want, where in spots:
+        hit = pg.evaluate(HIT_JS, [x, y])
+        assert hit["edge"], f"{where}: not on a trim edge's column, the test proves nothing: {hit}"
+        pg.mouse.click(x, y, button="right")
+        assert menu.is_visible(), f"right-click on {where} opened no menu"
+        pg.locator('[data-testid="ai-ctx-ask"]').click()
+        assert pg.evaluate("rcAI.scope().ids") == [want], where
+        assert pg.evaluate("[...tl.state.sel]") == [want], where
+        pg.keyboard.press("Escape")
+    assert _scope_text(pg) == "Shot 3 · CLIP_C"
+    assert pg.errors == []
+    _close(pg)
+
+
 def test_right_click_a_project_clip_and_the_monitors(live_server, project, browser):
     pg = _open(browser, live_server, project)
     menu = pg.locator('[data-testid="ai-context-menu"]')

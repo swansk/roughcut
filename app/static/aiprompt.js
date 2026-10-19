@@ -1040,12 +1040,26 @@
 
   /* ------------------------------------------------------------ "Ask AI about this…" */
 
+  /* A trim edge's column (timeline-trim.js `.tl-edge`: 16 px over each cut, above the blocks)
+   * lies over the ends of the two blocks beside the cut, and over the whole of a block
+   * narrower than 16 px: a right-click there hit the column, not a block, and opened no
+   * menu (verdict 10, punch 9: a 14 px block at fit zoom). The clip is the block under the
+   * pointer, beneath the column. */
+  function blockUnderEdge(el, e) {
+    if (!el.closest('#tl .tl-edge') || typeof document.elementsFromPoint !== 'function') return null;
+    for (const n of document.elementsFromPoint(e.clientX, e.clientY)) {
+      const b = n.closest && n.closest('#tl .blk[data-id]');
+      if (b) return b;
+    }
+    return null;
+  }
+
   function targetOf(e) {
     const el = e.target instanceof Element ? e.target : null;
     if (!el) return null;
     if (el.closest('#aiPrompt, .aip-pop, .tl-ctx, input, textarea, [contenteditable]')) return null;
-    // a V1 block, or its linked sound on A1 (the same shot)
-    const blk = el.closest('#tl .blk[data-id], #tl .ablk[data-id]');
+    // a V1 block, or its linked sound on A1 (the same shot); on a trim edge, the block under it
+    const blk = el.closest('#tl .blk[data-id], #tl .ablk[data-id]') || blockUnderEdge(el, e);
     if (blk) return { what: 'clip', target: { kind: 'segment', id: blk.dataset.id }, deep: true };
     const proj = el.closest('#pProject section[data-tool="project"] [data-clip]');
     if (proj) {

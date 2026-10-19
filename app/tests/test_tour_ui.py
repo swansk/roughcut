@@ -5,7 +5,8 @@ to use those AI features."* In real Chromium, on the suite's synthetic bin:
 
   * the first-run walk-through (app/static/tour.js) opens on a browser's first visit at
     step 1 of 6, ON the workspace (no full-screen modal: the panels still answer), and not
-    on the second load; Skip and Esc end it for good; Help › Learn Roughcut… and AI ›
+    on the second load; Skip ends it for good, Esc never does (it closes what Show me
+    opened: verdict 10); Help › Learn Roughcut… and AI ›
     Learn the AI features open it again (the loop, then the AI half alone);
   * every step of both walk-throughs points at a control that is on screen (or at the menu
     that opens it), with the callout wholly on screen and clear of that control, at
@@ -227,17 +228,17 @@ def test_the_first_run_opens_step_one_on_the_workspace_and_only_once(live, bins,
     _done(pg)
 
 
-@pytest.mark.parametrize("how", ["skip", "esc"])
-def test_skip_and_esc_end_it_for_good(live, bins, tmp_path, browser, first_run_context, how):
+def test_skip_ends_it_for_good(live, bins, tmp_path, browser, first_run_context):
     _state(bins, tmp_path, "fresh")
     pg = _page(browser, live, first=first_run_context)
     pg.wait_for_selector(TOUR, timeout=15000)
     pg.locator('[data-testid="tour-next"]').click()
     pg.wait_for_function("document.querySelector('[data-testid=tour]').dataset.step === '2'")
-    if how == "skip":
-        pg.locator('[data-testid="tour-skip"]').click()
-    else:
-        pg.keyboard.press("Escape")
+    # Esc is not Skip (verdict 10, punch 9): the walk-through is still up
+    pg.keyboard.press("Escape")
+    pg.wait_for_timeout(300)
+    assert pg.locator(TOUR).count() == 1 and pg.evaluate("rcTour.active") is True
+    pg.locator('[data-testid="tour-skip"]').click()
     pg.wait_for_selector(TOUR, state="detached", timeout=3000)
     assert pg.locator('[data-testid="tour-ring"]').count() == 0
     assert pg.evaluate("localStorage.getItem('roughcut.tour')") == "skipped"
@@ -280,6 +281,116 @@ def test_help_and_the_ai_menu_open_it_again(live, bins, tmp_path, browser):
     pg.locator('[data-testid="tour-next"]').click()
     pg.wait_for_selector(TOUR, state="detached", timeout=3000)
     assert pg.evaluate("localStorage.getItem('roughcut.tour')") == "done"
+    _done(pg)
+
+
+def test_esc_closes_what_show_me_opened_never_the_tour(live, bins, tmp_path, browser):
+    """Verdict 10, punch 9 (the K3 walk): Esc, pressed to clear the AI prompt, ended the whole
+    walk-through. Esc closes what Show me opened — the first pass's panel, the Export dialog,
+    the AI prompt's words — and the walk-through stays on its step; only Skip tour ends it."""
+    _state(bins, tmp_path, "cut")
+    pg = _page(browser, live)
+    pg.wait_for_selector("#tl .blk", timeout=15000)
+    pg.wait_for_timeout(600)
+    pg.evaluate("rcTour.start()")
+    pg.wait_for_selector(TOUR, timeout=3000)
+    up = "rcTour.active && !!document.querySelector('[data-testid=tour]')"
+    step = "document.querySelector('[data-testid=tour]').dataset.key"
+
+    def to(key):
+        for _ in range(8):
+            if pg.evaluate(step) == key:
+                return
+            pg.locator('[data-testid="tour-next"]').click()
+        raise AssertionError(f"no step {key}")
+
+    # the first pass's panel: Esc closes it, the walk-through stays on "firstpass"
+    to("firstpass")
+    pg.locator('[data-testid="tour-show"]').click()
+    pg.wait_for_selector('[data-testid="firstpass-panel"]', state="visible", timeout=5000)
+    pg.keyboard.press("Escape")
+    pg.wait_for_selector('[data-testid="firstpass-panel"]', state="hidden", timeout=3000)
+    pg.wait_for_timeout(300)
+    assert pg.evaluate(up) and pg.evaluate(step) == "firstpass"
+    # the AI prompt Show me put the cursor in: typed words, then Esc to clear them
+    to("ask")
+    pg.locator('[data-testid="tour-show"]').click()
+    pg.wait_for_function("document.activeElement && document.activeElement.dataset"
+                         " && document.activeElement.dataset.testid === 'ai-prompt-input'", timeout=3000)
+    pg.keyboard.type("warmer")
+    pg.keyboard.press("Escape")
+    pg.wait_for_timeout(300)
+    assert pg.evaluate(up) and pg.evaluate(step) == "ask", "Esc in the AI prompt ended the walk-through"
+    # nothing open at all: Esc (the timeline's deselect) still leaves it up
+    pg.locator("#tl .blk").first.click()
+    pg.keyboard.press("Escape")
+    pg.wait_for_timeout(300)
+    assert pg.evaluate(up) and pg.evaluate(step) == "ask"
+    # the Export dialog: Esc closes it, and the walk-through is still on "export"
+    to("export")
+    pg.locator('[data-testid="tour-show"]').click()
+    pg.wait_for_selector("#exportDialog[open]", timeout=5000)
+    pg.keyboard.press("Escape")
+    pg.wait_for_function("!document.querySelector('#exportDialog[open]')", timeout=3000)
+    pg.wait_for_timeout(300)
+    assert pg.evaluate(up) and pg.evaluate(step) == "export"
+    assert pg.evaluate("localStorage.getItem('roughcut.tour')") != "skipped"
+    pg.locator('[data-testid="tour-skip"]').click()
+    pg.wait_for_selector(TOUR, state="detached", timeout=3000)
+    _done(pg)
+
+
+def _item_words(pg, cmd) -> str:
+    """The AI menu item as it reads now: its label, less the shortcut and the trailing "…"."""
+    return pg.evaluate(f"""(() => {{ const b = document.querySelector('#menubar [data-cmd="{cmd}"]');
+        const h = b.querySelector('.aip-ml') || b;
+        return [...h.childNodes].filter(n => !(n.nodeType === 1 && n.classList.contains('k')))
+          .map(n => n.textContent).join('').replace(/\\s+/g, ' ').trim().replace(/\\s*…$/, ''); }})()""")
+
+
+@pytest.mark.parametrize("passed", [False, True], ids=["never-run", "after-a-pass"])
+def test_every_ai_menu_items_card_is_titled_by_the_item(live, bins, tmp_path, browser, passed):
+    """Verdict 10, punch 9: the AI menu's "Re-run first pass…" had a card titled "Run first
+    pass". Every AI-menu (and the Sequence menu's two AI items') card reads its item's words."""
+    _state(bins, tmp_path, "cut")
+    ctx = browser.new_context(viewport={"width": 1440, "height": 900})
+    pg = ctx.new_page()
+    pg.errors = []
+    pg.on("pageerror", lambda e: pg.errors.append(str(e)))
+    if passed:
+        def done(route):
+            if route.request.method != "GET":
+                return route.continue_()
+            resp = route.fetch()
+            body = resp.json()
+            body.update({"state": "done", "when": time.time() - 600})
+            route.fulfill(response=resp, body=json.dumps(body), content_type="application/json")
+        pg.route("**/api/firstpass", done)
+    pg.goto(live + "/")
+    pg.wait_for_function(READY, timeout=20000)
+    if passed:
+        pg.wait_for_function("rcFirstPass.state().state === 'done'", timeout=10000)
+    pg.wait_for_selector("#tl .blk", timeout=15000)
+    pg.locator("#tl .blk").first.click()                  # the items that need a clip, enabled
+    pg.locator('#menubar .menu[data-menu="ai"] .mtop').click()
+    titles = {}
+    for cmd in ("prompt", "firstpass", "ask", "shot", "colour", "fx", "deep", "find", "audit"):
+        pg.locator(f'#menubar [data-cmd="ai:{cmd}"]').hover()
+        pg.wait_for_function(f"(() => {{ const c = document.querySelector('[data-testid=ai-hover]');"
+                             f" return c && !c.hidden && c.dataset.for === 'ai:{cmd}'; }})()", timeout=3000)
+        titles[f"ai:{cmd}"] = (pg.evaluate(CARD_JS)["name"], _item_words(pg, f"ai:{cmd}"))
+    pg.locator('#menubar .menu[data-menu="sequence"] .mtop').hover()
+    for cmd in ("ask", "fx"):
+        pg.locator(f'#menubar [data-cmd="{cmd}"]').hover()
+        pg.wait_for_function(f"(() => {{ const c = document.querySelector('[data-testid=ai-hover]');"
+                             f" return c && !c.hidden && c.dataset.for === '{cmd}'; }})()", timeout=3000)
+        titles[cmd] = (pg.evaluate(CARD_JS)["name"], _item_words(pg, cmd))
+    pg.keyboard.press("Escape")
+    for cmd, (card, words) in titles.items():
+        assert words and card == words, f"{cmd}: the card says {card!r}, the item {words!r}"
+    want = "Re-run first pass" if passed else "Run first pass"
+    assert titles["ai:firstpass"][0] == want, titles["ai:firstpass"]
+    assert titles["ai:shot"][0] == "Ask about the selected clip", titles
     _done(pg)
 
 

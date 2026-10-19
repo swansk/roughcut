@@ -912,7 +912,7 @@
     posterAt.set(seg.id, seg.in);
     const img = b.querySelector('.poster');
     const src = posterUrl(seg, seg.in);
-    img.alt = `${stem(seg.clip)} at ${seg.in.toFixed(2)}s`;
+    img.alt = `${window.rcClipName ? window.rcClipName(seg.clip) : stem(seg.clip)} at ${seg.in.toFixed(2)}s`;
     // No src at all rather than an empty one: src="" fetches the page itself.
     if (!src) img.removeAttribute('src');
     else if (img.getAttribute('src') !== src) img.setAttribute('src', src);
@@ -1352,7 +1352,7 @@
       const src = posterUrl(o, o.in);
       if (!src) img.removeAttribute('src'); else if (img.getAttribute('src') !== src) img.setAttribute('src', src);
       const says = blockSays(o, clipOf(o.clip));
-      b.title = `${name} · ${stem(o.clip)} ${fmt(o.in)}–${fmt(o.out)} at ${tc(o.at)}–${tc(o.at + d)}`
+      b.title = `${name} · ${window.rcClipName ? window.rcClipName(o.clip) : stem(o.clip)} ${fmt(o.in)}–${fmt(o.out)} at ${tc(o.at)}–${tc(o.at + d)}`
         + (o.sound ? ' — its sound, mixed with A1' : name === 'V2' ? ' — composited over V1, picture only'
           : ' — composited over the tracks below it, picture only') + (says ? `\n“${says}”` : '')
         + (name === 'V2' ? '\ndrag to move · Delete removes it' : '\ndrag to move, an edge to trim · Delete removes it');
@@ -3117,6 +3117,7 @@
 
   /* Close the open entry: pushed when the cut changed. */
   function closeEntry() {
+    unrec = null;
     const p = pending;
     pending = null;
     const after = snapshot();
@@ -3193,9 +3194,20 @@
     // an undo or a clearHistory inside fn took the entry: nothing of it is left to close
     if (pending !== mine) return { ok: true, value, committed: false };
     mine.levels.length = 0;                    // a begin fn left open folds in too
-    if (mine.quiet) { pending = null; return { ok: true, value, committed: false }; }
+    if (mine.quiet) {
+      pending = null;
+      // the cut now holds edits no entry recorded (an AI review's After): until a recorded
+      // edit or an unrecorded batch that puts it back, the board must not save it (lead,
+      // wave 14: AIOPS3's unsaved-edit watch saved a bare `record: false` batch)
+      if (!unrec) unrec = mine.before;
+      if (JSON.stringify(snapshot()) === JSON.stringify(unrec)) unrec = null;
+      return { ok: true, value, committed: false };
+    }
+    unrec = null;
     return { ok: true, value, committed: closeEntry() };
   }
+  let unrec = null;                            // the recorded cut while an unrecorded preview is up
+  function unrecorded() { return !!unrec; }
 
   /* After an undo or a redo the film can end before the playhead (an insert at the end,
    * undone): a playhead that was on the film comes back to its new end and the monitor is
@@ -3208,6 +3220,7 @@
   }
 
   function undo() {
+    unrec = null;
     const e = undoStack.pop();
     if (!e) { toast('nothing to undo'); return false; }
     pending = null;
@@ -3224,6 +3237,7 @@
   }
 
   function redo() {
+    unrec = null;
     const e = redoStack.pop();
     if (!e) { toast('nothing to redo'); return false; }
     pending = null;
@@ -3244,6 +3258,7 @@
    * exists, and restoring one would wipe the change — the page reload this replaced
    * emptied the stacks the same way (INTAKE M16, C5). */
   function clearHistory() {
+    unrec = null;
     pending = null;
     undoStack.length = 0;
     redoStack.length = 0;
@@ -4071,7 +4086,7 @@
   const tl = {
     state, el, mount, render, on,
     byId, indexOf, idAt, dur, speedOf, filmStart, total, shotAt, timeToX, xToTime, eventTime, snapsFor,
-    begin, commit, cancel, batch, undo, redo, clearHistory,
+    begin, commit, cancel, batch, unrecorded, undo, redo, clearHistory,
     setRange, move, split, remove, insert, setSpeed, insertAt, overwrite,
     select, syncSel, seek, setPlayhead, zoomTo, fit,
     forSave, needsRekey, afterSave, applyIds, idFor, putTurn, saveHeaders, seqForFlush, seqDirty,

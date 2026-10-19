@@ -87,7 +87,8 @@ fails the journey.
 The first failing step stops the journey. Zero page errors are allowed: an error thrown
 in the page fails the step it happened in. `<out dir>/journey.json` has each step's name,
 ok, ms, PNG, why it failed and the page errors; the last line printed is the gate's:
-`journey ✓ 24 steps · 74 s` or `journey ✗ step 7 razor: <why>`. Exit 0 only when green.
+`journey ✓ 24 steps · 74 s` or `journey ✗ step 7 razor: <why>`. Exit 0 only when green
+(a step passed on its retry included: AMBER, see below).
 
 When the page or the browser goes away under a step (verdict 9, punch 1: the gate's
 step 15 died on "TargetClosedError … has been closed" and passed alone), the step's line
@@ -101,7 +102,10 @@ page (and browser, if it died) on the cut as it was on disk before the step, and
 reads "… crashed (…); retried: ✓" (the last line adds "step N <name> retried once after
 …") or "retried: ✗ <why>". A browser killed from outside (SIGKILL / SIGTERM: the OOM
 killer, a stray pkill), a clean exit, or a page that closed while its browser lives, is
-never retried.
+never retried. A journey that passed with a retried step is not proven (verdict 10: a
+page can crash its own renderer): it still exits 0, its last line ends "· AMBER: N step(s)
+passed only on a retry after Chromium crashed: step K <name>", journey.json's `amber`
+says the same (null when no step was retried), and tools/gate.py makes the run AMBER.
 
 The gate's step 15 (journalctl, 2026-10-18 18:28:45-49): GNOME Shell segfaulted, the user
 session's D-Bus was restarted, and the journey's headless Chromium, connected to that bus,
@@ -2219,9 +2223,19 @@ def main() -> int:
         # a step Chromium crashed under passed on its retry: said, never hidden
         for r in j.retried:
             line += f" · step {r['n']} {r['name']} retried once after {r['words']}"
-    result.update(ok=line.startswith("journey ✓"), line=line, total_s=round(total, 1),
+    ok = line.startswith("journey ✓")
+    # Verdict 10's ruling (REDESIGN-GOAL, 2026-10-18): a step that passed only on its retry
+    # is not proven (a page can crash its own renderer: an app bug that crashes half the
+    # time would pass three times in four). The journey still passes (exit 0) and says so
+    # here; tools/gate.py reads `amber` and the gate's run is AMBER, never GREEN.
+    amber = (f"{len(j.retried)} step{'s' if len(j.retried) != 1 else ''} passed only on a retry"
+             " after Chromium crashed: " + "; ".join(f"step {r['n']} {r['name']}" for r in j.retried)
+             if ok and j.retried else None)
+    if amber:
+        line += f" · AMBER: {amber}"
+    result.update(ok=ok, line=line, total_s=round(total, 1),
                   setup_error=setup_err, ledger_bad=ledger_bad, retried=j.retried,
-                  browser_log=str(j.browser_log))
+                  amber=amber, browser_log=str(j.browser_log))
     (out / "journey.json").write_text(json.dumps(result, indent=1, default=str))
     print(line, flush=True)
     sys.stdout.flush()

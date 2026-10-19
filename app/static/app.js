@@ -130,6 +130,26 @@ function etaText(s) {
   return `about ${Math.round(s / 60)} min left`;
 }
 
+/* A job's time left, short, for a line in the header: "~10s left", "~2 min left". */
+function etaShort(j) {
+  return j.state === 'done' || j.state === 'failed' || j.state === 'cancelled' ? ''
+    : etaText(j.eta_s).replace(/^about /, '~').replace(/^~a minute/, '~1 min');
+}
+
+/* While a first pass runs, the jobs it is made of — the index it runs or joined (the
+ * looks and previews it goes on with while the cut is written are that same index) and
+ * the call writing its cut (an Ask carrying `firstpass`) — are the pass's: the header's
+ * first-pass control is their one readout (their time left on it, their % in its hover:
+ * firstpass.js `rcFirstPass.jobs`), never a pill each beside it. Verdict 10, punch 9: the
+ * header read "First pass · the cut ×", "54% ×" and "20% · ~2 min left" at once. A pass
+ * job that failed keeps its pill, saying why; any other job (an export, an effect's
+ * check, a find) is its own family and keeps its own. */
+function passJob(j, fp) {
+  if (!fp || fp.state !== 'running') return false;
+  if (j.state === 'failed' || j.state === 'done' || j.state === 'cancelled') return false;
+  return j.kind === 'index' || (j.kind === 'ask' && !!j.firstpass);
+}
+
 function jobRow(j) {
   let row = strip.rows.get(j.id);
   if (!row) {
@@ -192,10 +212,8 @@ function paintJob(row, j) {
   row.querySelector('.jbar i').style.width = `${j.pct}%`;
   // the row is one compact line in the header: how far and how long ("~10s left"); the
   // time it has taken so far is the hover's
-  const eta = j.state === 'done' || j.state === 'failed' ? ''
-    : etaText(j.eta_s).replace(/^about /, '~').replace(/^~a minute/, '~1 min');
   row.querySelector('.jnums').textContent =
-    [`${Math.round(j.pct)}%`, eta].filter(Boolean).join(' · ');
+    [`${Math.round(j.pct)}%`, etaShort(j)].filter(Boolean).join(' · ');
   // The milestone is what the operation is *on*; the detail is what it is doing inside
   // it. Both, because "choosing the shots" without "12 of ~18" is a spinner with words.
   // In the header's row they are the line's hover and the first line under ▸; a failed
@@ -278,6 +296,7 @@ async function pollJobs() {
     jobs = (await (await fetch('/api/jobs')).json()).jobs;
   } catch (e) { return; }                   // a blip is not a reason to blank the bar
   const live = new Set(jobs.map((j) => j.id));
+  const fp = window.rcFirstPass && typeof rcFirstPass.state === 'function' ? rcFirstPass.state() : null;
   strip.rows.forEach((row, id) => {
     if (live.has(id)) return;
     row.remove();
@@ -288,8 +307,9 @@ async function pollJobs() {
   for (const j of jobs) {
     const before = strip.seen.get(j.id);
     strip.seen.set(j.id, j);
-    if (quietJob(j)) {
-      // said nothing worth a row: none, and the strip is not a second header row for it
+    if (quietJob(j) || passJob(j, fp)) {
+      // said nothing worth a row (or the first-pass control says it): none, and the
+      // strip is not a second header row for it
       const row = strip.rows.get(j.id);
       if (row) { row.remove(); strip.rows.delete(j.id); }
     } else {
@@ -306,7 +326,11 @@ async function pollJobs() {
   jobTicks += 1;
   // Gone completely when there is nothing to say. A strip that lingers empty is one
   // more thing on a screen that already has plenty.
-  $('#progress').hidden = !jobs.some((j) => !quietJob(j));
+  $('#progress').hidden = !jobs.some((j) => !quietJob(j) && !passJob(j, fp));
+  if (window.rcFirstPass && typeof rcFirstPass.jobs === 'function') {
+    rcFirstPass.jobs(jobs.filter((j) => passJob(j, fp)).map((j) => ({
+      id: j.id, kind: j.kind, label: j.label, pct: Math.round(j.pct || 0), eta: etaShort(j) })));
+  }
   // Driven from the server's registry rather than from this tab's own click, so it is
   // right after a reload and right when the render was started somewhere else. The
   // pending flag covers the second between the click and the job existing to be seen.
@@ -636,7 +660,7 @@ function fillShot(box, seg) {
 
   // why? — the evidence: where the shot came from, the timed transcript, what was seen
   // with times, the colour in words, and the proposal's polish when it carries one
-  q('.clip').textContent = stem(seg.clip);
+  q('.clip').textContent = clipLabel(seg.clip);       // "Black Video", never gen_black_<hash>
   q('.times').textContent = `${fmt(seg.in)}–${fmt(seg.out)}`;
   const genClip = gen ? (P.clips[seg.clip] || {}) : null;
   const lines = genClip
@@ -666,7 +690,7 @@ function fillShot(box, seg) {
   // The still: at the in-point when the shot arrives, and catching up to a trimmed
   // in-point once the trimming settles — never a frame per nudge.
   const img = q('img.poster');
-  img.alt = `${stem(seg.clip)} at ${seg.in.toFixed(2)}s`;
+  img.alt = `${clipLabel(seg.clip)} at ${seg.in.toFixed(2)}s`;
   if (!posterAt.has(seg)) {
     const src = posterSrc(seg);
     // No src at all rather than an empty one for a clip with no sidecar: src="" makes
@@ -798,12 +822,12 @@ function buildOverlay(o) {
 
 function fillOverlay(box, o) {
   const name = box.querySelector('.sname');
-  const txt = `${o.track || 'V2'} · ${stem(o.clip)} · ${tl.dur(o).toFixed(1)} s`;
+  const txt = `${o.track || 'V2'} · ${clipLabel(o.clip)} · ${tl.dur(o).toFixed(1)} s`;
   if (name && name.textContent !== txt) name.textContent = txt;
   const img = box.querySelector('img.poster');
   const base = (P.clips[o.clip] || {}).poster;
   const src = base ? `${base}${base.includes('?') ? '&' : '?'}t=${Math.max(0, o.in).toFixed(2)}` : '';
-  if (img && src && img.getAttribute('src') !== src) { img.setAttribute('src', src); img.alt = `${stem(o.clip)} at ${o.in.toFixed(2)}s`; }
+  if (img && src && img.getAttribute('src') !== src) { img.setAttribute('src', src); img.alt = `${clipLabel(o.clip)} at ${o.in.toFixed(2)}s`; }
   if (window.effects && typeof effects.fill === 'function') effects.fill(box, o);
 }
 
@@ -2791,8 +2815,9 @@ function paintTransport() {
   $('#playCut').textContent = player.playing ? '❚❚ Pause' : '▶ Play';
   paintRest();
   const seg = segs[player.idx];
+  // the clip by the name the editor reads (a generated clip: "Black Video", verdict 10)
   $('#playingWhat').textContent = seg
-    ? `${player.idx + 1}/${segs.length} · ${stem(seg.clip)}${player.single ? ' · this shot only' : ''}`
+    ? `${player.idx + 1}/${segs.length} · ${clipLabel(seg.clip)}${player.single ? ' · this shot only' : ''}`
     : '';
 }
 
@@ -4180,7 +4205,8 @@ function bodyKey() { return idsNormal(JSON.stringify(saveBody())); }
 function noteSaved(text) { savedText = idsNormal(text); }
 function unsavedTick() {
   if (savedText == null || !P) return;
-  const busy = pointerHeld || (window.rcActions && window.rcActions.previewing) || player.playing;
+  const busy = pointerHeld || (window.rcActions && window.rcActions.previewing) || player.playing
+    || !!(tl.unrecorded && tl.unrecorded());      // an unrecorded preview is not an edit to save
   if (busy) { dirtyKey = null; return; }
   let now;
   try { now = bodyKey(); } catch (e) { return; }
@@ -4629,7 +4655,7 @@ function proposalTableHtml(plan, reviewable) {
     const f = facts(i);
     const spd = speedOf(s);
     const status = f && f.status ? f.status : '';
-    const hover = `${String(i + 1).padStart(2, '0')} ${stem(s.clip)} ${fmt(s.in)}–${fmt(s.out)}`
+    const hover = `${String(i + 1).padStart(2, '0')} ${clipLabel(s.clip)} ${fmt(s.in)}–${fmt(s.out)}`
       + ` (${tl.dur(s).toFixed(1)}s${spd === 1 ? '' : ` at ${spd}×`})${f && f.words ? ` · ${f.words}` : ''}`
       + (s.why ? `\nwhy: ${s.why}` : '')
       + (s.polished_from ? `\n↳ polished from ${s.polished_from[0].toFixed(2)}–${s.polished_from[1].toFixed(2)}`
@@ -4646,7 +4672,7 @@ function proposalTableHtml(plan, reviewable) {
       + `<td>${reviewable ? `<span class="pv" role="checkbox" aria-checked="true" tabindex="0" data-k="${i}"`
         + ' title="accept / reject this shot — the ghost lane\'s ✓ ✗ (Enter / ⌫ there)">✓</span>' : ''}</td>`
       + `<td class="pn">${String(i + 1).padStart(2, '0')}</td>`
-      + `<td class="pc">${escapeHtml(stem(s.clip))}${spd === 1 ? '' : ` ${spd}×`}</td>`
+      + `<td class="pc">${escapeHtml(clipLabel(s.clip))}${spd === 1 ? '' : ` ${spd}×`}</td>`
       + `<td class="tc">${keepTc(s.in, s.clip)}</td><td class="tc">${keepTc(s.out, s.clip)}</td>`
       + `<td class="pw">${f && f.flags.length ? '<span class="pflag">⚠</span>' : ''}${tag}${escapeHtml(s.why || '')}</td></tr>`;
   });
@@ -4658,13 +4684,13 @@ function proposalTableHtml(plan, reviewable) {
     ? g.removed.map((i) => segs[i]).filter(Boolean)
     : segs.filter((s) => !kept.has(summarise([s])[0]));
   const gone = dropped.map((s) =>
-    `<tr class="pgone" title="${escapeHtml(`${stem(s.clip)} ${fmt(s.in)}–${fmt(s.out)} — removed by the proposal`)}">`
-    + `<td>−</td><td class="pn"></td><td class="pc">${escapeHtml(stem(s.clip))}</td>`
+    `<tr class="pgone" title="${escapeHtml(`${clipLabel(s.clip)} ${fmt(s.in)}–${fmt(s.out)} — removed by the proposal`)}">`
+    + `<td>−</td><td class="pn"></td><td class="pc">${escapeHtml(clipLabel(s.clip))}</td>`
     + `<td class="tc">${keepTc(s.in, s.clip)}</td><td class="tc">${keepTc(s.out, s.clip)}</td><td class="pw">removed</td></tr>`);
   // what the re-run left out because the editor rejected it before, greyed
   rejectedOf(plan).filter((r) => r.action !== 'flagged').forEach((r) => gone.push(
-    `<tr class="prej" title="${escapeHtml(`${stem(r.clip)} ${fmt(r.in)}–${fmt(r.out)} — you rejected this before; the re-run left it out`)}">`
-    + `<td>✗</td><td class="pn"></td><td class="pc">${escapeHtml(stem(r.clip))}</td>`
+    `<tr class="prej" title="${escapeHtml(`${clipLabel(r.clip)} ${fmt(r.in)}–${fmt(r.out)} — you rejected this before; the re-run left it out`)}">`
+    + `<td>✗</td><td class="pn"></td><td class="pc">${escapeHtml(clipLabel(r.clip))}</td>`
     + `<td class="tc">${keepTc(r.in, r.clip)}</td><td class="tc">${keepTc(r.out, r.clip)}</td>`
     + `<td class="pw">you rejected this${r.action === 'kept as it is' ? ' change — the shot stays as it is' : ' — left out'}</td></tr>`));
   // a row is two lines (a grid): ✓ / ✗ · # · clip · In · Out, and the why under them at

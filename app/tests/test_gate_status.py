@@ -11,6 +11,7 @@ burners and the gate decides from its records:
   * a fail above 2x the cores is AMBER and named; at or below 2x it is RED
   * nothing measured (ROUGHCUT_PERF_FORCE_SKIP=1, or no record) is AMBER
   * the run is GREEN only when every check is green and none amber
+  * a journey step that passed only on its retry after a Chromium crash is AMBER (verdict 10)
 """
 
 from __future__ import annotations
@@ -149,3 +150,77 @@ def test_the_perf_line_names_the_graded_canvas():
     assert "graded canvas worst gap 50.2 ms at 29.6 fps (1440), 60.1 ms at 29.9 fps (1920)" \
         in gate.perf_said(r, CORES), gate.perf_said(r, CORES)
     assert "graded canvas not measured" in gate.perf_said(rec("passed", 8.0), CORES)
+
+
+# ---------------------------------------------------------------- the journey's retry
+#
+# Verdict 10's ruling (REDESIGN-GOAL, 2026-10-18): a journey step retried after a Chromium
+# crash ended GREEN, with only a note in its line. A page can crash its own renderer, so
+# an app bug that crashes half the time would pass three times in four. Now such a
+# journey is AMBER, named; a GREEN journey means no step was retried.
+
+RETRIED = {"n": 2, "name": "firstpass", "ok": True,
+           "words": "the page's renderer crashed (the browser still up · no FATAL line)"}
+SLOW = {"slowest_api": {"ms": 140, "method": "GET", "path": "/api/state"}}
+
+
+def _journey_json(tmp_path: Path, line: str, retried: list | None, **kw) -> Path:
+    import json
+    out = tmp_path / "journey"
+    out.mkdir()
+    rec = {"ok": line.startswith("journey ✓"), "line": line, "slow": SLOW, **kw}
+    if retried is not None:
+        rec["retried"] = retried
+    (out / "journey.json").write_text(json.dumps(rec))
+    return out
+
+
+def test_a_journey_with_no_retry_is_green(tmp_path):
+    out = _journey_json(tmp_path, "journey ✓ 24 steps · 53 s", [])
+    green, line, amber = gate.journey_read(out, tmp_path / "journey.log", 0)
+    assert green and not amber, line
+    assert line == "24 steps · 53 s · slowest request 0.14 s GET /api/state"
+    assert gate.run_status([("journey", green, line)], {"journey"} if amber else set()) == ("GREEN", 0)
+
+
+def test_a_retried_step_makes_the_journey_amber_and_names_it(tmp_path):
+    said = (f"journey ✓ 24 steps · 61 s · step 2 firstpass retried once after {RETRIED['words']}"
+            " · AMBER: 1 step passed only on a retry after Chromium crashed: step 2 firstpass")
+    out = _journey_json(tmp_path, said, [RETRIED])
+    green, line, amber = gate.journey_read(out, tmp_path / "journey.log", 0)
+    assert green and amber, line
+    # the step, and why it is not a pass
+    assert line.endswith("→ the journey is AMBER: step 2 firstpass passed only on a retry after"
+                         " Chromium crashed (verdict 10: a page can crash its own renderer),"
+                         " not proven"), line
+    assert f"step 2 firstpass retried once after {RETRIED['words']}" in line
+    # the run: AMBER, never GREEN
+    assert gate.run_status([("suite", True, ""), ("journey", green, line)], {"journey"}) == ("AMBER", 2)
+
+
+def test_two_retried_steps_are_both_named(tmp_path):
+    two = [RETRIED, {**RETRIED, "n": 15, "name": "rerun-panel"}]
+    out = _journey_json(tmp_path, "journey ✓ 24 steps · 70 s", two)
+    green, line, amber = gate.journey_read(out, tmp_path / "journey.log", 0)
+    assert amber and "AMBER: step 2 firstpass, step 15 rerun-panel passed only on a retry" in line, line
+
+
+def test_a_retry_that_failed_is_red_not_amber(tmp_path):
+    said = f"journey ✗ step 2 firstpass: {RETRIED['words']}; retried: ✗ TimeoutError: x"
+    out = _journey_json(tmp_path, said, [{**RETRIED, "ok": False}])
+    green, line, amber = gate.journey_read(out, tmp_path / "journey.log", 1)
+    assert not green and not amber, line
+    assert gate.run_status([("journey", green, line)], set()) == ("RED", 1)
+
+
+def test_a_record_without_the_retried_list_reads_the_line(tmp_path):
+    """A journey.json from before the list (or a log line alone): its words still count."""
+    said = f"journey ✓ 24 steps · 61 s · step 7 razor retried once after {RETRIED['words']}"
+    out = _journey_json(tmp_path, said, None)
+    green, line, amber = gate.journey_read(out, tmp_path / "journey.log", 0)
+    assert green and amber and "AMBER: step 7 razor passed only on a retry" in line, line
+    # no journey.json at all: the log's last line
+    log = tmp_path / "journey.log"
+    log.write_text("  07 razor ✓ …\n" + said + "\n")
+    green, line, amber = gate.journey_read(tmp_path / "no-such-dir", log, 0)
+    assert green and amber, line

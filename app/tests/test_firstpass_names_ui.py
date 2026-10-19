@@ -227,3 +227,124 @@ def test_a_generated_clip_reads_as_premiere_names_it():
     assert firstpass.rejected_lines([{"clip": "gen_black_78a418d8.mp4", "in": 0, "out": 2,
                                       "action": "dropped"}])[0].startswith(
         "Left out: Black Video 0:00.0–0:02.0")
+
+
+# ---------------------------------------------------------------- the page scan
+#
+# Verdict 10, punch 9: the Program's readout still said "18/19 · gen_black_78a418d8" over a
+# Black Video gap. Every board state a generated clip shows in is walked, and nothing on
+# the page — no text the editor can see, no hover — names a generated clip by its file.
+
+GEN_ID = r"gen_[a-z]+_[0-9a-f]{6}"
+
+SCAN_JS = r"""(re) => {
+  const pat = new RegExp(re, 'i');
+  const vis = (el) => !!el && el.getClientRects().length > 0
+    && getComputedStyle(el).visibility !== 'hidden';
+  const where = (el) => {
+    const p = [];
+    for (let n = el; n && n !== document.body && p.length < 4; n = n.parentElement) {
+      p.unshift(n.id ? `#${n.id}` : (n.dataset && n.dataset.testid) ? `[${n.dataset.testid}]`
+        : `${n.tagName.toLowerCase()}${n.classList.length ? '.' + [...n.classList].join('.') : ''}`);
+    }
+    return p.join(' > ');
+  };
+  const text = [], hover = [];
+  const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  while (walk.nextNode()) {
+    const n = walk.currentNode, el = n.parentElement;
+    if (el && pat.test(n.textContent) && vis(el) && !el.closest('script, style, template')) {
+      text.push(`${where(el)}: ${n.textContent.trim().slice(0, 120)}`);
+    }
+  }
+  for (const el of document.querySelectorAll('input, textarea, select')) {
+    if (vis(el) && pat.test(el.value || '')) text.push(`${where(el)} value: ${el.value}`);
+  }
+  for (const el of document.querySelectorAll('[title], [aria-label], img[alt]')) {
+    if (!vis(el)) continue;
+    for (const a of ['title', 'aria-label', 'alt']) {
+      const v = el.getAttribute(a);
+      if (v && pat.test(v)) hover.push(`${where(el)} ${a}: ${v.slice(0, 120)}`);
+    }
+  }
+  return { text, hover };
+}"""
+
+
+def _scan(pg, state: str, found: dict) -> None:
+    got = pg.evaluate(SCAN_JS, GEN_ID)
+    if got["text"] or got["hover"]:
+        found[state] = got
+
+
+def _clean(found: dict) -> None:
+    assert not found, "a generated clip's file name on the page, by board state: " + "; ".join(
+        f"{state}: on screen {got['text']}, in a hover {got['hover']}" for state, got in found.items())
+
+
+def test_no_generated_clips_file_name_anywhere_visible(page, live):
+    pg = page
+    found: dict = {}
+    pg.evaluate("tl.insert({clip: 'CLIP_A.MP4', in: 0.5, out: 2.0}, null)")
+    pg.evaluate("tl.placeAt({clip: 'CLIP_B.MP4', in: 0.5, out: 1.5}, tl.total() + 2, 'overwrite')")
+    segs = _until(lambda: (lambda s: s if len(s) == 3 else None)(_segments(live)),
+                  "the cut with its gap to be saved")
+    gap = segs[1]
+    assert gap["clip"].startswith("gen_black_"), segs
+    gid = str(gap["id"])
+    pg.wait_for_function(f"!!document.querySelector('#tl .blk[data-id=\"{gid}\"]')", timeout=10000)
+    pg.wait_for_timeout(400)
+    _scan(pg, "the cut with a Black Video gap", found)
+
+    # the gap clicked: selected, the Program parked on it — its readout, Effect Controls,
+    # the AI prompt's scope chip
+    pg.locator(f'#tl .blk[data-id="{gid}"]').click()
+    pg.wait_for_function("(document.querySelector('#playingWhat') || {}).textContent", timeout=10000)
+    assert pg.locator("#playingWhat").inner_text() == "2/3 · Black Video"
+    pg.wait_for_function("(document.querySelector('#ecWhat') || {}).textContent", timeout=5000)
+    pg.wait_for_timeout(300)
+    _scan(pg, "the gap selected, the Program parked on it", found)
+
+    # the same generated clip laid on V2 and selected: its Effect Controls head
+    oid = pg.evaluate("(c) => { const o = tl.addOverlay({clip: c, in: 0, out: 1}, 0.2);"
+                      " return o && (o.id || o); }", gap["clip"])
+    if oid:
+        pg.evaluate("(id) => tl.selectOverlay(id)", oid)
+        pg.wait_for_timeout(400)
+        _scan(pg, "the generated clip on V2, selected", found)
+        pg.evaluate("(id) => { tl.selectOverlay(null); tl.removeOverlay(id); }", oid)
+        pg.wait_for_timeout(300)
+
+    # played from the gap, then stopped there
+    pg.evaluate("tl.select([])")
+    pg.locator(f'#tl .blk[data-id="{gid}"]').dblclick()
+    pg.wait_for_timeout(700)
+    _scan(pg, "playing through the gap", found)
+    pg.keyboard.press("k")
+    pg.wait_for_timeout(300)
+
+    # the first pass's panel (what a re-run keeps)
+    _open_panel(pg)
+    _scan(pg, "the first pass's panel", found)
+    pg.keyboard.press("Escape")
+
+    # the Project panel, both views, and Selects
+    for view in ("list", "icon"):
+        b = pg.locator(f'#projView button[data-view="{view}"]')
+        if b.count() and b.is_visible():
+            b.click()
+            pg.wait_for_timeout(300)
+            _scan(pg, f"the Project panel's {view} view", found)
+    pg.evaluate("dock.open('bin', {remember: false})")
+    pg.wait_for_timeout(300)
+    _scan(pg, "Selects", found)
+
+    # a proposal that keeps the gap (a re-run keeps the shots you added by hand)
+    plan = {"segments": [{"clip": s["clip"], "in": s["in"], "out": s["out"],
+                          "why": "kept" if s.get("gap") else "the shot"} for s in segs],
+            "notes": "Kept your edits."}
+    pg.evaluate("(p) => rcShowProposal(p)", plan)
+    pg.wait_for_selector("#proposal", state="visible", timeout=10000)
+    pg.wait_for_timeout(400)
+    _scan(pg, "a proposal that keeps the gap", found)
+    _clean(found)
