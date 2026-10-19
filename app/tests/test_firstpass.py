@@ -141,6 +141,29 @@ def test_manual_edits_are_the_cut_diffed_against_the_accepted_base():
     assert firstpass.manual_edits(edl) == []
 
 
+def test_a_grade_or_an_effect_is_never_a_hand_edit():
+    """Verdict 11, punch 6: after the AI colour-matched every shot, the re-run counted all
+    22 as "edited by hand" and could replace none. A grade (the colour block's override,
+    the AI's or the editor's; a Lumetri value) and an effect (a Crop in Effect Controls)
+    leave a shot the machine's; only a cut made by hand makes it the editor's. A base
+    recorded before this rule, whose `hand` says "grade", no longer locks for it."""
+    edl = firstpass.record_base(_edl(CURRENT), CURRENT, job="j1",
+                                hand={"g02": ["grade"], "g03": ["trim", "grade"]})
+    # the AI's Color Match over every other shot to the first, as its accept writes it
+    edl["colour"] = {"mode": "auto", "reference": "g01",
+                     "shots": {s["id"]: {"match": "reference"} for s in CURRENT[1:]}}
+    edl["colour"]["shots"]["g01"] = {"balance": {"gain": [1.05, 1.0, 0.95], "exposure": 1.1}}
+    edl["segments"][0]["controls"] = {"contrast": 12.0, "saturation": 80.0,
+                                      "vfx": [{"id": "crop", "kind": "crop",
+                                               "params": {"left": 10.0}}]}
+    rows = firstpass.manual_edits(edl)
+    assert [(r["id"], r["how"], r["words"]) for r in rows] == [("g03", ["trim"], "trimmed")]
+    # and a cut by hand on a graded shot still is one
+    edl["segments"][1]["out"] = 46.0
+    assert {r["id"]: r["how"] for r in firstpass.manual_edits(edl)} == {
+        "g02": ["trim"], "g03": ["trim"]}
+
+
 def test_without_a_base_a_shot_is_the_machines_only_if_a_proposal_held_it():
     edl = _edl(CURRENT)
     rows = firstpass.manual_edits(edl, plans=[[{"clip": "CLIP_02.MP4", "in": 10.0,
@@ -198,19 +221,23 @@ class Scripted:
     """A model that answers the Ask's two calls: a first cut, or — when the prompt
     carries LOCKED shots — a re-cut that tampers with the locked one (the server must
     put it back) and misdescribes a shot it changed (the notes check must say so).
-    `hold`, when set, makes the plan call wait — the running state, observed."""
+    `hold`, when set, makes the plan call wait — the running state, observed. `recut`,
+    when set, is a re-run's answer (the re-run's note says "Re-run the first pass")."""
 
     name = "scripted"
 
     def __init__(self):
         self.seen: list = []
         self.hold: threading.Event | None = None
+        self.recut: list[dict] | None = None
 
     def complete(self, request):
         self.seen.append(request)
         prompt = request.prompt
         if "segments" not in (request.schema or {}):
             text = "{}"                           # the estimate: it falls back
+        elif self.recut is not None and "Re-run the first pass" in prompt:
+            text = json.dumps({"segments": self.recut, "notes": "a re-cut"})
         elif firstpass_locked_mark() in prompt:
             if self.hold is not None:
                 self.hold.wait(10)
@@ -519,40 +546,60 @@ def test_a_proposal_forms_while_the_proxies_never_finish(fp, monkeypatch):
         _end_jobs(server)
 
 
-def test_a_shot_only_graded_by_hand_is_kept_by_a_rerun(fp):
-    """The journey: a shot whose only change was its grade (a hand balance, or a
-    Lumetri value in Effect Controls) is the editor's own — "graded" — and a re-run
-    keeps it exactly, grade and all."""
+def test_a_graded_shot_is_not_locked_and_a_kept_shot_keeps_its_grade(fp, model):
+    """Verdict 11, punch 6: a grade or an effect (a hand balance, the AI's Color Match, a
+    Lumetri value or a Crop in Effect Controls) does not lock a shot's place in the cut —
+    the pass is not stale for it and a re-run may replace the shot — and whatever shot
+    the re-run keeps keeps it: the override is keyed by the shot's id, which the re-run
+    carries, and the Effect Controls come over exactly."""
     segs = _run_and_accept(fp)
     assert fp.get("/api/firstpass").json()["manual_edits"] == []
-    sid = segs[1]["id"]
-    colour = {"mode": "auto", "shots": {sid: {"balance": {"gain": [1.05, 1.0, 0.95],
-                                                           "exposure": 1.1}}}}
+    a, b = segs[0]["id"], segs[1]["id"]
+    bal = {"gain": [1.05, 1.0, 0.95], "exposure": 1.1}
+    colour = {"mode": "auto", "reference": a,
+              "shots": {a: {"balance": bal}, b: {"match": "reference"}}}
     assert fp.put("/api/project", json={"colour": colour}).status_code == 200
-    s = fp.get("/api/firstpass").json()
-    assert [(m["id"], m["how"], m["words"]) for m in s["manual_edits"]] == [
-        (sid, ["grade"], "graded")]
-    assert s["state"] == "stale-after-edits"
-    assert s["would"]["locked"] == [sid]
-    # a Lumetri value set in Effect Controls is a grade too
-    lum = [dict(segs[0], controls={"contrast": 12.0}), segs[1]]
+    ctl = {"contrast": 12.0, "vfx": [{"id": "crop", "kind": "crop", "params": {"left": 10.0}}]}
+    lum = [dict(segs[0], controls=ctl), dict(segs[1], controls={"saturation": 80.0})]
     assert fp.put("/api/project", json={"segments": lum, "story": ""}).status_code == 200
-    how = {m["id"]: m["how"] for m in fp.get("/api/firstpass").json()["manual_edits"]}
-    assert how == {segs[0]["id"]: ["grade"], sid: ["grade"]}
+    s = fp.get("/api/firstpass").json()
+    assert s["manual_edits"] == [] and s["state"] == "done", s
+    assert s["would"]["locked"] == [] and s["would"]["keep"] == []
+    assert [r["id"] for r in s["would"]["replace"]] == [a, b]
 
-    assert fp.post("/api/firstpass", json={"mode": "rerun"}).status_code == 200
+    # the re-run keeps shot 1 as it is and replaces shot 2
+    model.recut = [{"clip": segs[0]["clip"], "in": segs[0]["in"], "out": segs[0]["out"],
+                    "why": "the greeting"},
+                   {"clip": "CLIP_C.MP4", "in": 0.5, "out": 3.0, "why": "a walk instead"}]
+    r = fp.post("/api/firstpass", json={"mode": "rerun"})
+    assert r.status_code == 200 and r.json()["keep"] == [], r.text
     s = _wait(fp)
     assert s["state"] == "done", s
+    assert "Re-run the first pass" in model.seen[-1].prompt
+    assert firstpass_locked_mark() not in model.seen[-1].prompt, "nothing is locked"
     plan = _plan(fp, s["proposal"]["job"])
-    kept = {x["id"]: x for x in plan["segments"] if x.get("id") in how}
-    for want in lum:
-        got = kept[want["id"]]
-        assert (got["clip"], got["in"], got["out"]) == (want["clip"], want["in"], want["out"])
-    assert kept[segs[0]["id"]]["controls"] == {"contrast": 12.0}
-    rows = {r.get("id"): r for r in plan["firstpass"]["diff"]["shots"]}
-    assert rows[sid]["locked"] and rows[sid]["hand"] == ["grade"]
-    # the grade itself is keyed by the shot's id, which the re-run kept
-    assert fp.get("/api/project").json()["colour"]["shots"][sid]["balance"]["exposure"] == 1.1
+    diff = plan["firstpass"]["diff"]
+    rows = {(x.get("id") or x["clip"]): x for x in diff["shots"]}
+    assert rows[a]["status"] == "kept" and not rows[a]["locked"]
+    assert rows["CLIP_C.MP4"]["status"] == "new"
+    assert [x["id"] for x in diff["removed"]] == [b], "the graded shot 2 is replaced"
+    assert diff["counts"]["locked"] == 0 and diff["counts"]["replaced"] == 1
+    kept = next(x for x in plan["segments"] if x.get("id") == a)
+    assert (kept["clip"], kept["in"], kept["out"]) == (segs[0]["clip"], segs[0]["in"],
+                                                       segs[0]["out"])
+    assert kept["controls"] == ctl, "the kept shot's Lumetri and Crop come over exactly"
+
+    # accepted: the kept shot keeps its grade; the pass has no hand edit to report
+    assert fp.put("/api/project", json={"segments": plan["segments"],
+                                        "story": ""}).status_code == 200
+    fp.post("/api/asks/answer", json={"answer": "accept"})
+    proj = fp.get("/api/project").json()
+    got_bal = proj["colour"]["shots"][a]["balance"]
+    assert {k: got_bal[k] for k in bal} == bal and proj["colour"]["reference"] == a
+    got = {x["id"]: x for x in proj["segments"]}
+    assert got[a]["controls"] == ctl and b not in got
+    s = fp.get("/api/firstpass").json()
+    assert s["manual_edits"] == [] and s["state"] == "done", s
 
 
 def _timebase(fp, plan) -> float | None:

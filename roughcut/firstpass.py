@@ -36,15 +36,20 @@ EPS = 0.005
 
 MODES = ("run", "rerun")
 
-# How a shot became the editor's own, in the order the panel lists them.
-HOW = ("add", "razor", "trim", "speed", "move", "grade")
+# How a shot became the editor's own, in the order the panel lists them: the cut edits
+# only — an insert, a razor, a trim, a speed change, a move. A grade or an effect is not
+# one (verdict 11, punch 6: once the AI colour-matched every shot, a re-run counted all 22
+# as "edited by hand" and could replace none). It rides on the shot's id — the colour
+# block's override, the Effect Controls on the segment, a designed effect's `shot` — so
+# whatever shot a re-run keeps keeps it (`revise.carry_ids`, `revise.to_sequence`), and it
+# never locks the shot's place in the cut.
+HOW = ("add", "razor", "trim", "speed", "move")
 HOW_WORDS = {"add": "added by hand", "razor": "razored", "trim": "trimmed",
-             "speed": "speed changed", "move": "moved", "grade": "graded"}
+             "speed": "speed changed", "move": "moved"}
 
-# A shot's grade, for provenance (the journey, wave 3: a shot only colour-graded by hand
-# was not "the editor's own", so a re-run could replace it and take the grade with it):
-# its override in the EDL's colour block (balance, look, strength, auto, match) and the
-# Lumetri values Effect Controls keeps on the segment.
+# A shot's grade, as each base records it: its override in the EDL's colour block
+# (balance, look, strength, auto, match) and the Lumetri values Effect Controls keeps on
+# the segment. A record of what the accepted proposal's grade was, never a lock.
 GRADE_KEYS = ("auto", "balance", "look", "strength", "match")
 GRADE_CONTROLS = ("contrast", "saturation")
 
@@ -93,8 +98,9 @@ def record_base(edl: dict, segments: list[dict], *, job: str | None,
     """An accepted proposal becomes the newest base: its shots are the machine's, except
     the ids in `hand` (shots a re-run kept because the editor made them — they stay the
     editor's, with how). Each shot's grade is recorded too, from `colour` (the colour
-    block the accepting save writes; default the EDL's), so a grade changed by hand
-    later is a hand edit. Mutates and returns `edl`."""
+    block the accepting save writes; default the EDL's): what was accepted, which
+    `manual_edits` never reads as a hand edit (a grade does not lock a shot's place in
+    the cut). Mutates and returns `edl`."""
     colour = edl.get("colour") if colour is None else colour
     grades = {}
     hand = {str(k): list(v) for k, v in (hand or {}).items()}
@@ -184,7 +190,9 @@ def _lcs(a: list[str], b: list[str]) -> set[str]:
 
 def manual_edits(edl: dict, plans: list[list[dict]] | None = None) -> list[dict]:
     """The shots of the cut that are the editor's own, in cut order:
-    `{id, pos, clip, in, out, how: [...], words}` — `how` from HOW.
+    `{id, pos, clip, in, out, how: [...], words}` — `how` from HOW: the cut's edits
+    only. A grade or an effect, by hand or accepted from the AI, is not one: it stays on
+    the shot it is on, and a re-run that keeps the shot keeps it (verdict 11, punch 6).
 
     With no base (a cut made before provenance existed, or by hand), a shot counts as
     the machine's when some stored proposal (`plans`, the asks on disk) holds exactly
@@ -202,10 +210,8 @@ def manual_edits(edl: dict, plans: list[list[dict]] | None = None) -> list[dict]
                 out.append(_row(s, i, ["add"]))
         return out
     shots: dict = base.get("shots") or {}
+    # a base's `hand` from before verdict 11 may say "grade": no longer a hand edit
     hand: dict = base.get("hand") or {}
-    # a base recorded before grades were (no "grades"): a grade cannot be told apart
-    grades: dict | None = base.get("grades") if isinstance(base.get("grades"), dict) else None
-    colour = edl.get("colour")
     alias = _realias(segs, shots)
     cur_ids = [alias.get(s.get("id"), s.get("id")) for s in segs]
     common = [x for x in base.get("order") or [] if x in cur_ids]
@@ -241,9 +247,6 @@ def manual_edits(edl: dict, plans: list[list[dict]] | None = None) -> list[dict]
                 how.append("speed")
         if sid and sid in common and sid not in in_order:
             how.append("move")
-        if (b is not None and grades is not None
-                and grade_of(colour, s) != grades.get(sid)):
-            how.append("grade")
         if how:
             out.append(_row(s, i, sorted(set(how), key=HOW.index)))
     return out
