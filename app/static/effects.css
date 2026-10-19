@@ -118,6 +118,11 @@
 .ec-grp { color: var(--faint); font-size: 10.5px; padding: 3px 0 1px 25px; }
 .ec-row.ec-lum { grid-template-columns: 80px minmax(48px, 1fr) auto 22px; padding-left: 25px; gap: 6px; }
 #inspector .ec-lum input.ec-v { width: 50px; }
+/* Lumetri › Vignette (wave 15): a keyframe row (stopwatch · name · value · ◀ ◆ ▶ · reset ·
+   lane) with Lumetri's slider between the name and the value, indented as Lumetri's rows */
+.ec-row.ec-anim.ec-vig { grid-template-columns: 15px 68px minmax(32px, 1fr) auto 38px 18px minmax(56px, 22%);
+                         padding-left: 10px; }
+#inspector .ec-vig input.ec-v { width: 42px; }
 .ec-sl { -webkit-appearance: none; appearance: none; width: 100%; min-width: 0; height: 14px; margin: 0;
          background: transparent; cursor: pointer; }
 .ec-sl::-webkit-slider-runnable-track { height: 2px; background: var(--line-hi); border-radius: 1px; }

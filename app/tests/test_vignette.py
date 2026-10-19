@@ -96,6 +96,33 @@ def test_the_formula_never_touches_the_centre_and_takes_the_corners_whole():
     assert colour.vignette_apply(px, -5, np.zeros((1, 1)))[0, 0, 0] == pytest.approx(0.6)
 
 
+def test_the_shader_twin_is_the_formula():
+    """grade.js `vigU` (the shader's uniforms) and the shader's own lines, run in node on the
+    same points, give THE formula's weight."""
+    js = (ROOT / "app" / "static" / "grade.js").read_text(encoding="utf-8")
+    a = js.index("    function vigU(v, w, h) {")
+    b = js.index("\n    }\n", a) + 7
+    pts = [(u, v) for u in (-0.99, -0.6, -0.2, 0.0, 0.35, 0.8, 0.97) for v in (-0.97, -0.5, 0.0, 0.4, 0.9)]
+    cases = [(-2, 50, 0, 50), (1.5, 30, 100, 20), (-4, 70, -100, 0), (-1, 0, -40, 100), (3, 100, 60, 75)]
+    prog = js[a:b] + """
+      const smooth = (e0, e1, x) => { const t = Math.min(1, Math.max(0, (x - e0) / (e1 - e0))); return t * t * (3 - 2 * t); };
+      const out = [];
+      for (const c of CASES) {
+        const q = vigU(c, 320, 180);
+        for (const [u, v] of PTS) {
+          const d = Math.pow(Math.pow(q[0] * Math.abs(u), q[1]) + Math.pow(Math.abs(v), q[1]), 1 / q[1]) * q[2];
+          out.push(smooth(q[4], q[5], d));
+        }
+      }
+      console.log(JSON.stringify(out));"""
+    prog = prog.replace("CASES", json.dumps(cases)).replace("PTS", json.dumps(pts))
+    r = subprocess.run(["node", "-e", prog], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    got = json.loads(r.stdout)
+    want = [float(colour.vignette_weight(u, v, 320 / 180, m, rr, f)) for (_, m, rr, f) in cases for (u, v) in pts]
+    assert np.allclose(got, want, atol=1e-9), max(abs(x - y) for x, y in zip(got, want))
+
+
 # ------------------------------------------------------------------ the export
 
 def _clip(path: Path) -> None:

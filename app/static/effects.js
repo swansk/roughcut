@@ -16,6 +16,8 @@
  *                     Midtones, Highlights, each a puck and a lightness slider; a
  *                     double-click centres the puck), › HSL Secondary (a hue /
  *                     saturation / lightness key and its correction) — wave 11, LUMETRI
+ *                   › Vignette (Amount, Midpoint, Roundness, Feather, each a slider, a
+ *                     number and a stopwatch) — wave 15, VIGNETTE
  *   Video effects   the Effects bin's Crop / Transform / Gaussian Blur on the shot, a
  *                   section each in its stack's order: fx toggle, ▲ ▼, reset, clear, a
  *                   stopwatch on every number (wave 14, VFX: "video effects" below)
@@ -46,7 +48,9 @@
  *        formula), "saturation": 0..200, "fx_off": [effect ids], "fx_order": [effect ids],
  *        "keys": {prop: [[t, v], ...]} (see "keyframes" below),
  *        "curves" / "wheels" / "hsl" (roughcut/colour.py "Lumetri beyond Basic" has the
- *        schema and THE formula; grade.js the shader's twin)}
+ *        schema and THE formula; grade.js the shader's twin), "vignette_amount" -5..5,
+ *        "vignette_midpoint" 0..100, "vignette_roundness" -100..100, "vignette_feather"
+ *        0..100 (colour.py "Lumetri › Vignette"; keyable as Motion's are)}
  *     validated by server.py's `clean_controls` on every save. The export draws every
  *     one of them (research/tools/assemble.py `encode_part`); each row says so on hover.
  *
@@ -94,7 +98,7 @@
   };
   const OPEN_KEY = 'roughcut.ec.open';
   const open = Object.assign({ motion: true, opacity: true, time: true, volume: true, lumetri: true, basic: true, fxs: true,
-                               curves: false, wheels: false, hsl: false },
+                               curves: false, wheels: false, hsl: false, vignette: false },
     store.get(OPEN_KEY) || {});
 
   /* app.js's top-level bindings share the global lexical scope with this script; each is
@@ -217,10 +221,17 @@
    *   value at the playhead becomes the static one). With the stopwatch on, a changed
    *   value is a key at the playhead: the one there, or a new one. Position is one
    *   property with one stopwatch, as in Premiere: its x and y keys share their times. */
-  const KDEF = { position_x: 0.5, position_y: 0.5, scale: 100, rotation: 0, opacity: 100, volume_db: 0 };
+  /* Lumetri › Vignette (wave 15, VIGNETTE): its four numbers, a stopwatch each, as
+   * Premiere's Effect Controls has them (roughcut/colour.py "Lumetri › Vignette") */
+  const VIG = { vignette_amount: ['Amount', -5, 5, 0, 0.05, 1], vignette_midpoint: ['Midpoint', 0, 100, 50, 0.5, 1],
+                vignette_roundness: ['Roundness', -100, 100, 0, 0.5, 1], vignette_feather: ['Feather', 0, 100, 50, 0.5, 1] };
+  const VIG_KEYS = Object.keys(VIG);
+  const KDEF = { position_x: 0.5, position_y: 0.5, scale: 100, rotation: 0, opacity: 100, volume_db: 0,
+                 ...Object.fromEntries(VIG_KEYS.map((k) => [k, VIG[k][3]])) };
   const GROUPS = { pos: ['position_x', 'position_y'], scale: ['scale'], rotation: ['rotation'],
-                   opacity: ['opacity'], volume_db: ['volume_db'] };
-  const GROUP_NAME = { pos: 'position', scale: 'scale', rotation: 'rotation', opacity: 'opacity', volume_db: 'volume' };
+                   opacity: ['opacity'], volume_db: ['volume_db'], ...Object.fromEntries(VIG_KEYS.map((k) => [k, [k]])) };
+  const GROUP_NAME = { pos: 'position', scale: 'scale', rotation: 'rotation', opacity: 'opacity', volume_db: 'volume',
+                       ...Object.fromEntries(VIG_KEYS.map((k) => [k, `vignette ${VIG[k][0].toLowerCase()}`])) };
   const MAX_KEYS = 64;
   /* A video effect's parameter keys the same way (wave 14, VFX: roughcut/vfx.py): its
    * prop is `<param>@<effect id>` in the same `controls.keys` — `left@crop` — so a trim or
@@ -348,7 +359,7 @@
     if (keysOf(seg, 'position_x') || keysOf(seg, 'position_y')) {
       out.position = [valAt(seg, 'position_x', t), valAt(seg, 'position_y', t)];
     }
-    ['scale', 'rotation', 'opacity', 'volume_db'].forEach((kp) => {
+    ['scale', 'rotation', 'opacity', 'volume_db', ...VIG_KEYS].forEach((kp) => {
       const k = keysOf(seg, kp);
       if (k) out[kp] = interp(k, t);
     });
@@ -425,6 +436,22 @@
       },
     };
   }
+  /* Lumetri › Vignette's numbers: `controls.vignette_*`, only what differs from the default */
+  const VIG_HOVER = {
+    vignette_amount: 'darkens (−) or lightens (+) the picture\'s edges; 0 is off',
+    vignette_midpoint: 'how far in the vignette reaches: lower reaches further toward the centre',
+    vignette_roundness: 'its shape: + toward a circle, − toward the frame\'s rectangle',
+    vignette_feather: 'how soft its edge is: 0 a hard edge, 100 the softest',
+  };
+  function vigProp(key) {
+    const [label, lo, hi, dflt, step, digits] = VIG[key];
+    return keyed({
+      key, sec: 'lumetri', sub: 'vignette', label, lo, hi, step, digits, unit: '', dflt,
+      undo: `vignette ${label.toLowerCase()}`, hover: `Vignette › ${label}: ${VIG_HOVER[key]} · ${RENDERED}`,
+      get: (seg) => (ctl(seg)[key] ?? dflt),
+      set: (seg, v) => setCtl(seg, key, Math.round(clamp(v, lo, hi) * 1000) / 1000, dflt),
+    }, key, key);
+  }
   const PROPS = [
     keyed(posProp('x'), 'position_x', 'pos'), keyed(posProp('y'), 'position_y', 'pos'),
     keyed(plain('scale', 100, 0, 1000, 0.1, 1, '', 'Scale', 'motion'), 'scale', 'scale'),
@@ -454,6 +481,7 @@
     hslProp('saturation', 'Saturation', 0, 200, 1, '', 'the keyed colours\' saturation'),
     hslProp('temperature', 'Temperature', -100, 100, 1, '', 'warms or cools the keyed colours'),
     hslProp('tint', 'Tint', -100, 100, 1, '', 'green ↔ magenta on the keyed colours'),
+    ...VIG_KEYS.map(vigProp),
   ];
   const HSL_ROWS = [['Key', ['hsl_hue', 'hsl_width', 'hsl_sat_lo', 'hsl_sat_hi', 'hsl_light_lo', 'hsl_light_hi', 'hsl_soft']],
                     ['Correction', ['hsl_shift', 'hsl_saturation', 'hsl_temperature', 'hsl_tint']]];
@@ -912,6 +940,14 @@
     if (c.curves) out.curves = c.curves;
     if (c.wheels) out.wheels = c.wheels;
     if (c.hsl) out.hslKey = c.hsl;
+    // Lumetri › Vignette (wave 15): [amount, midpoint, roundness, feather] at the playhead
+    // (its keys evaluated there, as Motion's are), none while its Amount is 0
+    if (seg && (c.vignette_amount || (c.keys && VIG_KEYS.some((k) => c.keys[k])))) {
+      const sp = span(seg);
+      const tt = sp ? clamp((TL().state.playhead || 0) - sp.start, 0, sp.dur) : 0;
+      const vg = VIG_KEYS.map((k) => valAt(seg, k, tt));
+      if (vg[0]) out.vig = vg;
+    }
     const gr = typeof g('gradeApi') === 'function' ? g('gradeApi')() : null;
     const lut = gr ? gr.lut : null;
     if (lut && seg) {
@@ -964,6 +1000,21 @@
       <div class="ec-lane" data-lane="${group}" title="${esc(name)} keyframes over this shot · click to move the playhead, drag a diamond to move its key"><i class="ec-ph"></i></div>
     </div>`;
   }
+  /* Lumetri › Vignette's rows (wave 15): Premiere's Effect Controls row — the stopwatch,
+   * the name, the value, ◀ ◆ ▶, the reset and the keyframe lane — with Lumetri's slider
+   * beside the value, as the other Lumetri numbers have one. */
+  function vigRow(p) {
+    const name = groupName(p.group);
+    return `<div class="ec-row ec-anim ec-vig" data-row="${p.key}" data-g="${p.group}" title="${esc(p.hover)}">
+      <button type="button" class="ec-sw" data-sw="${p.group}" aria-pressed="false" title="toggle animation: keyframes for ${name}">${WATCH_SVG}</button>
+      <span class="ec-name">${esc(p.label)}</span>
+      <input type="range" class="ec-sl" data-sl="${p.key}" min="${p.lo}" max="${p.hi}" step="${p.step}" aria-label="${esc(`Vignette ${p.label}`)}">
+      <span class="ec-vals">${valInput(p.key)}</span>
+      <span class="ec-nav"><button type="button" data-kact="prev" data-g="${p.group}" title="go to the previous keyframe">◂</button><button type="button" class="ec-kadd" data-kact="key" data-g="${p.group}" title="add or remove a keyframe at the playhead">◆</button><button type="button" data-kact="next" data-g="${p.group}" title="go to the next keyframe">▸</button></span>
+      ${resetBtn(p.key, name)}
+      <div class="ec-lane" data-lane="${p.group}" title="${esc(name)} keyframes over this shot · click to move the playhead, drag a diamond to move its key"><i class="ec-ph"></i></div>
+    </div>`;
+  }
   /* Lumetri's rows: the name, a slider, the number. */
   function slRow(p) {
     return `<div class="ec-row ec-lum" data-row="${p.key}" title="${esc(p.hover)}">
@@ -1000,7 +1051,8 @@
         + subHtml('curves', 'Curves', curvesHtml())
         + subHtml('wheels', 'Color Wheels & Match', wheelsHtml())
         + subHtml('hsl', 'HSL Secondary', HSL_ROWS.map(([head, keys]) => `<div class="ec-grp">${esc(head)}</div>`
-          + keys.map((k) => slRow(BK(k))).join('')).join(''));
+          + keys.map((k) => slRow(BK(k))).join('')).join(''))
+        + subHtml('vignette', 'Vignette', VIG_KEYS.map((k) => vigRow(BK(k))).join(''));
     } else if (s.key === 'fxs') {
       body = '<div class="ec-stack"></div>';
     }
@@ -1694,6 +1746,12 @@
         const txt = fmtVal(p, p.get(seg));
         if (el.value !== txt) el.value = txt;
       });
+      box.querySelectorAll('.ec-anim.animated .ec-sl').forEach((el) => {   // the Vignette's sliders
+        const p = BY_KEY.get(el.dataset.sl);
+        if (!p || slDrag === el) return;
+        const v = String(p.get(seg));
+        if (el.value !== v) el.value = v;
+      });
     } else {
       const sp = span(seg);
       paintHead(box, seg, sp, localT(seg));
@@ -1717,6 +1775,7 @@
     const ps = PROPS.filter((p) => p.sec === key);
     const t = TL();
     if (!ps.length || !t || !opens(key === 'lumetri' ? 'colour reset' : key, key === 'volume')) return;
+    if (key === 'lumetri') VIG_KEYS.forEach((k) => setKeys(seg, k, null));   // its keys first: a reset is static
     ps.filter((p) => !p.colour).forEach((p) => p.set(seg, p.dflt));
     if (key === 'lumetri') {
       setCtl(seg, 'curves', null, null);       // Curves and Color Wheels too
