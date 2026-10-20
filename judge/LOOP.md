@@ -49,6 +49,11 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-20 ~00:30 (box clock): **VERDICT 13 FAIL on `b12b979`** (15 of 16 at 8-9; 16 at 7 from K4; the judge's gate GREEN in
+  3080 s, 2 flaky). Blockers: K2, K3, K4 (Karl's), dimension 16. Rulings: page-clock disclosure honest; the design redo
+  honest as disclosure, lenient as behaviour (REDO fixes it); Lumetri clock honest in substance (arm() from the latest input:
+  TESTS2), its skip above 2x cores now logged; waveform 9-frame bar lenient; K4 bars honest and stricter. Wave 17 grows to 8
+  lanes: INDEXPANEL, FOLDIN (+ the five exits the judge found) and VFXBLUR, PLAY8, TESTS2, SELECTS, REDO, SNAP (WAVE17.md).
 - 2026-10-19 ~21:50 (box clock): **Karl looked.** At his "how can I take a look now?" the lead restarted
   `roughcut-redesign` (8766) on `b12b979` (live worktree; headless check: 19 shots, prompt, tour, 0 page errors). His **K4**,
   recorded verbatim: what indexing ran and how to re-run / tune it is unclear; the old "pass" screens reachable from the

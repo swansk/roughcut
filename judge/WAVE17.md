@@ -18,3 +18,18 @@ at `rcIndex.open()`.
 Box rule: tests under `nice -n 19`, one Playwright process at a time, no nice-0 load. Ports: INDEXPANEL 9005-9009,
 FOLDIN 9010-9014. Karl may be using his 8766 preview: never restart `roughcut-redesign`; the lead holds merges into the
 redesign worktree (which 8766 serves) until Karl says he is done looking.
+
+## Added after verdict 13 (FAIL on b12b979; the judge's gate GREEN; 15/16 at 8-9, 16 at 7 from K4)
+
+| Lane | Punch | Owns |
+|---|---|---|
+| VFXBLUR | 3 | grade.js's Blur / Sharpen stages and the worker's scheduling around them |
+| PLAY8 | 9 + FRAMEACC's monitor items | app.js's player (cue, arm, boundary, preroll, play start), timeline.js `shotAt` clip time, server.py `build_poster` time rounding |
+| TESTS2 | 4, 7 | the flaky tests (test_poster_time, test_proposal_review:169, …), test_lumetri_ui `arm()` |
+| SELECTS | 5, 8 | dock.js `layout` / `tlHeadNeed` / Selects width, tour.js `NEVER_COVER` / placement |
+| REDO | 6 | fx.js's design undo / redo, server.py fx discard / restore |
+| SNAP | 10 | server.py `snap_respond` / snapshots / `_cause` + the import-burst handlers, roughcut/firstpass.py's re-run prompt |
+
+Shared with the first two lanes: dock.js (FOLDIN COMMANDS, INDEXPANEL panel registration, SELECTS layout), tour.js (FOLDIN
+steps/cards, SELECTS placement), server.py (INDEXPANEL index endpoints, FOLDIN routes, PLAY8 posters, REDO fx, SNAP
+snapshots). Ports 9015-9044 by lane in the order above.
