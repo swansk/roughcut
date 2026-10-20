@@ -49,6 +49,17 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-20 ~08:40 (box clock): **PLAY8b: no regression.** Pooled interleaved plays: the plain graded cut drops a frame
+  at the same rate in base `c9723b3` (4/38), PLAY8 alone (3/30) and the merge (4/48); a test run fails ~20% in every
+  tree, so the lead's 4/10 vs 0/10 was noise. No commit. Its finding for the judge: test_tx_playback's 67 ms is read on
+  the page/worker clocks, which put one dropped frame at 53-78 ms. Queued: the incoming rolled buffer's first frames
+  come late at a plain cut under load (predates wave 17). **Lead full gate on `612440a`: RED on 2 broken** (both merge
+  collisions): sprites took the frame after t while posters now take the frame on screen at t (PLAY8), and the Index
+  panel tests' fake look sidecar wrote `frames_sampled` as a count, which crashed `looked_at` and /api/picks. Fixed in
+  `799d8b8` (sprites use the poster's rule, cell-vs-still bar 10 -> 5; looked_at re-derives a non-list; a test that
+  fails on the old code). **Lead full gate on `799d8b8`: GREEN in 2925 s** (1831 passed, 0 flaky, 0 broken; perf
+  passed both runs: load 5.1 canvas frame/worker 33.5/36.0 (1440), 33.4/36.0 (1920); load 7.0: 50.0/46.0, 66.6/47.7;
+  journey 24 steps 54 s, slowest loop hold 17 ms; boot 0.64 s). **Judge 14 launched on `799d8b8`.**
 - 2026-10-20 ~03:35 (box clock): **wave 17 fully merged** (REDO `615f275`, SELECTS `a1f378c`, INDEXPANEL `14db7ae`, SNAP
   `d1b7318`, FOLDIN `1cfbd7b`, VFXBLUR `774a893`, TESTS2 `c9723b3` + the Lumetri frame bar logged, PLAY8 `1864eb6`). PLAY8
   (punch 9 + the parked frame): wrong-buffer cuts 12/18 -> 0/18, edit.py `wrong_clip_frames` 0 in 12/12 plays, 0.5x canvas

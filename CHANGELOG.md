@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- Loop state: PLAY8b found no regression; the gate's two merge collisions fixed; gate GREEN on 799d8b8; judge 14 running.
 - Scrub sprites take the frame on screen at each time, as posters, the Program and the export do (`-ss t` alone gave the frame after whenever t fell between frames; the cell-vs-still bar tightens 10 → 5). A look sidecar whose `frames_sampled` is a count, not a list, is re-derived instead of taking `/api/picks` down for the whole bin; the Index panel tests' fake look pass writes the list visual_pass.py writes. (Wave 17 gate, lead.)
 - Loop state: wave 17 fully merged; PLAY8b chases a graded-cut hold the merge exposed.
 - **Merge: wave 17 lane FOLDIN** (Karl's K4 (b): `/open` and `/floor` are gone (their routes answer with the editor) and nothing in the editor leaves it; their features live in it: the pass's verdicts on Selects rows, File › Project Settings…, Window › Events, junk in the Project panel's Status, hold-to-speak in the AI prompt). Rubric log: the two screens leave the budget.
