@@ -776,6 +776,17 @@ NARROW = {**SEED, "segments": [
     {"id": "aip0000002", "clip": "CLIP_B.MP4", "in": 0.0, "out": 0.35, "why": "a flash"},
     {"id": "aip0000003", "clip": "CLIP_C.MP4", "in": 0.5, "out": 2.5, "why": "third"}]}
 
+EDGES_ON_CUTS_JS = """(() => {
+  const cols = [...document.querySelectorAll('#tl .tl-lane[data-lane=V1] > .tl-edge')];
+  const narrow = document.querySelector('#tl .blk[data-id=aip0000002]');
+  if (cols.length !== 2 || !narrow || Math.abs(narrow.getBoundingClientRect().width - 14) >= 1.5) return false;
+  return cols.every((c) => {
+    const r = c.getBoundingClientRect();
+    const next = document.querySelector(`#tl .blk[data-id="${c.dataset.right}"]`);
+    return next && Math.abs(r.left + r.width / 2 - next.getBoundingClientRect().left) < 1;
+  });
+})()"""
+
 HIT_JS = """([x, y]) => { const n = document.elementFromPoint(x, y);
   return n ? {edge: !!n.closest('#tl .tl-edge'), blk: (n.closest('#tl .blk') || {dataset: {}}).dataset.id || null} : null; }"""
 
@@ -787,9 +798,12 @@ def test_right_click_a_narrow_block_or_a_trim_edge_opens_the_clips_menu(live_ser
     such a block and the ends of every other; the menu is the clip's under the pointer."""
     pg = _open(browser, live_server, project, seed=NARROW)
     pg.evaluate("tl.zoomTo(40)")                                      # 0.35 s = 14 px
-    pg.wait_for_function("document.querySelectorAll('#tl .tl-lane[data-lane=V1] > .tl-edge').length === 2"
-                         " && Math.abs(document.querySelector('#tl .blk[data-id=aip0000002]')"
-                         ".getBoundingClientRect().width - 14) < 1.5", timeout=5000)
+    # the blocks take the zoom at once; the trim lane lays its columns over the new cuts a
+    # frame later (timeline-trim.js layout, on a requestAnimationFrame). Waiting on the
+    # blocks alone read the columns where the old zoom had them when frames came late (the
+    # gate on 3b37b53: {'edge': False} at the narrow block's middle; 3 runs of 3 here with
+    # every frame 80 ms late), so the wait is for each column centred on its cut too.
+    pg.wait_for_function(EDGES_ON_CUTS_JS, timeout=5000)
     box = lambda i: pg.locator(f'#tl .blk[data-id="aip000000{i}"]').bounding_box()   # noqa: E731
     narrow, first, third = box(2), box(1), box(3)
     menu = pg.locator('[data-testid="ai-context-menu"]')
