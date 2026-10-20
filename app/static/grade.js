@@ -1292,8 +1292,11 @@ onmessage = (e) => {
     return R.render(j.v, j.vw, j.vh, j.w, j.h, j.rec.key, j.rec.n, j.rec.data, j.adj, j.parked, j.mix);
   }
 
-  /* Draw the live video's current frame through the LUT. */
+  /* Draw the live video's current frame through the LUT. Not one after the live shot's last
+   * at a plain cut (wave 17 PLAY8: app.js rcPastShot, the cut held for the incoming shot's first
+   * frame): the canvas keeps the shot's last frame up. */
   function draw(raw) {
+    if (!raw && typeof window.rcPastShot === 'function' && window.rcPastShot(live())) return;
     const j = job(raw);
     if (!j) return;
     G.drawnAt = performance.now();
