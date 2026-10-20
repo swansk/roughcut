@@ -68,14 +68,17 @@ TITLE = {
 
 class Model:
     """The assist call (its schema has `kind`) answers `answer`; the designer's call
-    (its prompt starts "THE NOTE:") answers TITLE and is counted; anything else "{}"."""
+    (its prompt starts "THE NOTE:") answers TITLE and is counted; anything else "{}".
+    `calls` counts every call, of any kind (a redo that restores makes none)."""
     name = "aihonest-scripted"
 
     def __init__(self):
         self.answer: dict = {"kind": "answer", "text": "ok"}
         self.notes: list[str] = []
+        self.calls = 0
 
     def complete(self, request):
+        self.calls += 1
         schema = request.schema or {}
         if "kind" in schema:
             text = json.dumps(self.answer)
@@ -191,6 +194,7 @@ def browser(live_server):
 def fresh(live_server):
     MODEL.answer = {"kind": "answer", "text": "ok"}
     MODEL.notes = []
+    MODEL.calls = 0
     GATE.set()
     _clear_fx()
     yield
@@ -294,6 +298,12 @@ def _marks(edl: dict) -> tuple:
     return (edl.get("in"), edl.get("out"), edl.get("markers"))
 
 
+def _on_disk() -> list[dict]:
+    """Every effect record in the bin's fx folder, listed or not (a withdrawn one is not)."""
+    import server
+    return [json.loads(f.read_text(encoding="utf-8")) for f in sorted(server.fx_home().glob("fx_*.json"))]
+
+
 # ---------------------------------------------------------------- punch 5
 
 def test_a_design_request_says_so_and_one_ctrl_z_takes_it_back_not_the_edit_before(browser, live_server, project):
@@ -337,25 +347,34 @@ def test_a_design_request_says_so_and_one_ctrl_z_takes_it_back_not_the_edit_befo
         assert _marks(b.settle()) == marked, "the Ctrl+Z after the design accept undid the In/Out"
         assert b.undo_title() == "undo: AI: In/Out + marker (Ctrl+Z)"
         assert p.locator(STATUS).is_hidden() or "being designed" not in b.result()
-        # the held design lands — and is discarded before its card is drawn; the second is
-        # never asked for
+        # the held design lands — and is set aside before its card is drawn (kept on disk for
+        # a redo, out of every list); the second is never asked for
         GATE.set()
         b.designs_idle()
         assert MODEL.notes == ["a big white KILLINGTON title"], MODEL.notes
         assert b.effects() == []
         assert p.locator("#fx .fxcard").count() == 0
         assert not any("a proposal" in t for t in b.toasts()), b.toasts()
+        aside = _on_disk()
+        assert [(e["shot"], e["status"]) for e in aside] == [(A, "withdrawn")], aside
 
-        # Ctrl+Shift+Z: asked for again, both, one at a time
+        # Ctrl+Shift+Z (verdict 13, punch 6): the design that landed comes back as it was, no
+        # call; only the one never asked asks the designer again — free on this plan, so no
+        # question first
         b.redo()
-        p.wait_for_function("window.__toasts.some((t) => t.startsWith('redone: AI: 2 effects'))", timeout=5000)
+        p.wait_for_function("window.__toasts.some((t) => t.startsWith('redone: AI: 2 effects —'))", timeout=5000)
+        said = next(t for t in b.toasts() if t.startswith("redone: AI: 2 effects —"))
+        assert said == ("redone: AI: 2 effects — 1 design back · asks the designer again for 1 · free on your plan"
+                        " — review them in Designed Effects"), said
+        assert p.locator("[data-testid=redo-ask-confirm][open]").count() == 0
         assert _marks(b.settle()) == marked
         end = time.time() + 30
         while len([e for e in b.effects() if e["status"] == "proposed"]) < 2 and time.time() < end:
             p.wait_for_timeout(250)
         got = b.effects()
         assert sorted(e["shot"] for e in got) == sorted([A, B]) and all(e["status"] == "proposed" for e in got), got
-        assert MODEL.notes[1:] == ["a big white KILLINGTON title", "the KILLINGTON title carries on"], MODEL.notes
+        assert next(e["id"] for e in got if e["shot"] == A) == aside[0]["id"]
+        assert MODEL.notes[1:] == ["the KILLINGTON title carries on"], MODEL.notes
         b.designs_idle()
         p.wait_for_function(
             f"document.querySelector('{RESULT}') === null || !document.querySelector('{RESULT}').textContent.includes('applied')")
@@ -406,6 +425,151 @@ def test_a_design_beside_a_cut_edit_is_one_undo_with_it(browser, live_server, pr
             p.wait_for_timeout(200)
         assert b.effects() == []
     finally:
+        b.close()
+
+
+# ---------------------------------------------------------------- verdict 13, punch 6
+
+def _until(page, fn, timeout: float = 15.0, what: str = "the condition"):
+    end = time.time() + timeout
+    while time.time() < end:
+        v = fn()
+        if v:
+            return v
+        page.wait_for_timeout(150)
+    raise AssertionError(f"timed out waiting for {what}")
+
+
+def test_a_redo_brings_back_the_same_design_with_no_model_call(browser, live_server, project):
+    """The judge's measurement (verdict 13): Accept, the design lands, Ctrl+Z, Ctrl+Shift+Z —
+    and "a different design (fx_03876b5d) arrived 17.6 s later, from a new model call". Now
+    the redo is Premiere's: the same fx id, the same design, zero model calls (counted on
+    the scripted backend), and no design job; twice over. A new edit after an undo empties
+    the redo side, and the design set aside there goes for good."""
+    import server
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+        b.ask([{"op": "design_effect", "id": A, "note": "a big white KILLINGTON title"}],
+              summary="a KILLINGTON title", text="put a big white KILLINGTON title on the first shot")
+        b.accept()
+        p.wait_for_function("dock.current() === 'fx'", timeout=8000)
+        _until(p, lambda: [e for e in b.effects() if e["status"] == "proposed"], what="the design to land")
+        b.designs_idle()
+        [first] = b.effects()
+        fx_id = first["id"]
+        p.wait_for_selector(f"#fx .fxcard[data-id='{fx_id}']", timeout=8000)
+        assert MODEL.notes == ["a big white KILLINGTON title"], MODEL.notes
+        calls, jobs = MODEL.calls, set(server.FX)
+        spec = {k: first.get(k) for k in ("name", "note", "events", "overlay", "shot")}
+
+        for round_ in (1, 2):
+            # Ctrl+Z: out of Designed Effects, set aside on disk (not deleted)
+            b.undo()
+            p.wait_for_function("(n) => window.__toasts.filter((t) => t === 'undone: AI: effect — the design is discarded')"
+                                ".length >= n", arg=round_, timeout=5000)
+            _until(p, lambda: b.effects() == [], what="the design to be set aside")
+            assert [(e["id"], e["status"]) for e in _on_disk()] == [(fx_id, "withdrawn")]
+            p.wait_for_function("document.querySelectorAll('#fx .fxcard').length === 0", timeout=5000)
+            # Ctrl+Shift+Z: the same design back, as it was
+            b.redo()
+            p.wait_for_function("(n) => window.__toasts.filter((t) => t === 'redone: AI: effect — the design is back"
+                                " — review it in Designed Effects').length >= n", arg=round_, timeout=5000)
+            got = _until(p, lambda: b.effects() or None, what="the design to come back")
+            assert [(e["id"], e["status"]) for e in got] == [(fx_id, "proposed")], got
+            assert {k: got[0].get(k) for k in spec} == spec
+            p.wait_for_selector(f"#fx .fxcard[data-id='{fx_id}']", timeout=8000)
+            assert b.undo_title() == "undo: AI: effect (Ctrl+Z)"
+            # zero model calls, no design job, no question asked
+            p.wait_for_timeout(1500)
+            assert MODEL.calls == calls, (MODEL.calls, calls)
+            assert MODEL.notes == ["a big white KILLINGTON title"], MODEL.notes
+            assert not [j for j in set(server.FX) - jobs if server.FX[j]["fx_kind"] == "design"]
+            assert p.locator("[data-testid=redo-ask-confirm][open]").count() == 0
+
+        # undone, then a new edit: the redo side is gone, and the design set aside with it
+        b.undo()
+        _until(p, lambda: b.effects() == [], what="the design to be set aside")
+        assert p.evaluate("tl.mark('a new edit')") is True
+        _until(p, lambda: _on_disk() == [], what="the set-aside design to go for good")
+        assert not (server.fx_home() / fx_id).exists()
+        b.redo()                                      # nothing to redo: nothing comes back
+        p.wait_for_timeout(800)
+        assert b.effects() == [] and MODEL.calls == calls
+    finally:
+        b.close()
+
+
+def test_on_the_api_a_redo_that_must_ask_again_shows_its_price_first(browser, live_server, project, monkeypatch):
+    """A request taken back before its design was asked has nothing to restore, so its redo
+    asks the designer again — and on `anthropic_api`, where that bills, the price comes
+    first in a question (REDESIGN-GOAL section S; dimension 13: a priced step is "never run
+    unasked"). "Don't ask" keeps the redo without the call; a later redo asks again and
+    "Ask" makes the one call. The design that did land (after its Ctrl+Z) comes back as it
+    was, with no call, either way."""
+    monkeypatch.setenv("ROUGHCUT_BACKEND", "anthropic_api")
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+        GATE.clear()
+        b.ask([{"op": "design_effect", "id": A, "note": "a big white KILLINGTON title"},
+               {"op": "design_effect", "id": B, "note": "the KILLINGTON title carries on"}],
+              summary="a KILLINGTON title", text="title the first two shots")
+        b.accept()
+        p.wait_for_function("dock.current() === 'fx'", timeout=8000)
+        p.wait_for_function("fx.state.busy && fx.state.busy.fx_kind === 'design'", timeout=15000)
+        # taken back while the first is with the designer and the second not asked yet
+        b.undo()
+        p.wait_for_function("window.__toasts.some((t) => t.includes('the 2 designs are discarded'))", timeout=5000)
+        GATE.set()
+        b.designs_idle()
+        assert MODEL.notes == ["a big white KILLINGTON title"], MODEL.notes
+        [aside] = _on_disk()
+        assert aside["status"] == "withdrawn" and aside["shot"] == A
+        calls = MODEL.calls
+        price = p.evaluate(f"fetch('/api/fx/price?place=1&shot={B}').then((r) => r.json())")
+        assert price["charged"] is True and price["usd"] > 0
+        dollars = f"${price['usd']:.2f}"
+        dlg = "[data-testid=redo-ask-confirm]"
+
+        # Ctrl+Shift+Z: the landed one back; the price of the other on screen, nothing asked
+        b.redo()
+        p.wait_for_selector(f"{dlg}[open]", timeout=8000)
+        text = " ".join(p.locator(dlg).inner_text().split())
+        assert "Redo asks the designer again" in text, text
+        assert f"about {dollars}, billed to the API key" in text, text
+        assert "1 design came back as it was, with no call." in text, text
+        assert "free on your plan" not in text, text
+        assert p.locator(f"{dlg} [data-testid=redo-ask-ok]").inner_text().strip() == f"Ask · ~{dollars}"
+        got = _until(p, lambda: b.effects() or None, what="the landed design to come back")
+        assert [(e["id"], e["status"]) for e in got] == [(aside["id"], "proposed")], got
+        p.wait_for_timeout(1500)
+        assert MODEL.calls == calls, "a call ran while its price was still a question"
+        # Don't ask: the redo stands, the other design is not asked for
+        p.locator(f"{dlg} [data-ans=no]").click()
+        p.wait_for_function("window.__toasts.some((t) => t === 'redone: AI: 2 effects — 1 design back · 1 design not"
+                            " asked again — review it in Designed Effects')", timeout=5000)
+        assert p.locator(f"{dlg}[open]").count() == 0
+        p.wait_for_timeout(1500)
+        assert MODEL.calls == calls and [e["id"] for e in b.effects()] == [aside["id"]]
+
+        # once more, and this time Ask: one design call, the landed one still the same
+        b.undo()
+        _until(p, lambda: b.effects() == [], what="the design to be set aside")
+        b.redo()
+        p.wait_for_selector(f"{dlg}[open]", timeout=8000)
+        assert MODEL.calls == calls
+        p.locator(f"{dlg} [data-testid=redo-ask-ok]").click()
+        p.wait_for_function("window.__toasts.some((t) => t.startsWith('redone: AI: 2 effects — 1 design back · asks the"
+                            f" designer again for 1 · ~{dollars}'))", timeout=5000)
+        _until(p, lambda: len([e for e in b.effects() if e["status"] == "proposed"]) == 2, timeout=30,
+               what="the second design")
+        b.designs_idle()
+        got = {e["shot"]: e["id"] for e in b.effects()}
+        assert got[A] == aside["id"] and got[B] != aside["id"], got
+        assert MODEL.notes == ["a big white KILLINGTON title", "the KILLINGTON title carries on"], MODEL.notes
+    finally:
+        GATE.set()
         b.close()
 
 

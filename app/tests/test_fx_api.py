@@ -323,6 +323,48 @@ def test_discard_drops_a_proposal_and_its_files(stubbed, client):
     assert client.get("/api/fx").json()["effects"] == []
 
 
+def test_a_withdrawn_design_is_kept_hidden_and_restores_as_the_same_proposal(stubbed, client):
+    """Verdict 13, punch 6: the board's Ctrl+Z of an AI design request sets its proposal
+    aside (`withdraw: true`) instead of deleting it, so Ctrl+Shift+Z brings back the same
+    design — same id, same spec, files intact — with no model call. While withdrawn it is
+    out of every list and nothing revises, checks or accepts it; a plain Discard (once no
+    redo can reach it) still deletes it for good."""
+    shot = _seed(stubbed, client)
+    job = client.post("/api/fx/design", json={"shot": shot, "note": "hit markers"}).json()["job"]
+    fx_id = _wait(client, job)["result"]["id"]
+    import server
+    home = server.fx_home()
+    before = json.loads((home / f"{fx_id}.json").read_text(encoding="utf-8"))
+    r = client.post("/api/fx/discard", json={"id": fx_id, "withdraw": True})
+    assert r.status_code == 200 and r.json()["withdrawn"] is True
+    kept = json.loads((home / f"{fx_id}.json").read_text(encoding="utf-8"))
+    assert kept["status"] == "withdrawn" and kept["withdrawn"]["from"] == "proposed"
+    assert (home / fx_id / "sound.wav").exists()
+    assert client.get("/api/fx").json()["effects"] == []
+    # set aside, so nothing acts on it until the redo
+    assert client.post("/api/fx/accept", json={"id": fx_id}).status_code == 404
+    assert client.post("/api/fx/revise", json={"id": fx_id, "note": "red"}).status_code == 404
+    assert client.post("/api/fx/verify", json={"id": fx_id}).status_code == 404
+    assert client.post("/api/fx/discard", json={"id": fx_id, "withdraw": True}).status_code == 200   # twice: no change
+    # the redo: the same proposal back, no design job started
+    jobs = set(server.FX)
+    r = client.post("/api/fx/restore", json={"id": fx_id})
+    assert r.status_code == 200, r.text
+    assert r.json()["effect"]["id"] == fx_id and r.json()["effect"]["status"] == "proposed"
+    assert not [j for j in set(server.FX) - jobs if server.FX[j]["fx_kind"] == "design"]
+    back = json.loads((home / f"{fx_id}.json").read_text(encoding="utf-8"))
+    assert "withdrawn" not in back
+    keys = ("name", "note", "events", "overlay", "sound", "shot")
+    assert {k: back.get(k) for k in keys} == {k: before.get(k) for k in keys}
+    assert [(x["id"], x["status"]) for x in client.get("/api/fx").json()["effects"]] == [(fx_id, "proposed")]
+    assert client.post("/api/fx/restore", json={"id": fx_id}).status_code == 404       # not withdrawn now
+    # withdrawn again, then a plain discard: gone for good, files and all
+    assert client.post("/api/fx/discard", json={"id": fx_id, "withdraw": True}).status_code == 200
+    assert client.post("/api/fx/discard", json={"id": fx_id}).status_code == 200
+    assert not (home / f"{fx_id}.json").exists() and not (home / fx_id).exists()
+    assert client.post("/api/fx/restore", json={"id": fx_id}).status_code == 404
+
+
 def test_a_drawn_reference_places_the_hits_and_is_kept(stubbed, client):
     shot = _seed(stubbed, client)
     png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="

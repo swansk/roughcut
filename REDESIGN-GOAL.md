@@ -473,3 +473,14 @@ next judge runs, and the next judge rules it honest or lenient.
   test_tx_playback does; this was only in a commit message (verdict 13: the log did not say it). More lenient on an
   overloaded box. Verdict 13 also ruled the design redo's behaviour lenient (it re-asks the model on a keypress); wave
   17's lane REDO makes a redo restore the same design with no call (punch 6).
+
+- 2026-10-20 (wave 17, lane REDO; logged by the lead): **a redo of an AI design request restores; it re-asks only what was
+  never designed, and on `anthropic_api` only after showing its price.** Ctrl+Z on an AI accept's design requests now sets
+  each landed design aside (status `withdrawn`: kept on disk, out of every list, refused by accept / revise / check / nudge)
+  instead of deleting it; Ctrl+Shift+Z restores the same fx id with no model call (test_ai_honest_ui counts zero calls on
+  the scripted backend across two undo/redo rounds); a design that lands after its request's Ctrl+Z is set aside too and
+  comes back with no call. Only a request taken back before Design was pressed has nothing to restore: on `claude_cli` its
+  redo re-asks and the toast says "asks the designer again · free on your plan"; on `anthropic_api` a confirm shows the
+  price first ("one design call, about $X, billed to the API key"; "Ask · ~$X" / "Don't ask") and nothing is called until
+  Ask. This replaces wave 16 AIHONEST's entry (a redo re-asked every discarded design, unasked on the API): stricter. A
+  new edit empties the redo side and deletes what it set aside; a page reload loses the redo stack, as before.
