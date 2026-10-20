@@ -85,6 +85,27 @@ def _clips(c) -> dict:
         time.sleep(0.2)
 
 
+def _poster(c, url: str, wait_s: float = 20.0):
+    """GET a poster as the board does (wave 15 BUDGET's contract): a frame not cut yet is
+    answered at once with a stand-in marked `x-roughcut-poster` (cut in the background; a
+    request waits for it at most POSTER_WAIT_S), so ask again until it is the frame.
+
+    Lane TESTS2, wave 17: the import test read the card's poster once and got the stand-in
+    (mean (21, 20, 22), the neutral #151517), 3 runs of 3 alone: in a cold process the
+    import's own poster build (`_import_posters`: the clip's ffprobe, then a walk slot) only
+    started its ffmpeg ~0.9 s after the import, after the test had asked. The server's
+    "poster failed for CLIP_A.MP4 at 1.00s:" with no error was that build's ffmpeg killed
+    (-9) as the failed test's board shut down. Warm (the full suite), it was on disk first."""
+    deadline = time.monotonic() + wait_s
+    while True:
+        r = c.get(url)
+        if "x-roughcut-poster" not in r.headers:
+            return r
+        assert r.status_code == 200 and "standin" in r.headers["server-timing"], dict(r.headers)
+        assert time.monotonic() < deadline, f"{url}: still a stand-in after {wait_s:.0f} s"
+        time.sleep(0.1)
+
+
 def _mean_rgb(jpeg: bytes) -> np.ndarray:
     r = subprocess.run(["ffmpeg", "-v", "error", "-i", "pipe:0", "-f", "rawvideo",
                         "-pix_fmt", "rgb24", "pipe:1"], input=jpeg, capture_output=True,
@@ -163,11 +184,11 @@ def test_importing_a_second_folder_unions_the_clips_and_names_collisions(tmp_pat
         assert not list((tmp_path / "media").rglob("*.MP4")) or all(
             p.is_symlink() for p in (tmp_path / "media").rglob("*.MP4"))
         # the poster is the card's red frame, not the bin's CLIP_A (the resolver)
-        p = c.get(red["poster"])
+        p = _poster(c, red["poster"])
         assert p.status_code == 200 and p.headers["content-type"] == "image/jpeg"
         rgb = _mean_rgb(p.content)
         assert rgb[0] > 180 and rgb[1] < 60 and rgb[2] < 60, rgb
-        own = _mean_rgb(c.get(clips["CLIP_A.MP4"]["poster"]).content)
+        own = _mean_rgb(_poster(c, clips["CLIP_A.MP4"]["poster"]).content)
         assert not (own[0] > 180 and own[1] < 60), "the bin's CLIP_A is not red"
 
         # again: the same files are skipped, not doubled; nor the bin's own file; nor text
@@ -266,7 +287,7 @@ def test_an_upload_streams_to_disk_under_work_and_becomes_a_clip(tmp_path, media
         assert where.read_bytes() == files[0].read_bytes()
         assert sorted(p.name for p in media["footage"].iterdir()) == ["CLIP_A.MP4", "CLIP_B.MP4"]
         assert green["duration"] == pytest.approx(3.0, abs=0.1)
-        rgb = _mean_rgb(c.get(green["poster"]).content)
+        rgb = _mean_rgb(_poster(c, green["poster"]).content)
         assert rgb[1] > 100 and rgb[0] < 60, rgb
 
         # the same file again is "already imported"; nothing is sent
