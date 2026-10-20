@@ -38,6 +38,8 @@ held 83 ms 5-6 times in the 0.5x shot.
 from __future__ import annotations
 
 import json
+import math
+import os
 import socket
 import subprocess
 import sys
@@ -263,3 +265,210 @@ def test_a_half_speed_shot_changes_picture_every_four_display_frames(live):
     # the canvas adds no hold of its own (the base: 5-10 a play, every frame callback that came a
     # display frame before its frame went up)
     assert sum(1 for g in gaps if g > 70) <= sum(1 for g in own if g > 70) + 1, (gaps, own)
+
+
+# ------------------------------------------------------------------ half speed, evenly
+# (wave 18 PLAY9, verdict 14 punch 3: "the 0.5x shot judders on every play (8/8, 2-12 holds of
+# 83 ms per 5 s, even at load 1.7-2.8)"; REDESIGN-GOAL dimension 6)
+#
+# On test_perf_latency's kind of footage at 29.97 (3840x2160 H.264, a 1 s GOP, temporal grain made
+# at 1280 and scaled up, proxied by the server's own `ensure_proxies` to the 1280 proxy), a shot at
+# 0.5x: its proxy has a new frame every 66.7 ms of film, four display frames at 60 Hz. Played for
+# 4.5 s from 1 s into it, twice on one page (the first play is the page's first: its sound starts
+# then), what the screen shows is measured on the frame clock (rAF's timestamp) and the worker's
+# (each draw up from the display frame after the worker finished it): the canvas's draws while it
+# is the picture, graded at 1440 and 1920 and ungraded at 1440 (grade.js draws a slowed shot
+# through the canvas either way: slowPlaying). ASSERTED: no picture held past 67.5 ms on the
+# worker's clock, nor on the frame clock (one a play allowed past one runnable task a core: the
+# page's animation frames then run late enough to see a draw a display frame early or late; the
+# worker's clock of such a play was even), every source frame of the play drawn (none skipped),
+# the canvas up from its first draw. The buffer's own frames (rVFC expectedDisplayTime) are in the record: they hold
+# 83 ms 0-12 times a play on the base and the head alike (the renderer's frame choice before its
+# cadence locks, ~2 s), which the canvas no longer shows. Base 1fc6907, this fixture, load 3.6-4.9:
+# the graded canvas held 83 ms 3-12 times in each of its 4 plays, and the ungraded shot was the raw
+# buffer (no canvas), holding 3 times a play. A box already past twice its cores skips the hold
+# count, visibly.
+
+SLOW_STEMS = [("H30_A", 0), ("H30_B", 150)]
+SLOW_SEGS = [{"id": "h1", "clip": "H30_A.MP4", "in": 1.0, "out": 2.5, "why": "one"},
+             {"id": "h2", "clip": "H30_B.MP4", "in": 1.0, "out": 5.0, "speed": 0.5, "why": "slow"}]
+SLOW_FROM_S, SLOW_PLAY_S = 1.0, 4.5      # film seconds into the 0.5x shot, and how long each play is
+HOLD_BAR_MS = 67.5                       # a 0.5x frame of a 29.97 proxy is 66.7 ms (4 display frames)
+
+
+def _make_4k(path: Path, hue: int) -> None:
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-nostdin",
+         "-f", "lavfi", "-i",
+         f"testsrc2=size=1280x720:rate=30000/1001:duration={CLIP_S},hue=h={hue},"
+         "noise=alls=12:allf=t,scale=3840:2160",
+         "-f", "lavfi", "-i", f"sine=frequency=440:duration={CLIP_S}",
+         "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+         "-g", "30", "-keyint_min", "30", "-sc_threshold", "0",
+         "-c:a", "aac", "-shortest", str(path)],
+        check=True, capture_output=True)
+
+
+def _slow_edl(graded: bool) -> dict:
+    colour = ({"mode": "auto", "shots": {s["id"]: {"balance": dict(BALANCE)} for s in SLOW_SEGS}}
+              if graded else {"mode": "off"})
+    return {"variant": "T", "title": "half speed", "orient": "none", "story": "",
+            "target_s": [5, 20], "fps": R, "segments": SLOW_SEGS, "colour": colour}
+
+
+@pytest.fixture(scope="module")
+def slow_proj(tmp_path_factory):
+    from concurrent.futures import ThreadPoolExecutor
+    from conftest import _sidecar
+    root = tmp_path_factory.mktemp("halfspeed")
+    footage, sidecars, work = root / "footage", root / "sidecars", root / "work"
+    for d in (footage, sidecars, work):
+        d.mkdir()
+    with ThreadPoolExecutor(len(SLOW_STEMS)) as ex:
+        list(ex.map(lambda sh: _make_4k(footage / f"{sh[0]}.MP4", sh[1]), SLOW_STEMS))
+    for stem, _h in SLOW_STEMS:
+        side = _sidecar(stem)
+        side["duration_s"] = CLIP_S
+        (sidecars / f"{stem}.audio.json").write_text(json.dumps(side), encoding="utf-8")
+    (root / "edl.json").write_text(json.dumps(_slow_edl(True), indent=1), encoding="utf-8")
+    return {"root": root, "footage": footage, "sidecars": sidecars, "work": work, "edl": root / "edl.json"}
+
+
+@pytest.fixture(scope="module")
+def slow_live(slow_proj):
+    """(Configured after the 320x180 module's tests: server.configure is the app's one project.)"""
+    import uvicorn
+    import server
+    p = slow_proj
+    server.configure(p["edl"], p["footage"], p["sidecars"], p["work"], proxies=False,
+                     visual=p["work"] / "no-visual")
+    server.ensure_proxies([f"{s}.MP4" for s, _h in SLOW_STEMS])
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    srv = uvicorn.Server(uvicorn.Config(server.app, host="127.0.0.1", port=port, log_level="error"))
+    th = threading.Thread(target=srv.run, daemon=True)
+    th.start()
+    for _ in range(100):
+        if srv.started:
+            break
+        time.sleep(0.1)
+    assert srv.started, "server did not start"
+    yield f"http://127.0.0.1:{port}"
+    srv.should_exit = True
+    th.join(timeout=10)
+
+
+SLOW_ARM = r"""() => { window.__fl = []; window.__rf = []; window.__on = true; window.__t0 = performance.now();
+  [...document.querySelectorAll('#player video.pvbuf')].forEach(v => { const cb = (now, md) => { if (!window.__on) return;
+     window.__fl.push({t: now, ed: md.expectedDisplayTime || now, v: v.id, live: v.classList.contains('live'), mt: md.mediaTime});
+     v.requestVideoFrameCallback(cb); }; v.requestVideoFrameCallback(cb); });
+  const look = (ft) => { if (!window.__on) return;
+     window.__rf.push({ft, playing: player.playing, idx: player.idx, draws: grade.draws,
+                       on: !!document.querySelector('#gradeCanvas.on')});
+     requestAnimationFrame(look); };
+  requestAnimationFrame(look); }"""
+
+
+def _load1() -> float:
+    try:
+        return float(open("/proc/loadavg").read().split()[0])
+    except OSError:
+        return 0.0
+
+
+def _slow_plays(url: str, size: tuple[int, int], plays: int = 2) -> list[dict]:
+    out = []
+    with sync_playwright() as pw:
+        b = pw.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
+        pg = b.new_context(viewport={"width": size[0], "height": size[1]}).new_page()
+        errors: list[str] = []
+        pg.on("pageerror", lambda e: errors.append(str(e)))
+        pg.goto(url)
+        pg.wait_for_function("segs.length === 2 && player.vids.length === 3 && window.grade && grade.ready",
+                             timeout=30000)
+        start = pg.evaluate("tl.filmStart(tl.idAt(1))") + SLOW_FROM_S
+        for _ in range(plays):
+            for _try in range(3):                 # a page still wiring its monitor can drop a cue
+                pg.evaluate(f"tl.seek({start})")
+                try:
+                    pg.wait_for_function("player.idx === 1 && liveVideo().readyState >= 2 && !liveVideo().seeking",
+                                         timeout=8000)
+                    break
+                except Exception:  # noqa: BLE001 — tried again; the play below says if it never parked
+                    continue
+            parked = pg.evaluate("({idx: player.idx, ph: tl.state.playhead, rs: liveVideo().readyState,"
+                                 " sk: liveVideo().seeking, ct: liveVideo().currentTime, src: liveVideo().dataset.src})")
+            assert parked["idx"] == 1, f"never parked in the slowed shot: {parked}"
+            pg.wait_for_timeout(2000)
+            pg.evaluate(SLOW_ARM)
+            load = _load1()
+            pg.keyboard.press("Space")
+            pg.wait_for_timeout(int(SLOW_PLAY_S * 1000))
+            pg.keyboard.press("Space")
+            pg.wait_for_timeout(150)
+            pg.evaluate("window.__on = false")
+            rec = {"load": load, "fl": pg.evaluate("window.__fl"), "rf": pg.evaluate("window.__rf"),
+                   "pace": pg.evaluate("(grade.paceLog || []).slice()"), "t0": pg.evaluate("window.__t0"),
+                   "dl": pg.evaluate("grade.drawLog.filter((d) => d.t >= window.__t0).map((d) => ({t: d.t, ts: d.ts, made: d.made}))"),
+                   "rate": pg.evaluate("liveVideo().playbackRate")}
+            out.append(rec)
+        b.close()
+        assert not errors, errors
+    return out
+
+
+def _slow_facts(rec: dict) -> dict:
+    rf = [x for x in rec["rf"] if x["playing"]]
+    on_at = [x["ft"] for x in rf if x["on"]]
+    ch = [rf[i]["ft"] for i in range(1, len(rf)) if rf[i]["draws"] != rf[i - 1]["draws"]]
+    edges = ch + [rf[-1]["ft"]] if ch else []
+    gaps = [edges[i] - edges[i - 1] for i in range(1, len(edges))]
+    live = sorted(f["ed"] for f in rec["fl"] if f["live"] and rf and rf[0]["ft"] <= f["t"] <= rf[-1]["ft"])
+    own = [live[i] - live[i - 1] for i in range(1, len(live))]
+    a, z = (rf[0]["ft"], rf[-1]["ft"]) if rf else (0, 0)
+    # the frames drawn in the play (grade.drawLog `ts`: a paced frame's own media time, in us), each
+    # one proxy frame after the one before: none skipped
+    ks = sorted({round(d["ts"] / 1e6 * FPS) for d in rec["dl"] if a <= d["t"] <= z})
+    steps = [ks[i] - ks[i - 1] for i in range(1, len(ks))]
+    mts = [p for p in rec["pace"] if a - 50 <= p["due"] <= z + 50]
+    # the worker's clock: each draw on screen from the first display frame after the worker finished
+    # it (the rAF timestamps' grid), so a page late to see a draw does not move it
+    slots = sorted({math.ceil((d["t"] - a) / (1000 / 60) - 1e-6) for d in rec["dl"] if a <= d["t"] <= z})
+    wgaps = [(slots[i] - slots[i - 1]) * 1000 / 60 for i in range(1, len(slots))]
+    return {"load": rec["load"], "rate": rec["rate"], "draws": len(ch),
+            "holds": sum(1 for g in gaps if g > HOLD_BAR_MS), "longest_ms": round(max(gaps), 1) if gaps else None,
+            "worker_holds": sum(1 for g in wgaps if g > HOLD_BAR_MS),
+            "pattern": "".join(str(min(9, round(g / (1000 / 60)))) for g in gaps),
+            "paced_frames": len(mts), "drawn_frames": len(ks), "skipped": sum(s - 1 for s in steps if s > 1),
+            # up from its first draw on (an ungraded shot's canvas goes up with its first frame drawn;
+            # the buffer under it shows that parked frame till then), and that within 100 ms
+            "canvas_up": bool(on_at) and on_at[0] - a <= 100 and all(x["on"] for x in rf if x["ft"] >= on_at[0]),
+            "own_holds": sum(1 for g in own if g > HOLD_BAR_MS), "own_longest_ms": round(max(own), 1) if own else None}
+
+
+@pytest.mark.parametrize("graded,size", [(True, (1440, 900)), (True, (1920, 1080)), (False, (1440, 900))],
+                         ids=["graded-1440", "graded-1920", "ungraded-1440"])
+def test_a_half_speed_shot_of_a_4k_proxy_plays_evenly(slow_proj, slow_live, graded, size):
+    slow_proj["edl"].write_text(json.dumps(_slow_edl(graded), indent=1), encoding="utf-8")
+    cores, load0 = os.cpu_count() or 4, _load1()
+    recs = _slow_plays(slow_live, size)
+    dump = os.environ.get("ROUGHCUT_HALFSPEED_DUMP")          # a dir: each play's raw record
+    if dump:
+        for k, r in enumerate(recs):
+            Path(dump, f"halfspeed-{'g' if graded else 'u'}{size[0]}-{int(time.time())}-{k}.json").write_text(json.dumps(r))
+    facts = [_slow_facts(r) for r in recs]
+    print("\nHALFSPEED", json.dumps({"graded": graded, "size": size, "plays": facts}), flush=True)
+    for f in facts:
+        assert f["rate"] == 0.5, f
+        assert f["canvas_up"], f"the canvas is the picture of a slowed shot, graded or not: {f}"
+        assert f["draws"] >= 60 and f["paced_frames"] >= 60 and f["drawn_frames"] >= 60, f
+        assert f["skipped"] == 0, f"a source frame of the play was never drawn: {f}"
+    if load0 > 2 * cores:
+        pytest.skip(f"box at load {load0:.1f} on {cores} cores before the test: holds measured, not judged: {facts}")
+    # Past one runnable task a core, the page's own animation frames run late enough (6-15 ms) to
+    # see a draw the worker finished in the display frame before, or the next: one hold a play on
+    # the frame clock that the worker's clock does not have (lane PLAY9, slow.py's `attr.py`)
+    allowed = 0 if load0 <= cores else 1
+    assert all(f["worker_holds"] == 0 for f in facts), f"the canvas held a frame on the worker's clock: {facts}"
+    assert all(f["holds"] <= allowed for f in facts), (allowed, load0, facts)

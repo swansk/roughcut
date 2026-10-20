@@ -17,9 +17,13 @@ the longest gap of each follower inside its half of the mix window must be <= GA
   * ungraded (colour off): the follower is its own layer at CSS opacity over the raw
     buffer — what the judge's Killington cut does
   * graded (a hand balance on both shots): the grade worker draws the follower's frame
-    through its own LUT over the live one (grade.setMix); also the canvas's draws, held to
-    the same limit through the dissolve and across a plain graded cut; and the same through
-    a 0.4 s dissolve (the judge's Ctrl+D on Killington, 0.2 s a side)
+    through its own LUT over the live one (grade.setMix); also the canvas's draws through the
+    dissolve and across a plain graded cut, on the frame clock (the animation frame's
+    timestamp) and the worker's (`grade.drawLog`), the bar in frames (wave 18 PLAY9, verdict
+    14 punch 4: `canvas_frames`; the page clock, which put one dropped frame at 53-78 ms, is
+    a record only): across the plain cut every source frame drawn and none up past its
+    cadence + a display frame; through a dissolve no gap over two source frames; and the same
+    through a 0.4 s dissolve (the judge's Ctrl+D on Killington, 0.2 s a side)
 
 (Since wave 14 an ungraded dissolve is drawn by the grade canvas too while it plays,
 through identity tables; paused, its follower is the CSS layer as before.)
@@ -35,6 +39,7 @@ The measurement helpers (burners, load, ports, the limit) are test_perf_latency'
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import threading
@@ -162,20 +167,30 @@ RECORD = """() => {
       { t: performance.now() - window.__fl0, v: v.id, ct: v.currentTime, ph: tl.state.playhead }); });
   });
   window.__fl0 = t0;
+  // (a record, ROUGHCUT_TX_DUMP) the play's long animation frames and what ran in them
+  window.__laf = [];
+  try {
+    if (window.__lafObs) window.__lafObs.disconnect();
+    window.__lafObs = new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__laf.push({
+      t: e.startTime - t0, ms: e.duration, scripts: (e.scripts || []).filter((x) => x.duration >= 3).slice(0, 6).map((x) =>
+        `${x.sourceFunctionName || x.invoker || '?'}@${(x.sourceURL || '').split('/').pop()}:${x.sourceCharPosition} ${Math.round(x.duration)}`) }); });
+    window.__lafObs.observe({ type: 'long-animation-frame' });
+  } catch (e) { /* no LoAF in this browser */ }
   vids.forEach((v) => {
     const cb = (now, md) => {
-      window.__fl.push({ t: now - t0, v: v.id, live: v.classList.contains('live'),
-                         w: Number(v.dataset.w || 0), mt: md.mediaTime });
+      window.__fl.push({ t: now - t0, ed: (md.expectedDisplayTime || now) - t0, v: v.id,
+                         live: v.classList.contains('live'), w: Number(v.dataset.w || 0), mt: md.mediaTime });
       if (window.__flOn) v.requestVideoFrameCallback(cb);
     };
     v.requestVideoFrameCallback(cb);
   });
-  const look = () => {
+  const look = (ft) => {
     if (!window.__flOn) return;
     const tx = prog.tx;
     const st = (v) => v ? { id: v.id, w: Number(v.dataset.w || 0), p: v.paused, s: v.seeking,
                             rs: v.readyState, ct: v.currentTime } : null;
-    window.__raf.push({ t: performance.now() - t0, ph: tl.state.playhead, playing: player.playing,
+    // `ft`: the animation frame's own time (the frame clock); `t`: the callback's page clock
+    window.__raf.push({ t: performance.now() - t0, ft: ft - t0, ph: tl.state.playhead, playing: player.playing,
                         draws: window.grade ? grade.draws : null, live: liveVideo() ? liveVideo().id : null,
                         on: !!document.querySelector('#gradeCanvas.on'),
                         mix: window.grade && grade.mix ? grade.mix.graded : null,
@@ -189,6 +204,90 @@ RECORD = """() => {
 def _gaps(ts: list[float]) -> list[float]:
     ts = sorted(ts)
     return [ts[i] - ts[i - 1] for i in range(1, len(ts))]
+
+
+V_MS = 1000 / 60                 # a display frame (headless Chromium's 60 Hz)
+
+
+def canvas_frames(playing: list[dict], dlog: list[dict], ph0: float, ph1: float, period: float,
+                  shots: list[dict], plain: bool, max_fps: float = 0.0) -> dict:
+    """(wave 18 PLAY9, verdict 14 punch 4) The graded canvas across an edit, the bar in frames.
+
+    Its draws in the window (the playhead from `ph0` to `ph1`) on two clocks, as test_perf_latency
+    (wave 15): the frame clock (the animation frame's timestamp at the first sample whose
+    `grade.draws` moved: display frames, exactly) and the worker's (`grade.drawLog` `t`, when it
+    finished each draw), each gap counted only while the canvas was up throughout; each gap in
+    display frames (rounded: the worker's clock is a few ms either side of a frame). The frames
+    drawn (`grade.drawLog` `ts`: a drawn frame's own media time) split where the clip time jumps
+    back at the edit (the outgoing shot, then the incoming one), as proxy frame numbers.
+
+    The bar (`frame_ok`), per the proxy's own cadence (`period`, the live buffer's frame step:
+    a 29.97 proxy is 2 display frames, a 59.94 one 1) and the canvas's drawing rate (`max_fps`,
+    grade.maxDrawFps: a 59.94 proxy playing at 1x is drawn every other frame, `step` 2, as
+    Playback Resolution draws at most 640 across; "every frame" below is every step-th, a
+    source frame either way when step > 1, as the canvas then takes the newest frame up):
+      * a plain cut: every source frame drawn — no frame number skipped inside either shot, the
+        outgoing shot's last frame and the incoming shot's first (its in's) drawn — and none up
+        past its cadence: no gap over the cadence + 1 display frames on either clock (29.97: 3,
+        a frame a display frame late; a frame skipped, or one held for two, is 4).
+      * through a dissolve (two pictures decoded and mixed each frame): no gap over two source
+        frames on either clock (29.97: 4 display frames: one dropped frame, as the followers'
+        and the live buffer's own limits have always allowed; two in a row fail); its skipped
+        frames are in the record (`skipped`).
+    The page clock put a single dropped frame at 53-78 ms (verdict 14), so the old 67 ms on it
+    passed one about half the time; on the frame clock a dropped frame is exactly 4 display
+    frames at 29.97."""
+    win = [r for r in playing if ph0 <= r["ph"] <= ph1]
+    if not win:
+        return {"frame_ok": False, "why": "no window"}
+    f0, f1 = win[0]["ft"], win[-1]["ft"]
+    t0, t1 = win[0]["t"], win[-1]["t"]
+    step = 1
+    if max_fps > 0 and period < 1 / max_fps - 0.002:                # drawn every step-th frame
+        step = math.ceil((1 / max_fps - 0.002) / period)
+    cadence = max(1, round(step * period * 1000 / V_MS + 0.49))    # display frames a drawn frame is up
+    limit = cadence + 1 if plain else 2 * cadence
+
+    def lit(key, a, b):
+        return all(r["on"] for r in playing if a <= r[key] <= b)
+
+    fdr = [r["ft"] for k, r in enumerate(playing) if k and r["draws"] != playing[k - 1]["draws"]
+           and f0 <= r["ft"] <= f1 + 100]
+    frame_g = [(b - a, a) for a, b in zip(fdr, fdr[1:]) if lit("ft", a, b)]
+    wd = sorted((d for d in dlog if t0 <= d["t"] <= t1 + 100), key=lambda d: d["t"])
+    worker_g = [(b["t"] - a["t"], a["t"]) for a, b in zip(wd, wd[1:]) if lit("t", a["t"], b["t"])]
+    n = lambda g: round(g / V_MS)                                  # noqa: E731 — display frames
+    # the frames drawn, as proxy frame numbers, split at the edit (the clip time jumps back)
+    ks = [round(d["ts"] / 1e6 / period) for d in wd]
+    cut = next((i for i in range(1, len(ks)) if ks[i] < ks[i - 1] - 3), None)
+    parts = [ks[:cut], ks[cut:]] if cut is not None else [ks]
+    skipped = []
+    # (drawn every step-th frame, the canvas takes the newest frame the buffer has; a frame the
+    # buffer itself never presented puts the next drawn one a source frame later: allowed there)
+    slack = step if step == 1 else step + 1
+    for part in parts:
+        seen = sorted(set(part))
+        skipped += [k for a, b in zip(seen, seen[1:]) if b - a > slack for k in range(a + slack, b)]
+    ends = None
+    if plain and cut is not None and len(shots) == 2:
+        last = int((shots[0]["out"] - period / 2) / period + 1e-6)      # the outgoing shot's last frame
+        first = int((shots[1]["in"] + 0.001) / period + 1e-6)          # the incoming shot's in's frame
+        ends = {"last_wanted": last, "last_drawn": max(parts[0]), "first_wanted": first, "first_drawn": min(parts[1])}
+        if ends["last_drawn"] < last - (step - 1):
+            skipped += list(range(ends["last_drawn"] + step, last + 1))
+        if ends["first_drawn"] > first:
+            skipped += list(range(first, ends["first_drawn"]))
+    worst_f = max(frame_g, default=(0.0, None))
+    worst_w = max(worker_g, default=(0.0, None))
+    out = {"cadence": cadence, "step": step, "limit_frames": limit, "period_ms": round(period * 1000, 2),
+           "frame_clock_ms": round(worst_f[0], 1), "frame_clock_at": round(worst_f[1]) if worst_f[1] is not None else None,
+           "frame_clock_frames": n(worst_f[0]), "worker_ms": round(worst_w[0], 1),
+           "worker_at": round(worst_w[1]) if worst_w[1] is not None else None, "worker_frames": n(worst_w[0]),
+           "draws": len(wd), "skipped": skipped, "ends": ends,
+           "pattern": "".join(str(min(9, n(g))) for g, _ in frame_g)}
+    out["frame_ok"] = bool(frame_g) and bool(worker_g) and (not skipped or not plain) \
+        and out["frame_clock_frames"] <= limit and out["worker_frames"] <= limit
+    return out
 
 
 def measure_dissolve(page, k: int = 0) -> dict:
@@ -262,6 +361,23 @@ def measure_dissolve(page, k: int = 0) -> dict:
              if all(r["on"] for r in playing if dr[i - 1] <= r["t"] <= dr[i])]
     draw_g = [b - a for a, b in pairs]
     draw_at = at(max(pairs, key=lambda ab: ab[1] - ab[0])[0]) if pairs else None
+    # (wave 18 PLAY9, verdict 14 punch 4) the same canvas on the clocks that stand for the screen,
+    # and in frames (canvas_frames)
+    dlog = page.evaluate("(() => { const t0 = window.__fl0; return (window.grade ? grade.drawLog : [])"
+                         ".filter((d) => d.t >= t0).map((d) => ({ t: d.t - t0, ts: d.ts })); })()")
+    lv = [f for f in fl if f["live"] and f["v"].startswith("pv") and not f["v"].startswith("pvTx")]
+    steps = sorted(b["mt"] - a["mt"] for a, b in zip(lv, lv[1:]) if a["v"] == b["v"] and 0.004 < b["mt"] - a["mt"] < 0.1)
+    period = steps[len(steps) // 2] if steps else 1001 / 30000         # the proxy's frame, s
+    shots = page.evaluate(f"[segs[{edit}], segs[{edit + 1}]].map((s) => ({{in: s.in, out: s.out}}))")
+    max_fps = page.evaluate("(window.grade && grade.maxDrawFps) || 0")
+    cf = canvas_frames(playing, dlog, c["at"] - hh - 0.3, c["at"] + hh, period, shots, plain=not c["video"] > 0,
+                       max_fps=max_fps)
+    dump = os.environ.get("ROUGHCUT_TX_DUMP")       # a path prefix: each play's raw record
+    if dump:
+        Path(f"{dump}-{time.time():.3f}.json").write_text(json.dumps({
+            "fl": fl, "raf": raf, "dl": dlog, "seeks": seeks, "cf": cf, "edit": edit,
+            "cut": page.evaluate("player.cutLog || []"), "t0": page.evaluate("window.__fl0"),
+            "laf": page.evaluate("window.__laf || []")}))
     union_g = _gaps(sorted({round(f["t"] / 4) * 4 for f in fl}))     # the judge's trans.py
     worst_tx = max((max(g) for g in tx_g.values() if g), default=0.0)
 
@@ -287,8 +403,11 @@ def measure_dissolve(page, k: int = 0) -> dict:
         "tx_seeks": tx_seeks,
         "tx_frames": {k: len([f for f in fl if f["v"] in tx_el.get(k, [k])]) for k in ("pvTxIn", "pvTxOut")},
         "tx_first": tx_first,
+        # the page clock (performance.now() in each animation-frame callback): a record only
         "longest_draw_ms": round(max(draw_g), 1) if draw_g else None,
         "longest_draw_at_film_s": draw_at,
+        # the frame clock and the worker's, and the frames (canvas_frames): asserted
+        "canvas": cf,
         "longest_union_ms": max(union_g) if union_g else None,
         "longest_ms": round(max([worst_live or 0, worst_tx]), 1),
         "seeks": [s for s in seeks if t_play0 <= s["t"] <= t_play1],
@@ -337,9 +456,15 @@ def _play(tx_project, tx_server, graded: bool, runs: int | None = None, plain: b
                     page.evaluate("pauseCut()")
                     page.wait_for_timeout(400)
                 if plain:
-                    pl = measure_dissolve(page, 1)
-                    pl.update(burners=b.n, graded=graded, busy=busy, plain=True)
-                    print("\nTXPLAIN", json.dumps(pl), flush=True)
+                    # (ROUGHCUT_TX_PLAIN_N: that many plays of the plain cut, the first returned)
+                    for n in range(int(os.environ.get("ROUGHCUT_TX_PLAIN_N", "1"))):
+                        one = measure_dissolve(page, 1)
+                        one.update(burners=b.n, graded=graded, busy=busy, plain=True)
+                        print("\nTXPLAIN", json.dumps(one), flush=True)
+                        if n == 0:
+                            pl = one
+                        page.evaluate("pauseCut()")
+                        page.wait_for_timeout(400)
             assert errors == [], errors
         finally:
             browser.close()
@@ -425,12 +550,15 @@ def _canvas_check(plain):
         # punch 2-3: the worker uploads each frame's planes at the size they are read, so a
         # dissolve's two frames fit where TXHITCH could only ask for "no worse than a plain
         # graded cut + a frame"). And no worse than that plain cut on the same page.
-        was = plain["longest_draw_ms"] if plain else None
-        assert r["longest_draw_ms"] is not None and r["longest_draw_ms"] <= GAP_LIMIT_MS, \
-            f"the graded canvas's frames held through the dissolve (plain cut {was}): {r}"
+        # (wave 18 PLAY9, verdict 14 punch 4) on the frame clock and the worker's, in frames
+        # (canvas_frames): every source frame drawn, none up past its cadence; the page clock's
+        # `longest_draw_ms` is in the record only
+        was = plain["canvas"] if plain else None
+        assert r["canvas"]["frame_ok"], \
+            f"the graded canvas skipped or held a frame through the dissolve (plain cut {was}): {r['canvas']} {r}"
         if plain is not None:
-            assert plain["longest_draw_ms"] is not None and plain["longest_draw_ms"] <= GAP_LIMIT_MS, \
-                f"the graded canvas's frames held across the plain cut: {plain}"
+            assert plain["canvas"]["frame_ok"], \
+                f"the graded canvas skipped or held a frame across the plain cut: {plain['canvas']} {plain}"
     return canvas
 
 
