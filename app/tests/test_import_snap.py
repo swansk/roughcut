@@ -165,7 +165,8 @@ def test_an_imports_slow_snapshot_rebuild_never_holds_a_request(live, project, m
         r = httpx.get(base + "/api/firstpass", timeout=30)
         took = time.perf_counter() - t
     assert r.status_code == 200 and r.headers.get("x-roughcut-snapshot") == "last", r.headers
-    assert r.content == first.content, "the last snapshot, as it was"
+    # the last snapshot, as it was, said to be from before the import (wave 18 POLISH12)
+    assert r.json() == {"importing": True, **first.json()}, "the last snapshot, as it was"
     assert took < 0.6, f"{took * 1000:.0f} ms"
     assert httpx.get(base + "/api/debug/slow").json()["late_answers"]["firstpass"] >= 1
     # the rebuild lands on its own: a later read is the new answer
