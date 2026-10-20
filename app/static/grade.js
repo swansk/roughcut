@@ -1312,7 +1312,10 @@ onmessage = (e) => {
    * once; the worker draws one at a time and keeps the newest waiting (WORKER_SRC). */
   function toWorker(j) {
     let frame;
-    try { frame = new VideoFrame(j.v, { timestamp: Math.round((j.v.currentTime || 0) * 1e6) }); }
+    // (wave 17 PLAY8) the frame drawWhenShown took in its callback, when this is that draw
+    const pre = G.pre && G.pre.v === j.v ? G.pre.f : null;
+    if (pre) G.pre = null;
+    try { frame = pre || new VideoFrame(j.v, { timestamp: Math.round((j.v.currentTime || 0) * 1e6) }); }
     catch (e) { return; }                       // no frame to take yet: the next one
     let mix = null;
     if (j.mix) {
@@ -1710,13 +1713,20 @@ onmessage = (e) => {
    * and 12 % at 0.5x, the live buffer's own frames even all the while) is drawn in the
    * animation frame it is shown in. Drawn at the callback, the canvas showed it a display frame
    * early: the frame before it held one frame short and it one frame long, which on a 0.5x shot
-   * of a 29.97 proxy (a new frame every 66.7 ms) is 50 then 83 ms, 1-4 times in a 3 s play. */
+   * of a 29.97 proxy (a new frame every 66.7 ms) is 50 then 83 ms, 1-4 times in a 3 s play. The
+   * frame is taken in its callback and drawn later (G.pre, toWorker): taken at the draw, the
+   * video's picture could already be the next frame (its callback early too), and the one it
+   * stood for never went up. */
   const DUE_EARLY_MS = 8;
   function drawWhenShown(gen, v, due) {
+    let vf = null;
+    try { vf = new VideoFrame(v, { timestamp: Math.round((v.currentTime || 0) * 1e6) }); } catch (e) { vf = null; }
     const step = (ts) => {
-      if (gen !== G.frameGen || v !== live()) return;
+      if (gen !== G.frameGen || v !== live()) { if (vf) vf.close(); return; }
       if (ts < due - DUE_EARLY_MS) { requestAnimationFrame(step); return; }
+      G.pre = vf ? { v, f: vf } : null;
       if (!G.drawReq) settle();
+      if (G.pre) { G.pre.f.close(); G.pre = null; }            // not drawn: let the frame go
     };
     requestAnimationFrame(step);
   }
