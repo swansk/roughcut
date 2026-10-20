@@ -13044,9 +13044,38 @@ def _fx_window(raw, seg: dict) -> tuple[float, float] | None:
     return (round(t0, 3), round(min(t1, hi), 3))
 
 
+# A design job can be stopped (verdict 14, punch 7: "a design undone in flight comes back
+# as nothing while the toast says 'redone'"). The board's Ctrl+Z on an AI request whose
+# design is still being made cancels its job (POST /api/fx/cancel): the job's `claude -p`
+# runs in the job's own procscope, so it is killed; no further model call starts (on the
+# API a call in flight cannot be stopped, the next one can: `fx.watched`); nothing is kept.
+# The cancel says what it stopped, and the request counts as never made, so its redo asks
+# the designer again. A design and its cancel are one or the other, whole (the lock): a
+# cancel that comes after the design was saved answers "done" with its id, and the board
+# sets that design aside instead — the redo then restores it with no call.
+FX_DESIGN_SCOPES: dict[str, procscope.Scope] = {}   # running design job → its processes
+FX_DESIGN_LOCK = threading.Lock()
+
+
+class FxStopped(Exception):
+    """The design job was cancelled: no further call, nothing kept."""
+
+
 def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict | None,
                    window: tuple[float, float] | None = None) -> None:
     entry = FX[job]
+    scope = FX_DESIGN_SCOPES[job] = procscope.Scope(f"fx design {job}")
+    fx_id = None
+
+    def on_call(what: str, answered: bool) -> None:
+        if answered:                                # a call made: a cancel now stops after it
+            entry["calling"] = None
+            entry["called"] = [*(entry.get("called") or []), what]
+            return
+        if entry.get("cancel"):
+            raise FxStopped(what)
+        entry["calling"] = what                     # what a cancel now would stop
+
     try:
         edl = read_edl()
         segments = edl.get("segments") or []
@@ -13056,10 +13085,11 @@ def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict 
         fx_id = fx.new_id()
         ref = _fx_reference(fx_id, reference)
         entry.note("designing the effect" + (" from your drawing" if ref else ""))
-        e = fx.design(note, seg, clip, load_sidecar(seg["clip"]), reference=ref,
-                      place=bool(place), proxy=_fx_proxy(seg["clip"]) if place else None,
-                      workdir=fx_home() / fx_id, segments=segments, clips=clips,
-                      window=window)
+        with procscope.active(scope), fx.watched(on_call):
+            e = fx.design(note, seg, clip, load_sidecar(seg["clip"]), reference=ref,
+                          place=bool(place), proxy=_fx_proxy(seg["clip"]) if place else None,
+                          workdir=fx_home() / fx_id, segments=segments, clips=clips,
+                          window=window)
         if window is not None:
             e["window"] = [window[0], window[1]]
         e["id"] = fx_id
@@ -13067,16 +13097,66 @@ def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict 
         if ref:
             e["reference"] = ref
         e = fx.validate_effect(e, segments, clips)
-        fx.save(fx_home(), e)
-        _fx_sound(e)
-        entry["result"] = {"id": fx_id}
-        _fx_autoverify(fx_id)                       # the free check, by itself (I16.5)
-        n_ev, n_ed = len(e.get("events") or []), len(e.get("edits") or [])
-        what = " · ".join(x for x in [f"{n_ev} moment{'s' if n_ev != 1 else ''}" if n_ev else "",
-                                     f"{n_ed} change{'s' if n_ed != 1 else ''} to the cut" if n_ed else ""] if x)
-        entry.finish("done", detail=f"{e['name']} — {what}, a proposal")
+        with FX_DESIGN_LOCK:
+            if entry.get("cancel"):
+                raise FxStopped("the design")
+            fx.save(fx_home(), e)
+            _fx_sound(e)
+            entry["result"] = {"id": fx_id}
+            _fx_autoverify(fx_id)                   # the free check, by itself (I16.5)
+            n_ev, n_ed = len(e.get("events") or []), len(e.get("edits") or [])
+            what = " · ".join(x for x in [f"{n_ev} moment{'s' if n_ev != 1 else ''}" if n_ev else "",
+                                         f"{n_ed} change{'s' if n_ed != 1 else ''} to the cut" if n_ed else ""] if x)
+            entry.finish("done", detail=f"{e['name']} — {what}, a proposal")
     except Exception as exc:  # noqa: BLE001 — the job reports, the server lives
-        entry.finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
+        with FX_DESIGN_LOCK:
+            stopped = bool(entry.get("cancel"))     # its cancel already said how it ended
+            if not stopped:
+                entry.finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
+        if stopped and fx_id:
+            shutil.rmtree(fx_home() / fx_id, ignore_errors=True)   # its frames, its drawing
+    finally:
+        FX_DESIGN_SCOPES.pop(job, None)
+
+
+def _fx_stop_words(calling: str | None, called: list[str]) -> str:
+    """What a design's cancel stopped, in the words the board's undo says it: the call in
+    flight, or where between its calls it was, and what that spent ("its design call was
+    stopped, nothing is kept")."""
+    def its(what: str) -> str:
+        return "its " + what[4:] if what.startswith("the ") else what
+    billed = config.charges_money()
+    if calling:
+        if billed:
+            return (f"{its(calling)} was stopped, but the call in flight still ends and is billed to the"
+                    " API key; nothing after it runs, nothing is kept")
+        return f"{its(calling)} was stopped, nothing is kept"
+    if called:
+        return (f"stopped after {its(called[-1])}" + (" (billed to the API key)" if billed else "")
+                + ", nothing is kept")
+    return "stopped before its design call, nothing was asked"
+
+
+def _fx_cancel(job: str) -> dict:
+    entry = FX.get(job)
+    if entry is None or entry.get("fx_kind") != "design":
+        raise HTTPException(404, f"no design job {job}")
+    with FX_DESIGN_LOCK:
+        if entry["state"] != "running":             # it ended first: say how
+            return {"ok": True, "job": job, "state": entry["state"], "result": entry.get("result"),
+                    "detail": entry.get("detail"), "stopped": None}
+        entry["cancel"] = True
+        what, called = entry.get("calling"), list(entry.get("called") or [])
+        said = _fx_stop_words(what, called)
+        entry.finish("cancelled", detail=f"taken back (Ctrl+Z) — {said}")
+    scope = FX_DESIGN_SCOPES.get(job)
+    if scope is not None:
+        # SIGTERM now, SIGKILL after the grace — off this request; a process the job
+        # starts after this dies the moment it exists (procscope)
+        threading.Thread(target=scope.kill, daemon=True, name=f"fx-cancel-{job}").start()
+    return {"ok": True, "job": job, "state": "cancelled", "result": None,
+            "stopped": what or (f"after {called[-1]}" if called else "before any call"),
+            "calls_made": len(called), "said": said}
 
 
 def _fx_revise_job(job: str, fx_id: str, note: str) -> None:
@@ -13675,6 +13755,18 @@ def api_fx_peaks(shot: str = "") -> JSONResponse:
                            float(sc.get("frame_hz") or fx.ONSET_HZ),
                            float(seg["in"]), float(seg["out"]), top=fx.MAX_EVENTS)
     return JSONResponse({"peaks": peaks, "in": seg["in"], "out": seg["out"]})
+
+
+@app.post("/api/fx/cancel")
+async def api_fx_cancel(request: Request) -> JSONResponse:
+    """Stop a design still being made (`{job}`): the board's Ctrl+Z on an AI design request
+    (fx.js `stopOne`; verdict 14, punch 7). Answers what it stopped (`stopped`, `said`:
+    the call in flight, or where between calls it was, and on the API that the call in
+    flight still bills); nothing of it is kept, so the redo asks again. A job that ended
+    first answers its own state and `result` instead — a design that landed is the
+    board's to set aside (POST /api/fx/discard {withdraw})."""
+    body = await request.json()
+    return JSONResponse(await asyncio.to_thread(_fx_cancel, str(body.get("job") or "")))
 
 
 @app.post("/api/fx/discard")

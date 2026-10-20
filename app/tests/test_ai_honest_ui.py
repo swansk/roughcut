@@ -6,9 +6,11 @@ the first shot" → 2 `design_effect` ops … Accept read "✓ 2 changes applied
 was applied. The next Ctrl+Z silently undid the In/Out + marker before it.* Now the accept
 says "2 effects being designed — review them in Designed Effects" and opens that tab; it is
 ONE undo entry of its own (`tl.mark`), so a Ctrl+Z right after it takes the requests back —
-the design still running is discarded the moment it lands, the one not asked yet is never
-asked — and the In/Out stays as it was. Ctrl+Shift+Z asks for them again; Ctrl+Z after they
-landed discards the proposals. An accept that also changes the cut rides one entry with them.
+the design still running is stopped (verdict 14, punch 7: its job cancelled, its call killed,
+nothing kept; one that landed before its cancel is set aside), the one not asked yet is never
+asked — and the In/Out stays as it was. Ctrl+Shift+Z brings back what was set aside with no
+call and asks again for what was never made; Ctrl+Z after they landed sets the proposals
+aside. An accept that also changes the cut rides one entry with them.
 
 Punch 6: the model saw shot ids and wrote them ("The last shot (g5848fde311) then moves…",
 "the continuation into shot g0e2637544b needs its own matching effect"). A page scan for
@@ -28,6 +30,7 @@ import json
 import re
 import shutil
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -69,13 +72,20 @@ TITLE = {
 class Model:
     """The assist call (its schema has `kind`) answers `answer`; the designer's call
     (its prompt starts "THE NOTE:") answers TITLE and is counted; anything else "{}".
-    `calls` counts every call, of any kind (a redo that restores makes none)."""
+    `calls` counts every call, of any kind (a redo that restores makes none). With
+    `hold_s`, the designer's call takes that long the way the CLI backend makes it: a
+    child process of the job's thread, so in the job's procscope (`running` is set when it
+    starts; a cancel kills it as it kills `claude -p`, counted in `killed`, and the call
+    fails as the CLI's does)."""
     name = "aihonest-scripted"
 
     def __init__(self):
         self.answer: dict = {"kind": "answer", "text": "ok"}
         self.notes: list[str] = []
         self.calls = 0
+        self.hold_s = 0
+        self.killed = 0
+        self.running = threading.Event()
 
     def complete(self, request):
         self.calls += 1
@@ -83,6 +93,12 @@ class Model:
         if "kind" in schema:
             text = json.dumps(self.answer)
         elif request.prompt.startswith("THE NOTE:"):
+            if self.hold_s:
+                self.running.set()
+                proc = subprocess.run([sys.executable, "-c", f"import time; time.sleep({self.hold_s})"])
+                if proc.returncode != 0:
+                    self.killed += 1
+                    raise inference.InferenceError(f"claude CLI failed: exit {proc.returncode}")
             self.notes.append(request.prompt.split("\n", 1)[0][len("THE NOTE: "):])
             text = json.dumps(TITLE)
         else:
@@ -195,6 +211,9 @@ def fresh(live_server):
     MODEL.answer = {"kind": "answer", "text": "ok"}
     MODEL.notes = []
     MODEL.calls = 0
+    MODEL.hold_s = 0
+    MODEL.killed = 0
+    MODEL.running.clear()
     GATE.set()
     _clear_fx()
     yield
@@ -283,11 +302,12 @@ class Board:
         return self.page.evaluate("fetch('/api/fx').then(r => r.json())")["effects"]
 
     def designs_idle(self, timeout: float = 20.0) -> None:
-        """Every fx job finished on the server (the designs and their checks)."""
+        """Every fx job finished on the server (the designs and their checks; a design its
+        Ctrl+Z stopped reads cancelled)."""
         import server
         end = time.time() + timeout
         while time.time() < end:
-            if all(j.get("state") in ("done", "failed") for j in list(server.FX.values())):
+            if all(j.get("state") in ("done", "failed", "cancelled") for j in list(server.FX.values())):
                 self.page.wait_for_timeout(1500)            # the board's poll sees it
                 return
             self.page.wait_for_timeout(100)
@@ -341,30 +361,35 @@ def test_a_design_request_says_so_and_one_ctrl_z_takes_it_back_not_the_edit_befo
         assert len(MODEL.notes) == 0                           # held: the gate is shut
         assert p.evaluate("fx.state.busy && fx.state.busy.fx_kind") == "design"
 
-        # Ctrl+Z right after: the requests taken back, the In/Out untouched
+        # Ctrl+Z right after: the requests taken back, the In/Out untouched; the design with
+        # the designer is stopped (verdict 14, punch 7), and the toast says what that stopped
+        import server
         b.undo()
         p.wait_for_function("window.__toasts.some((t) => t.includes('the 2 designs are discarded'))", timeout=5000)
+        assert ("undone: AI: 2 effects — the 2 designs are discarded · the one being designed: stopped before its"
+                " design call, nothing was asked") in b.toasts(), b.toasts()
         assert _marks(b.settle()) == marked, "the Ctrl+Z after the design accept undid the In/Out"
         assert b.undo_title() == "undo: AI: In/Out + marker (Ctrl+Z)"
         assert p.locator(STATUS).is_hidden() or "being designed" not in b.result()
-        # the held design lands — and is set aside before its card is drawn (kept on disk for
-        # a redo, out of every list); the second is never asked for
+        [job] = [j for j in server.FX.values() if j["fx_kind"] == "design"]
+        assert (job["state"], job["detail"]) == (
+            "cancelled", "taken back (Ctrl+Z) — stopped before its design call, nothing was asked"), dict(job)
+        # the designer let go: the stopped job makes no call and keeps nothing; the second is
+        # never asked for
         GATE.set()
         b.designs_idle()
-        assert MODEL.notes == ["a big white KILLINGTON title"], MODEL.notes
-        assert b.effects() == []
+        p.wait_for_timeout(1000)
+        assert MODEL.notes == [], MODEL.notes
+        assert b.effects() == [] and _on_disk() == []
         assert p.locator("#fx .fxcard").count() == 0
-        assert not any("a proposal" in t for t in b.toasts()), b.toasts()
-        aside = _on_disk()
-        assert [(e["shot"], e["status"]) for e in aside] == [(A, "withdrawn")], aside
+        assert not any("a proposal" in t or "failed" in t for t in b.toasts()), b.toasts()
 
-        # Ctrl+Shift+Z (verdict 13, punch 6): the design that landed comes back as it was, no
-        # call; only the one never asked asks the designer again — free on this plan, so no
-        # question first
+        # Ctrl+Shift+Z: neither design was made, so both are asked again — free on this plan,
+        # so no question first
         b.redo()
         p.wait_for_function("window.__toasts.some((t) => t.startsWith('redone: AI: 2 effects —'))", timeout=5000)
         said = next(t for t in b.toasts() if t.startswith("redone: AI: 2 effects —"))
-        assert said == ("redone: AI: 2 effects — 1 design back · asks the designer again for 1 · free on your plan"
+        assert said == ("redone: AI: 2 effects — asks the designer again · free on your plan"
                         " — review them in Designed Effects"), said
         assert p.locator("[data-testid=redo-ask-confirm][open]").count() == 0
         assert _marks(b.settle()) == marked
@@ -373,8 +398,7 @@ def test_a_design_request_says_so_and_one_ctrl_z_takes_it_back_not_the_edit_befo
             p.wait_for_timeout(250)
         got = b.effects()
         assert sorted(e["shot"] for e in got) == sorted([A, B]) and all(e["status"] == "proposed" for e in got), got
-        assert next(e["id"] for e in got if e["shot"] == A) == aside[0]["id"]
-        assert MODEL.notes[1:] == ["the KILLINGTON title carries on"], MODEL.notes
+        assert MODEL.notes == ["a big white KILLINGTON title", "the KILLINGTON title carries on"], MODEL.notes
         b.designs_idle()
         p.wait_for_function(
             f"document.querySelector('{RESULT}') === null || !document.querySelector('{RESULT}').textContent.includes('applied')")
@@ -500,6 +524,66 @@ def test_a_redo_brings_back_the_same_design_with_no_model_call(browser, live_ser
         b.close()
 
 
+# ---------------------------------------------------------------- verdict 14, punch 7
+
+def test_a_design_undone_while_its_call_runs_is_stopped_and_its_redo_designs_it(browser, live_server, project):
+    """The judge's flow (verdict 14, `fxredo.log` B): accept a design, Ctrl+Z about a second
+    later while its design call runs, wait, Ctrl+Shift+Z — and "redone: AI: effect", then
+    nothing: no design, no "asks the designer again", no call. Now the Ctrl+Z stops the job:
+    its call — a child process in the job's procscope, as `claude -p` is — is killed, the
+    toast and the job say what was stopped, and nothing lands while the redo waits. The
+    request counts as never made, so the redo asks the designer again, free on the plan, and
+    a design lands."""
+    import server
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+        MODEL.hold_s = 120                            # the call is running, and runs on
+        b.ask([{"op": "design_effect", "id": A, "note": "a thin white border"}],
+              summary="a white border", text="put a thin white border around the first shot")
+        b.accept()
+        assert MODEL.running.wait(15), "the design call never started"
+        b.undo()
+        head = "undone: AI: effect — the design is discarded"
+        p.wait_for_function("(h) => window.__toasts.some((t) => t.startsWith(h + ' ·'))", arg=head, timeout=5000)
+        said = next(t for t in b.toasts() if t.startswith(head + " ·"))
+        assert said == f"{head} · its design call was stopped, nothing is kept", said
+        # the call is dead within the kill's grace, and the job says what it stopped
+        _until(p, lambda: MODEL.killed == 1, timeout=5, what="the design call to be killed")
+        [job] = [j for j in server.FX.values() if j["fx_kind"] == "design"]
+        assert (job["state"], job["detail"]) == (
+            "cancelled", "taken back (Ctrl+Z) — its design call was stopped, nothing is kept"), dict(job)
+        # the wait: nothing lands, nothing is kept, nothing is said
+        p.wait_for_timeout(5000)
+        assert MODEL.notes == [] and b.effects() == [] and _on_disk() == []
+        assert not (server.fx_home().exists() and any(server.fx_home().iterdir())), list(server.fx_home().iterdir())
+        assert p.locator("#fx .fxcard").count() == 0
+        assert not any("failed" in t or "a proposal" in t for t in b.toasts()), b.toasts()
+
+        # Ctrl+Shift+Z: never made, so asked again — free on the plan — and a design lands
+        MODEL.hold_s = 0
+        calls = MODEL.calls
+        b.redo()
+        p.wait_for_function("window.__toasts.some((t) => t.startsWith('redone: AI: effect'))", timeout=5000)
+        p.wait_for_timeout(1500)                      # where the judge read it
+        redone = [t for t in b.toasts() if t.startswith("redone: AI: effect")]
+        # the timeline's own "redone: AI: effect" comes first; this tool's line replaces it,
+        # and is the last word: never a bare "redone"
+        assert redone[-1] == ("redone: AI: effect — asks the designer again · free on your plan"
+                              " — review it in Designed Effects"), redone
+        assert p.locator("[data-testid=redo-ask-confirm][open]").count() == 0
+        got = _until(p, lambda: [e for e in b.effects() if e["status"] == "proposed"] or None, timeout=30,
+                     what="the asked-again design to land")
+        assert [e["shot"] for e in got] == [A], got
+        p.wait_for_selector(f"#fx .fxcard[data-id='{got[0]['id']}']", timeout=8000)
+        assert MODEL.notes == ["a thin white border"] and MODEL.calls == calls + 1, (MODEL.notes, MODEL.calls, calls)
+        b.designs_idle()
+        assert [(e["id"], e["status"]) for e in _on_disk()] == [(got[0]["id"], "proposed")]
+    finally:
+        MODEL.hold_s = 0
+        b.close()
+
+
 def test_on_the_api_a_redo_that_must_ask_again_shows_its_price_first(browser, live_server, project, monkeypatch):
     """A request taken back before its design was asked has nothing to restore, so its redo
     asks the designer again — and on `anthropic_api`, where that bills, the price comes
@@ -518,12 +602,24 @@ def test_on_the_api_a_redo_that_must_ask_again_shows_its_price_first(browser, li
         b.accept()
         p.wait_for_function("dock.current() === 'fx'", timeout=8000)
         p.wait_for_function("fx.state.busy && fx.state.busy.fx_kind === 'design'", timeout=15000)
-        # taken back while the first is with the designer and the second not asked yet
+        # taken back while the first is with the designer and the second not asked yet — and
+        # the first lands before its cancel reaches the server (held here): the cancel answers
+        # "done", and that design is set aside, not lost
+        import server
+        held = []
+        p.route("**/api/fx/cancel", lambda route: held.append(route))
         b.undo()
-        p.wait_for_function("window.__toasts.some((t) => t.includes('the 2 designs are discarded'))", timeout=5000)
+        _until(p, lambda: held, what="the cancel to be sent")
         GATE.set()
+        _until(p, lambda: [j for j in server.FX.values() if j["fx_kind"] == "design" and j["state"] == "done"],
+               what="the held design to land")
+        held[0].continue_()
+        p.wait_for_function("window.__toasts.some((t) => t.includes('the 2 designs are discarded'))", timeout=5000)
+        p.unroute("**/api/fx/cancel")
         b.designs_idle()
         assert MODEL.notes == ["a big white KILLINGTON title"], MODEL.notes
+        _until(p, lambda: [e["status"] for e in _on_disk()] == ["withdrawn"], what="the landed design set aside")
+        assert b.effects() == []
         [aside] = _on_disk()
         assert aside["status"] == "withdrawn" and aside["shot"] == A
         calls = MODEL.calls

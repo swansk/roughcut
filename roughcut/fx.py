@@ -58,11 +58,13 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import uuid
 import wave
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterator
 
 import numpy as np
 
@@ -1524,9 +1526,34 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
-def _ask(system: str, prompt: str, images: list[Path] | None = None) -> Any:
+_WATCH = threading.local()
+
+
+@contextmanager
+def watched(on_call: Callable[[str, bool], None]) -> Iterator[None]:
+    """Run a design with `on_call(what, False)` told before each of its model calls ("the
+    design call", "the placing look", "the revise call") and `on_call(what, True)` after
+    one answered, on this thread. Told before, it may raise: that call is not made. The
+    server's design job uses it so its cancel (Ctrl+Z on an AI request, verdict 14 punch
+    7) starts no further call — on the API a call in flight cannot be stopped, the next
+    one can — and says which call it stopped."""
+    prev = getattr(_WATCH, "on", None)
+    _WATCH.on = on_call
+    try:
+        yield
+    finally:
+        _WATCH.on = prev
+
+
+def _ask(system: str, prompt: str, images: list[Path] | None = None,
+         what: str = "the design call") -> Any:
     from roughcut import config, inference
+    on = getattr(_WATCH, "on", None)
+    if on is not None:
+        on(what, False)
     r = inference.complete(prompt, role=config.ROLE_JUDGE, images=list(images or ()), system=system)
+    if on is not None:
+        on(what, True)
     return inference.extract_json(r.raw or str(r.content))
 
 
@@ -1630,7 +1657,7 @@ def design(note: str, seg: dict, clip: dict, sidecar: dict | None, *,
         labels = [f"[{i}] t={t:.2f}s" for i, t in enumerate(times)]
         strip = contact_strip(frames, labels, wd / "strip.jpg")
         psys, pprompt = build_place_prompt(note, effect, effect["events"], strip)
-        placed = _ask(psys, pprompt, images=[strip])
+        placed = _ask(psys, pprompt, images=[strip], what="the placing look")
         rows = placed.get("events") if isinstance(placed, dict) else None
         if isinstance(rows, list) and rows:
             kept = []
@@ -1669,7 +1696,7 @@ def revise(effect: dict, note: str, segments: list[dict], clips: dict | None = N
     """One iteration: the revise call, validated, id and events kept unless the note
     changed them, `history` appended. Returns the new proposed effect."""
     system, prompt = build_revise_prompt(effect, note)
-    answer = _ask(system, prompt)
+    answer = _ask(system, prompt, what="the revise call")
     if not isinstance(answer, dict):
         raise ValueError("the revise answer is not an object")
     new = {k: v for k, v in effect.items() if k != "verify"}
