@@ -256,6 +256,7 @@ class Scripted:
         self.seen: list = []
         self.hold: threading.Event | None = None
         self.recut: list[dict] | None = None
+        self.recut_checks: list[dict] | None = None
 
     def complete(self, request):
         self.seen.append(request)
@@ -263,7 +264,8 @@ class Scripted:
         if "segments" not in (request.schema or {}):
             text = "{}"                           # the estimate: it falls back
         elif self.recut is not None and "Re-run the first pass" in prompt:
-            text = json.dumps({"segments": self.recut, "notes": "a re-cut"})
+            text = json.dumps({"segments": self.recut, "notes": "a re-cut",
+                               **({"checks": self.recut_checks} if self.recut_checks else {})})
         elif firstpass_locked_mark() in prompt:
             if self.hold is not None:
                 self.hold.wait(10)
@@ -626,6 +628,89 @@ def test_a_graded_shot_is_not_locked_and_a_kept_shot_keeps_its_grade(fp, model):
     assert got[a]["controls"] == ctl and b not in got
     s = fp.get("/api/firstpass").json()
     assert s["manual_edits"] == [] and s["state"] == "done", s
+
+
+def test_a_rerun_gives_a_locked_shots_speed_and_never_questions_it(fp, model):
+    """Verdict 13, punch 10: the re-run's Things to check said the AI-slowed locked shot
+    "is listed as 29.4 s, but its in and out only span 14.7 s" — the current edit lists a
+    shot's length in the film, and the model was not told the shot's speed. The re-run's
+    brief now gives it (shot number, range, speed, the clip's seconds and the film's), and
+    a check that sets those two lengths against each other is not passed on; any other
+    check about the shot is."""
+    segs = _run_and_accept(fp)
+    a = segs[0]
+    span = round(a["out"] - a["in"], 4)
+    slowed = dict(a, speed=0.5)
+    assert fp.put("/api/project", json={"segments": [slowed, segs[1]],
+                                        "story": ""}).status_code == 200
+    s = fp.get("/api/firstpass").json()
+    assert [(m["id"], m["how"]) for m in s["manual_edits"]] == [(a["id"], ["speed"])], s
+    assert s["would"]["locked"] == [a["id"]]
+    stem = Path(a["clip"]).stem
+    model.recut = [{"clip": a["clip"], "in": a["in"], "out": a["out"], "why": "kept"},
+                   {"clip": "CLIP_C.MP4", "in": 0.5, "out": 3.0, "why": "a walk"}]
+    model.recut_checks = [
+        {"text": f"Shot 1 ({stem}) is listed as {span * 2:.1f} s, but its in and out only "
+                 f"span {span:.1f} s.", "clip": a["clip"], "in": a["in"], "out": a["out"]},
+        {"text": f"{stem} at {span * 2:.1f}s vs {span:.1f}s of footage looks off"},
+        {"text": "The slowed shot's sound may drag: listen to it.", "clip": a["clip"],
+         "in": a["in"], "out": a["out"]},
+        {"text": "The walk is 2.5 s, 0.5 s longer than it needs.", "clip": "CLIP_C.MP4",
+         "in": 0.5, "out": 3.0}]
+    r = fp.post("/api/firstpass", json={"mode": "rerun"})
+    assert r.status_code == 200 and r.json()["keep"] == [a["id"]], r.text
+    s = _wait(fp)
+    assert s["state"] == "done", s
+    prompt = model.seen[-1].prompt
+    assert "Re-run the first pass" in prompt
+    assert (f"shot 1: {a['clip']} {a['in']:.2f}-{a['out']:.2f} plays at 50% speed: its in "
+            f"and out span {span:.1f}s of the clip, and it runs {span * 2:.1f}s in the film"
+            ) in prompt, prompt[:3000]
+    assert "do not report that difference" in prompt
+    plan = _plan(fp, s["proposal"]["job"])
+    texts = [c["text"] for c in plan["checks"]]
+    assert not any("listed as" in t or "vs" in t for t in texts), texts
+    assert "The slowed shot's sound may drag: listen to it." in texts
+    assert "The walk is 2.5 s, 0.5 s longer than it needs." in texts, \
+        "a check about another shot stays, whatever its numbers"
+    kept = next(x for x in plan["segments"] if x.get("id") == a["id"])
+    assert kept["speed"] == 0.5 and (kept["in"], kept["out"]) == (a["in"], a["out"])
+
+
+def test_speed_brief_and_the_speed_check_filter():
+    """The pure half of the above: only locked shots at another speed are named, at any
+    speed (a 200 % shot's film length is half its span); a check is dropped only when it
+    is about such a shot and its two lengths are in the speed's ratio."""
+    cut = [{"id": "g1", "clip": "CLIP_09.MP4", "in": 12.3, "out": 27.0, "speed": 0.5},
+           {"id": "g2", "clip": "CLIP_02.MP4", "in": 1.0, "out": 9.0, "speed": 2.0},
+           {"id": "g3", "clip": "CLIP_04.MP4", "in": 0.0, "out": 4.0, "speed": 0.5},
+           {"id": "g4", "clip": "CLIP_05.MP4", "in": 0.0, "out": 4.0}]
+    note = firstpass.plan_note(3, "rerun", segments=cut, keep=["g1", "g2", "g4"])
+    assert ("shot 1: CLIP_09.MP4 12.30-27.00 plays at 50% speed: its in and out span "
+            "14.7s of the clip, and it runs 29.4s in the film") in note
+    assert "shot 2: CLIP_02.MP4 1.00-9.00 plays at 200% speed" in note
+    assert "it runs 4.0s in the film" in note
+    assert "shot 3:" not in note, "not locked: the model may change it"
+    assert "shot 4:" not in note, "locked, at 100 %"
+    assert "another speed" not in firstpass.plan_note(1, "rerun", segments=cut, keep=["g4"])
+    assert "another speed" not in firstpass.plan_note(1, "rerun")
+    checks = [
+        {"text": "listed as 29.4 s, but its in and out only span 14.7 s", "clip": "CLIP_09.MP4",
+         "in": 12.3, "out": 27.0, "kind": "model"},
+        {"text": "Shot 2 runs 4 seconds yet spans 8 seconds", "clip": None, "in": None,
+         "out": None, "kind": "model"},
+        {"text": "CLIP_04 runs 8.0 s but spans 4.0 s", "clip": "CLIP_04.MP4", "in": 0.0,
+         "out": 4.0, "kind": "model"},                        # not locked: kept
+        {"text": "the 9.0 s shot is long against a 6.0 s beat", "clip": "CLIP_02.MP4",
+         "in": 1.0, "out": 9.0, "kind": "model"},             # about it, not in its ratio
+        {"text": "a cut on a blink", "clip": "CLIP_09.MP4", "in": 13.0, "out": 14.0,
+         "kind": "model"},
+        {"text": "shot 1 is listed as 29.4 s, but spans 14.7 s", "kind": "flag"}]
+    out = firstpass.drop_speed_checks(checks, cut, ["g1", "g2", "g4"])
+    assert [c["text"] for c in out] == [checks[2]["text"], checks[3]["text"],
+                                        checks[4]["text"], checks[5]["text"]]
+    assert firstpass.drop_speed_checks(checks, cut, ["g4"]) == checks
+    assert firstpass.drop_speed_checks(None, cut, ["g1"]) is None
 
 
 def _timebase(fp, plan) -> float | None:

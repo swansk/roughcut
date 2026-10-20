@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import contextvars
 import ctypes
 import gc
 import json
@@ -558,11 +559,18 @@ def shot_fn(edl: dict, sid: str):
 
 
 @app.get("/api/colour")
-def api_colour() -> JSONResponse:
+async def api_colour() -> Response:
+    """The film's grade, the looks, every shot's resolved colour and each clip's colour
+    facts. Built off the loop; while an import settles, a slow build is not waited for
+    (`late_respond`)."""
+    return await late_respond(("colour",), lambda: colour_payload(), "the colour's build")
+
+
+def colour_payload() -> dict:
     edl = read_edl()
     ensure_segment_ids(edl)
     looks = looks_library()
-    return JSONResponse({
+    return ({
         "film": edl.get("colour") or {},
         "looks": [{"name": k, "kind": v["kind"], "description": v.get("description", ""),
                    **({"error": v["error"]} if v.get("error") else {})}
@@ -576,21 +584,26 @@ def api_colour() -> JSONResponse:
 
 
 @app.get("/api/lut/{sid}")
-def api_lut(sid: str, n: int = 17) -> JSONResponse:
+async def api_lut(sid: str, n: int = 17) -> Response:
     """The shot's LUT as a flat float table in .cube order (red fastest), for the
     monitor's WebGL shader. 17³ is within 0.1 dB of 33³ (the lab); the render bakes
-    its own 33³ from the same function."""
+    its own 33³ from the same function. Built off the loop; while an import settles, a
+    slow build is not waited for (`late_respond`)."""
     n = max(2, min(int(n), 33))
+    return await late_respond(("lut", sid, n), lambda: lut_payload(sid, n), "the LUT's build")
+
+
+def lut_payload(sid: str, n: int) -> dict:
     edl = read_edl()
     ensure_segment_ids(edl)
     res = shot_fn(edl, sid)
     if res is None:
         raise HTTPException(404, f"no shot {sid}")
     table = colourmod.cube_table(res["fn"], n)
-    return JSONResponse({"id": sid, "size": n, "identity": res["identity"],
-                         "look": res["look"], "strength": res["strength"],
-                         "balance": res["balance"],   # what was baked: the monitor previews the rest
-                         "table":[round(float(v), 5) for v in table.reshape(-1)]})
+    return {"id": sid, "size": n, "identity": res["identity"],
+            "look": res["look"], "strength": res["strength"],
+            "balance": res["balance"],   # what was baked: the monitor previews the rest
+            "table": [round(float(v), 5) for v in table.reshape(-1)]}
 
 
 @app.post("/api/lut/{sid}")
@@ -2215,7 +2228,12 @@ def _cause(ms: float, w: dict) -> str:
     "loop" (the loop thread ran server code: sync work on the loop), "thread" (another
     server thread ran with the GIL), "starved" (the loop thread was runnable and the box
     did not run it), "faults" (pages read back from swap while the GIL was held) or "?";
-    a request's "server" is the process's own CPU through it (every thread)."""
+    a request's "waiting" is the handler waiting on a worker thread or a subprocess
+    (`wait_ms`, what on in `waited_on`: `req_wait`) and its "server" the process's own
+    CPU through it (every thread). Verdict 13, punch 10: two import-time requests that
+    waited on the snapshot's rebuild read "faults" on 3 and 8 major faults. A wait the
+    loop's own run-queue wait outlasts is the box's ("starved": the loop could not even
+    look at what it waited on)."""
     half = 0.5 * ms
     if float(w.get("gc_ms") or 0) >= half:
         return "gc"
@@ -2223,6 +2241,9 @@ def _cause(ms: float, w: dict) -> str:
         return "loop"
     if float(w.get("busy_cpu_ms") or 0) >= half:
         return "thread"
+    wait, rq = float(w.get("wait_ms") or 0), float(w.get("rq_ms") or 0)
+    if wait >= half and wait >= rq:
+        return "waiting"             # a request: its handler waited on a thread or a process
     if "loop_cpu_ms" not in w and float(w.get("proc_cpu_ms") or 0) >= half:
         return "server"              # a request: the process worked through it
     if float(w.get("rq_ms") or 0) >= half:
@@ -2339,6 +2360,34 @@ def _watch_loop() -> None:
         _LOOP_WATCH["task"] = loop.create_task(_loop_lag())
 
 
+# What a request waited on (wave 17, verdict 13 punch 10). A handler that waits on a
+# worker thread (a snapshot's rebuild, a clip's facts probe) or a subprocess says so with
+# `req_wait(what)`: the time goes to the request's `wait_ms` (and `waited_on`, by what),
+# and `_cause` calls a request whose time it mostly was "waiting" — not "faults" because a
+# few pages were read back meanwhile. A wait the client asked for (`asked`: the media
+# status's `?at=` hint, answered when the head it waits on is made) is the client's, as a
+# body's upload is (wave 14): kept as `asked_ms`, not in `ms`.
+_REQ: contextvars.ContextVar = contextvars.ContextVar("roughcut_request", default=None)
+
+
+@contextmanager
+def req_wait(what: str, asked: bool = False):
+    """Time a wait inside a request's handler (no-op outside one). Works around an
+    `await` too: the request's record is a context variable, which a sync handler's
+    worker thread and `asyncio.to_thread` both carry."""
+    acc = _REQ.get()
+    t = time.perf_counter()
+    try:
+        yield
+    finally:
+        if acc is not None:
+            ms = (time.perf_counter() - t) * 1000.0
+            k = "asked" if asked else "wait"
+            acc[k] = acc.get(k, 0.0) + ms
+            on = acc.setdefault("on", {})
+            on[what] = round(on.get(what, 0.0) + ms, 1)
+
+
 class RequestTiming:
     """Pure ASGI (a BaseHTTPMiddleware would buffer the media streams)."""
 
@@ -2377,6 +2426,10 @@ class RequestTiming:
                 waited[0] += time.perf_counter() - t
             return msg
 
+        acc: dict = {"testclient": (scope.get("client") or ("",))[0] == "testclient"}
+        token = _REQ.set(acc)
+        if method not in ("GET", "HEAD", "OPTIONS"):
+            snap_wrote(where or "")
         if saving:
             SAVES_IN_FLIGHT["n"] += 1
         elif method == "GET" and where in ("/", "/api/project") and SAVES_IN_FLIGHT["n"]:
@@ -2386,19 +2439,27 @@ class RequestTiming:
         try:
             await self.app(scope, body, timed)
         finally:
+            _REQ.reset(token)
             if saving:
                 SAVES_IN_FLIGHT["n"] -= 1
+            if method not in ("GET", "HEAD", "OPTIONS"):
+                snap_wrote(where or "")
             path = scope.get("path") or ""
             if path != "/api/debug/slow":
                 end = first[0] if first[0] is not None else time.perf_counter()
                 ep = scope.get("endpoint")
+                span = end - t0
+                asked = min(acc.get("asked", 0.0) / 1000.0, span)
                 row = {"method": scope.get("method"), "path": path,
                        "handler": getattr(ep, "__name__", None) or "-",
-                       "ms": round((end - t0 - min(waited[0], end - t0)) * 1000.0, 1),
+                       "ms": round((span - min(waited[0] + asked, span)) * 1000.0, 1),
                        "status": first[1], "at": time.time()}
                 if waited[0] >= 0.001:
-                    row.update(body_ms=round(waited[0] * 1000.0, 1),
-                               wall_ms=round((end - t0) * 1000.0, 1))
+                    row["body_ms"] = round(waited[0] * 1000.0, 1)
+                if asked >= 0.001:
+                    row["asked_ms"] = round(asked * 1000.0, 1)
+                if waited[0] >= 0.001 or asked >= 0.001:
+                    row["wall_ms"] = round(span * 1000.0, 1)
                 if row["ms"] >= REQUEST_BUDGET_MS:
                     # over the budget: what the whole process ran meanwhile (every thread)
                     # and how busy the box was — a request the server worked through
@@ -2412,6 +2473,9 @@ class RequestTiming:
                     # run-queue wait, major faults, GC time — from the sampler's last
                     # reading before the request began
                     row.update(_box_since(_box_before(t0)))
+                    if acc.get("wait"):
+                        row["wait_ms"] = round(acc["wait"], 1)
+                        row["waited_on"] = dict(acc.get("on") or {})
                     row["cause"] = _cause(row["ms"], row)
                 note_request(row)
 
@@ -2445,7 +2509,8 @@ def api_debug_slow(heap: int = 0) -> JSONResponse:
     slowest request (`slowest`) and slowest `/api/` request (`slowest_api`) seen; the
     budget (`budget`: a request's first byte within 300 ms, the loop never held 200 ms)
     with the last 50 over it (`over_budget`, holds with `where`) and the longest hold
-    (`slowest_loop`); `gc` (collections, their time, the longest), `rss_mb` and `malloc`
+    (`slowest_loop`); `late_answers` (the reads an import's slow rebuild answered with the
+    last answer, by name); `gc` (collections, their time, the longest), `rss_mb` and `malloc`
     (the allocator's arenas, in use / free, and its trims: `mem_stats`). Each row
     over the budget has `cause` (`_cause`) with the loop's run-queue wait (`rq_ms`), the
     major faults (`majflt`) and the GC time (`gc_ms`) over its span. `?heap=1` adds the
@@ -2464,6 +2529,9 @@ def api_debug_slow(heap: int = 0) -> JSONResponse:
                          **({"heap": _heap_types()} if heap else {}),
                          "slowest_api": SLOWEST["api"], "slowest_loop": SLOWEST["loop"],
                          "budget": {"request_ms": REQUEST_BUDGET_MS, "loop_ms": LOOP_BUDGET_MS},
+                         # wave 17: the reads answered with the last answer while an import
+                         # settled (`snap_respond`, `late_respond`), by what they asked for
+                         "late_answers": dict(SNAP["late"]),
                          "over_budget": list(OVER_BUDGET), "slow": list(SLOW)})
 
 
@@ -3061,10 +3129,16 @@ def bin_picks(edl: dict | None = None) -> list[dict]:
 
 
 @app.get("/api/picks")
-def api_picks(order: str = "rank") -> JSONResponse:
-    """Every pick in the bin with stored verdicts re-attached, best first or by clip."""
+async def api_picks(order: str = "rank") -> Response:
+    """Every pick in the bin with stored verdicts re-attached, best first or by clip.
+    Built off the loop; while an import settles, a slow build is not waited for
+    (`late_respond`)."""
     if order not in ("rank", "clip"):
         raise HTTPException(400, f"unknown order {order!r}")
+    return await late_respond(("picks", order), lambda: picks_payload(order), "the picks' build")
+
+
+def picks_payload(order: str = "rank") -> dict:
     # The full project payload, not the Ask's slimmer clip shape: picks need the R8
     # candidates, which the Ask never reads.
     edl = selects.ensure(read_edl())
@@ -3082,7 +3156,7 @@ def api_picks(order: str = "rank") -> JSONResponse:
     rec, live = _fp_record() or {}, _fp_live()
     made = ((rec.get("produced") or {}).get("picks") is not None or rec.get("step") == "cut"
             or bool(live and live.get("picks") is not None))
-    return JSONResponse({
+    return ({
         "firstpass_picked": made,
         "picks": _pick_rows(ordered),
         "rounds": len(picks.rounds([p for p in ordered if p["released"]])),
@@ -3815,7 +3889,8 @@ def _flow_disk_facts() -> dict:
 # Without inotify every call is a miss: as correct, and as slow, as before.
 
 SNAP: dict = {"gen": 0, "armed": None, "rearm": True, "dirty": [], "cache": {},
-              "bytes": {}, "lock": threading.Lock()}
+              "bytes": {}, "lock": threading.Lock(), "builds": {}, "writes": 0,
+              "import": None, "late": {}}
 SNAP_WATCH = dirwatch.DirWatch()
 # a helper the snapshot reads, replaced (the suite's monkeypatch), is a change
 _SNAP_FNS = ("footage_clips", "analysed_stems", "visual_stems", "fine_stems",
@@ -3913,6 +3988,9 @@ def _snapped(name: str, build: Callable[[], dict]) -> dict:
         snap_poll()
         _snap_settle()
     key = _snap_key()
+    used = getattr(_SNAP_LOCAL, "used", None)
+    if used is not None:
+        used[name] = key                             # what `_snap_build` stores it under
     hit = SNAP["cache"].get(name)
     if hit is not None and hit[0] == key:
         return hit[1]
@@ -3930,12 +4008,115 @@ def _json_bytes(content) -> bytes:
                       separators=(",", ":")).encode("utf-8")
 
 
+# An import's rebuild never holds a request (wave 17, verdict 13 punch 10). Right after a
+# mid-session import of two 4K clips on Killington `/api/firstpass` took 482-594 ms and
+# `/api/clips` 343-489 ms: each waited on a worker thread (the snapshot's rebuild, the new
+# clips' facts probe) while the import's probes, posters, previews and free index had the
+# box. So while an import settles (`import_settling`: IMPORT_SETTLE_S after it, and as long
+# as the index it started runs) a request whose answer must be rebuilt waits for the
+# rebuild at most SNAP_LAG_WAIT_S, then answers with the last one — "what is known" — and
+# the rebuild carries on on its own thread (one per answer at a time); the board's next
+# poll reads it (`X-Roughcut-Snapshot: last` says which answer this was). Never in place
+# of: the client's own write (every POST / PUT / DELETE but the import's own and the few
+# that write nothing an answer reads — `snap_wrote` — is read back fresh), a first pass
+# starting or moving, another backend, settings, code or bin (`_snap_may_lag`). Outside
+# an import nothing changes: a miss waits for its rebuild.
+SNAP_LAG_WAIT_S = 0.1
+IMPORT_SETTLE_S = 120.0
+# requests that change nothing a snapshot reads, or are the import itself: never a "write"
+SNAP_NOT_WRITES = ("/api/import", "/api/upload", "/api/playing", "/api/lut/",
+                   "/api/proxies/toast", "/api/snap", "/api/find", "/api/edits/preview",
+                   "/api/assist/preview", "/api/export/sample", "/api/deep/quote")
+SNAP_POOL: dict = {"pool": None, "lock": threading.Lock()}
+
+
+def snap_wrote(path: str) -> None:
+    """A request that may write began or ended (RequestTiming, before and after): no
+    answer built before it is served late. The import's own requests are not counted —
+    the rebuild after them is the one that may lag — nor those that write nothing the
+    answers read (the playhead's word, a LUT preview, a price: SNAP_NOT_WRITES)."""
+    if not path.startswith(SNAP_NOT_WRITES):
+        SNAP["writes"] += 1
+
+
+def import_began(index_job: str | None) -> None:
+    """New footage landed (`media_added`): the snapshots may answer late while it settles."""
+    SNAP["import"] = {"t": time.monotonic(), "index": index_job}
+
+
+def import_settling() -> bool:
+    """Is an import settling, for this request? Never for the suite's TestClient, whose
+    requests are one-at-a-time checks of what the server knows (as the loop watcher
+    skips them): the late answer is tested on a real loop (test_import_snap)."""
+    if (_REQ.get() or {}).get("testclient"):
+        return False
+    imp = SNAP.get("import")
+    if not imp:
+        return False
+    if time.monotonic() - imp["t"] < IMPORT_SETTLE_S:
+        return True
+    job = INDEXES.get(imp.get("index") or "")
+    return job is not None and job.get("state") not in progress.TERMINAL
+
+
+def _snap_may_lag(prev) -> bool:
+    """May `prev` (a stored answer: (key, live), bytes, writes) be served while its
+    rebuild runs? Only while an import settles, with no client write since it was built,
+    and with nothing but the disk, the jobs and the clips' lengths changed since: the
+    first pass's state, the code, the backend, the settings and the bin are the same."""
+    if prev is None or len(prev) < 3 or prev[2] != SNAP["writes"] or not import_settling():
+        return False
+    old = (prev[0] or (None,))[0]
+    if not isinstance(old, tuple):
+        return False
+    new = _snap_key()
+    return len(old) == len(new) and old[3:13] == new[3:13]
+
+
+def _snap_pool():
+    from concurrent.futures import ThreadPoolExecutor
+    with SNAP_POOL["lock"]:
+        if SNAP_POOL["pool"] is None:
+            SNAP_POOL["pool"] = ThreadPoolExecutor(8, thread_name_prefix="snapshot")
+        return SNAP_POOL["pool"]
+
+
+def _snap_build(name: str, fn: Callable[[], dict], live: Callable[[], object]) -> bytes:
+    """`fn()`'s answer as bytes, kept as `name`'s last answer (on a snapshot thread) under
+    the key its own read used and the live part as it was before it: a change during the
+    build makes the next call build again, never serves this one as newer than it is."""
+    writes = SNAP["writes"]
+    lv = live()
+    _SNAP_LOCAL.used = {}
+    try:
+        body = _json_bytes(fn())
+        key = _SNAP_LOCAL.used.get(name)
+    finally:
+        _SNAP_LOCAL.used = None
+    cur = SNAP["bytes"].get(name)
+    if cur is None or len(cur) < 3 or cur[2] <= writes:      # never over a newer one
+        SNAP["bytes"][name] = ((key, lv), body, writes)
+    return body
+
+
+def _snap_rebuild(name: str, fn: Callable[[], dict], live: Callable[[], object]):
+    """The rebuild of `name`'s answer running now, or a new one: one at a time, unless
+    the running one began before a client's write (that request reads its write back)."""
+    fut = SNAP["builds"].get(name)
+    writes = SNAP["writes"]
+    if fut is None or fut.done() or getattr(fut, "writes", None) != writes:
+        fut = SNAP["builds"][name] = _snap_pool().submit(_snap_build, name, fn, live)
+        fut.writes = writes
+    return fut
+
+
 async def snap_respond(name: str, fn: Callable[[], dict],
                        live: Callable[[], object] = lambda: None) -> Response:
     """`fn()`'s answer. When `name`'s snapshot is current it is made on the event loop
     without a thread hop or a disk read — and when `live()` (the in-memory part fn
-    merges in) is unchanged too, it is the last answer's bytes; else on a worker
-    thread, where the rebuild may read the disk."""
+    merges in) is unchanged too, it is the last answer's bytes; else on a snapshot
+    thread, where the rebuild may read the disk — and while an import settles, a
+    rebuild slower than SNAP_LAG_WAIT_S is not waited for: the last answer is."""
     if snap_hit(name):
         _SNAP_LOCAL.fresh = True
         try:
@@ -3943,12 +4124,86 @@ async def snap_respond(name: str, fn: Callable[[], dict],
             hit = SNAP["bytes"].get(name)
             if hit is not None and hit[0] == lk:
                 return Response(hit[1], media_type="application/json")
+            writes = SNAP["writes"]
             body = _json_bytes(fn())
-            SNAP["bytes"][name] = (lk, body)
+            SNAP["bytes"][name] = (lk, body, writes)
             return Response(body, media_type="application/json")
         finally:
             _SNAP_LOCAL.fresh = False
-    return JSONResponse(await asyncio.to_thread(fn))
+    prev = SNAP["bytes"].get(name)
+    fut = _snap_rebuild(name, fn, live)
+    if _snap_may_lag(prev):
+        until = time.perf_counter() + SNAP_LAG_WAIT_S
+        with req_wait(f"the {name} snapshot's rebuild"):
+            while not fut.done() and time.perf_counter() < until:
+                await asyncio.sleep(0.01)
+        if not fut.done():
+            SNAP["late"][name] = SNAP["late"].get(name, 0) + 1
+            return Response(prev[1], media_type="application/json",
+                            headers={"X-Roughcut-Snapshot": "last"})
+    with req_wait(f"the {name} snapshot's rebuild"):
+        body = await asyncio.shield(asyncio.wrap_future(fut))
+    return Response(body, media_type="application/json")
+
+
+# The other import-burst reads (verdict 13 punch 10; lane SRVBUDGET2's Killington import:
+# /api/clips 775 ms, /api/colour 665, /api/lut 425, /api/picks 893): each is built for its
+# request on a snapshot thread (one build per question at a time; a client's write since
+# starts another), and while an import settles a build slower than SNAP_LAG_WAIT_S is not
+# waited for — the last answer to the same question is, brought up to date by `known`
+# where that is cheap (the clip list's new clips), `X-Roughcut-Snapshot: last`. The build
+# carries on; the next read has it. Outside an import every read waits for its own build.
+LATE: dict = {}          # (name, params…) -> {"fut": Future, "last": (payload, body, writes, bin)}
+LATE_KEEP = 64           # questions kept (a LUT per shot is ~150 KB of JSON): the oldest go
+
+
+def _late_build(key: tuple, build: Callable[[], dict], writes: int, footage: Path,
+                keep_payload: bool) -> bytes:
+    payload = build()
+    body = _json_bytes(payload)
+    slot = LATE.setdefault(key, {})
+    last = slot.get("last")
+    if STATE.get("footage") == footage and (last is None or last[2] <= writes
+                                            or last[3] != footage):
+        slot["last"] = (payload if keep_payload else None, body, writes, footage)
+    return body
+
+
+def _late_slot(key: tuple) -> dict:
+    slot = LATE.get(key)
+    if slot is None:
+        for old in [k for k, v in LATE.items()
+                    if v.get("fut") is None or v["fut"].done()][:max(0, len(LATE) + 1 - LATE_KEEP)]:
+            LATE.pop(old, None)
+        slot = LATE[key] = {}
+    return slot
+
+
+async def late_respond(key: tuple, build: Callable[[], dict], what: str,
+                       known: Callable[[dict], dict] | None = None) -> Response:
+    """`build()`'s answer (a dict, as JSON), built on a snapshot thread — see LATE."""
+    writes, footage = SNAP["writes"], STATE["footage"]
+    slot = _late_slot(key)
+    fut = slot.get("fut")
+    if fut is None or fut.done() or getattr(fut, "writes", None) != writes \
+            or getattr(fut, "footage", None) != footage:
+        fut = slot["fut"] = _snap_pool().submit(_late_build, key, build, writes, footage,
+                                                known is not None)
+        fut.writes, fut.footage = writes, footage
+    last = slot.get("last")
+    if last is not None and last[2] == writes and last[3] == footage and import_settling():
+        until = time.perf_counter() + SNAP_LAG_WAIT_S
+        with req_wait(what):
+            while not fut.done() and time.perf_counter() < until:
+                await asyncio.sleep(0.01)
+        if not fut.done():
+            SNAP["late"][key[0]] = SNAP["late"].get(key[0], 0) + 1
+            body = _json_bytes(known(last[0])) if known is not None else last[1]
+            return Response(body, media_type="application/json",
+                            headers={"X-Roughcut-Snapshot": "last"})
+    with req_wait(what):
+        body = await asyncio.shield(asyncio.wrap_future(fut))
+    return Response(body, media_type="application/json")
 
 
 def flow_facts() -> dict:
@@ -4693,7 +4948,8 @@ def _firstpass_walk(job: str, fp: dict) -> None:
         originate = not segments or (fp["mode"] == "run" and not locked)
         # verdict 4: the ranges the editor rejected in a review — not proposed again
         rejected = fpmod.rejections(edl)
-        note = (fpmod.plan_note(len(locked), fp["mode"], fp["note"], rejected)
+        note = (fpmod.plan_note(len(locked), fp["mode"], fp["note"], rejected,
+                                segments=segments, keep=locked)
                 if not originate else
                 "\n\n".join(x for x in ((fp["note"] or "").strip(),
                                          fpmod.rejected_brief(rejected)) if x))
@@ -4715,6 +4971,9 @@ def _firstpass_walk(job: str, fp: dict) -> None:
                                                          rejected)
             if segments and locked:
                 plan["segments"] = fpmod.enforce_locks(plan["segments"], segments, locked)
+                # verdict 13, punch 10: never "listed as 29.4 s, but its in and out only
+                # span 14.7 s" about a locked shot the editor slowed
+                plan["checks"] = fpmod.drop_speed_checks(plan.get("checks"), segments, locked)
             if left:
                 plan["notes"] = "\n\n".join(x for x in (
                     str(plan.get("notes") or "").strip(),
@@ -6721,15 +6980,54 @@ def unheard_clip(clip: str, used: bool = False) -> dict:
     }
 
 
+# The clip list during an import (wave 17, verdict 13 punch 10): `late_respond` — while an
+# import settles, a build slower than SNAP_LAG_WAIT_S is not waited for: the last list
+# answers, with a row of null facts for each clip it did not have yet and `probing`
+# counting them, so the board asks again 0.3 s on and the build's list fills them in.
+
+
+def _clips_known(payload: dict) -> dict:
+    """The last list as it stands now: rows for the bin's clips only, a clip it did not
+    have yet as a row of null facts (`clip_stub`), `probing` counting those too. Event-
+    loop safe: a folder listing and the imports' stats, no probe."""
+    rows = {r["clip"]: r for r in payload.get("clips") or []}
+    sources = media_sources()
+    clips = footage_clips()
+    out = [rows.get(c) or clip_stub(c, sources) for c in clips]
+    stubs = sum(1 for c in clips if c not in rows)
+    return {**payload, "clips": out, "probing": int(payload.get("probing") or 0) + stubs,
+            "total_s": round(sum(r["duration"] or 0.0 for r in out), 2)}
+
+
+def clip_stub(clip: str, sources: mediamod.Sources | None = None) -> dict:
+    """A clip's row before anything is known of it: /api/clips' shape, every fact null."""
+    stem = Path(clip).stem
+    return {"clip": clip, "stem": stem, "duration": None, "captured": None, "session": None,
+            "proxy": False, "poster": poster_url(stem, poster_time(clip)),
+            "analysed": False, "looked": False, "closed": False, "telemetry": None,
+            "fps": None, "width": None, "height": None, "codec": None, "tc_start": None,
+            "audio": None, "released": False, "junk": "clean",
+            **_clip_origin(clip, sources), "media": None, "journal": None}
+
+
 @app.get("/api/clips")
-def api_clips() -> JSONResponse:
+async def api_clips() -> Response:
     """The folder as a contact sheet would show it (design §2): every clip with the
     free facts — length, when it was shot and which session that makes it, what exists
     for it on disk, whether it carries telemetry, its frame rate, size and codec, its
     source timecode and its sound's channels and rate — and
     the journal's word on it when the bin has been indexed. Nothing here costs a model
     call, and nothing waits on the index: a clip still being probed after
-    CLIP_FACTS_WAIT_S comes back with null facts (`probing` counts them)."""
+    CLIP_FACTS_WAIT_S comes back with null facts (`probing` counts them). Built off the
+    event loop; while an import settles, the last list fills in for a slow build
+    (`late_respond`, `X-Roughcut-Snapshot: last`)."""
+    return await late_respond(("clips",), lambda: clips_payload(), "the clip list's build",
+                              known=_clips_known)
+
+
+def clips_payload() -> dict:
+    """`GET /api/clips`' answer (on a snapshot thread: it may wait CLIP_FACTS_WAIT_S for
+    a clip's facts and reads the disk)."""
     from concurrent.futures import wait as _wait
     clips = footage_clips()
     pending = warm_clip_facts(clips)
@@ -6788,12 +7086,12 @@ def api_clips() -> JSONResponse:
                 "parked": rec.get("parked"),
                 "stages": {s: rec["stages"][s]["state"] for s in journal.STAGES}},
         })
-    return JSONResponse({"clips": out, "sessions": session,
-                         "footage": str(STATE["footage"]),
-                         "total_s": round(sum(c["duration"] or 0.0 for c in out), 2),
-                         "journal": journal_path().exists(),
-                         "paused_priced": bool(j and j.paused_priced),
-                         "probing": len(clips) - len(ready)})
+    return {"clips": out, "sessions": session,
+            "footage": str(STATE["footage"]),
+            "total_s": round(sum(c["duration"] or 0.0 for c in out), 2),
+            "journal": journal_path().exists(),
+            "paused_priced": bool(j and j.paused_priced),
+            "probing": len(clips) - len(ready)}
 
 
 @app.post("/api/index")
@@ -11533,7 +11831,9 @@ def media_status(name: str, at: float | None = None) -> JSONResponse:
         with MEDIA["lock"]:
             hev = MEDIA["building"].get(f"head:{stem}")
         if hev is not None:
-            hev.wait(HEAD_HINT_WAIT_S)
+            # the board asked to be answered when the head is made: its wait, not the server's
+            with req_wait("the head being made (asked: ?at=)", asked=True):
+                hev.wait(HEAD_HINT_WAIT_S)
     kind, url = media_fallback(clip)
     key = str(preview_path(stem))
     rec = range_record(stem)
@@ -13962,12 +14262,15 @@ def media_added(clips: list[str]) -> dict:
     if not clips:
         return {"index": None}
     media_changed()
+    import_began(None)                       # the snapshots may answer late while it settles
     warm_clip_facts(clips)                   # the Project panel's columns: length, rate, size
     threading.Thread(target=_import_posters, args=(clips, STATE["footage"]),
                      daemon=True).start()
     kick_previews()                          # previews on a GPU; the walk re-reads the list
     MEDIA["kick"].set()
-    return {"index": start_free_index()}
+    index = start_free_index()
+    import_began(index)
+    return {"index": index}
 
 
 def _import_posters(clips: list[str], footage: Path) -> None:
@@ -15246,8 +15549,11 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
     with SNAP["lock"]:
         SNAP["cache"].clear()
         SNAP["bytes"].clear()
+        SNAP["builds"].clear()
+        SNAP["import"] = None
         SNAP["rearm"] = True
         SNAP["gen"] += 1
+    LATE.clear()
     # The Project panel's first /api/clips finds the free facts probed or probing
     # (redesign wave 2, INGEST): the probes start now, in the background.
     warm_clip_facts(footage_clips())

@@ -116,8 +116,11 @@ def test_the_allocators_free_memory_goes_back_to_the_kernel():
     drop: list = []
 
     def churn():                      # on a worker thread, as a sync handler's buffers are
+        # written, as a handler's buffers are: `bytes(n)` is calloc, whose fresh pages are
+        # never touched — never resident, so their trim frees nothing the RSS shows (it
+        # depended on the heap's history: a fresh arena failed it)
         for i in range(3000):
-            (keep if i % 2 else drop).append(bytes(64 * 1024))    # malloc's heap, not mmap
+            (keep if i % 2 else drop).append(b"\x01" * (64 * 1024))   # malloc's heap, not mmap
     th = threading.Thread(target=churn)
     th.start()
     th.join()

@@ -489,3 +489,13 @@ next judge runs, and the next judge rules it honest or lenient.
   control on each board screen** (the Project group's fourth tab, Karl's K4 (a)): `/` 110·58, `/ shot` 139·73, `/ film`
   118·57, `/ fx` 144·61, `/ jobs` 119·59, measured, no headroom (proven by lowering one). More lenient by exactly the
   measured count; it is the panel Karl chose.
+
+- 2026-10-20 (wave 17, lane SNAP; logged by the lead): **two measurement choices for the judge.** (1) An *asked* wait (the
+  `/media/status?at=` head hint, which by design long-polls up to 8 s) is subtracted from a request's `ms`, kept as
+  `asked_ms` / `wall_ms`, as the upload's `body_ms` was in wave 14: a hint is never over budget. More lenient for that one
+  declared long-poll (it was always excused by name). (2) During an import's settle (120 s, and while the index it started
+  runs) the status reads and the import-burst reads (`/api/clips`, `/api/colour`, `/api/lut`, `/api/picks`) answer the last
+  snapshot after 0.1 s and fill in later; a late answer is never served after the client's own write, when a pass starts
+  or moves, or when the backend / settings / bin changed, and never to the suite's TestClient (so API tests always read
+  fresh state; `test_import_snap` tests late answers on a real loop). The new `waiting` cause names a request whose time
+  went to a worker thread or a subprocess.

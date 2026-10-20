@@ -787,10 +787,99 @@ def resume_words(counts: dict | None, step: str | None = None) -> str:
     return ", ".join(todo)
 
 
+def _speed(s: dict) -> float:
+    try:
+        v = float(s.get("speed") or 1.0)
+    except (TypeError, ValueError):
+        return 1.0
+    return v if v > 0 else 1.0
+
+
+def retimed_locked(segments: list[dict], locked) -> list[tuple[int, dict]]:
+    """The locked shots that play at another speed than 100 %, with their number in the
+    current edit (1-based, as the prompt lists it)."""
+    lock = set(locked or ())
+    return [(i + 1, s) for i, s in enumerate(segments or [])
+            if isinstance(s, dict) and s.get("id") in lock and "in" in s and "out" in s
+            and abs(_speed(s) - 1.0) > 1e-6]
+
+
+def speed_brief(segments: list[dict], locked) -> str:
+    """The re-run brief's paragraph on the locked shots retimed by the editor (verdict
+    13, punch 10). The current edit lists each shot's length in the film — its clip
+    range at its speed — so a locked shot at 50 % reads "12.30-27.00 (29.4s)", and a
+    model told nothing of the speed put "listed as 29.4 s, but its in and out only span
+    14.7 s" in Things to check. Each line gives the shot's number, its range, its speed,
+    the clip seconds its in and out span and the seconds it runs; "" when none is."""
+    rows = []
+    for n, s in retimed_locked(segments, locked):
+        sp = _speed(s)
+        span = float(s["out"]) - float(s["in"])
+        rows.append(f"  - shot {n}: {s['clip']} {float(s['in']):.2f}-{float(s['out']):.2f} "
+                    f"plays at {round(sp * 100, 1):g}% speed: its in and out span "
+                    f"{span:.1f}s of the clip, and it runs {span / sp:.1f}s in the film")
+    if not rows:
+        return ""
+    return ("These LOCKED shots play at another speed (the editor's own speed change). "
+            "A shot's length in the current edit is the time it runs in the film; its in "
+            "and out are seconds of its clip; the two differ by the speed, as they "
+            "should. Return each exactly as it is, and do not report that difference "
+            "as something to check:\n" + "\n".join(rows))
+
+
+_SECONDS = re.compile(r"(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds)\b", re.I)
+
+
+def _speed_ratio(text: str, sp: float) -> bool:
+    """Two lengths in `text` whose ratio is the speed's: "29.4 s … 14.7 s" at 50 %."""
+    want = max(sp, 1.0 / sp)
+    vals = [float(v) for v in _SECONDS.findall(text or "") if float(v) > 0]
+    return any(abs(max(a, b) / min(a, b) - want) <= 0.03 * want
+               for k, a in enumerate(vals) for b in vals[k + 1:])
+
+
+def drop_speed_checks(checks, segments: list[dict], locked) -> list:
+    """The model's checks without the ones that question a locked shot's speed: a check
+    about a retimed locked shot (its clip and range, or its name or number in the words)
+    that sets two lengths against each other in the speed's ratio — the film's seconds
+    against the clip's, which is the editor's speed change, not a fault. Any other check
+    on the shot stays."""
+    if not isinstance(checks, list):
+        return checks
+    retimed = retimed_locked(segments, locked)
+    if not retimed:
+        return checks
+    out = []
+    for c in checks:
+        if not isinstance(c, dict) or (c.get("kind") or "model") != "model":
+            out.append(c)
+            continue
+        text = str(c.get("text") or "")
+        low = text.lower()
+        hit = False
+        for n, s in retimed:
+            if c.get("clip"):
+                about = c.get("clip") == s.get("clip")
+                if about and c.get("in") is not None and c.get("out") is not None:
+                    about = (min(float(c["out"]), float(s["out"]))
+                             - max(float(c["in"]), float(s["in"]))) > 0
+            else:
+                about = (_stem(s.get("clip")).lower() in low
+                         or re.search(rf"\bshot {n}\b", low) is not None)
+            if about and _speed_ratio(text, _speed(s)):
+                hit = True
+                break
+        if not hit:
+            out.append(c)
+    return out
+
+
 def plan_note(locked: int, mode: str, extra: str = "",
-              rejected: list[dict] | None = None) -> str:
+              rejected: list[dict] | None = None, *,
+              segments: list[dict] | None = None, keep: list[str] | None = None) -> str:
     """The note a re-run sends with the cut (the Ask's own call needs one), with the
-    ranges the editor rejected before (`rejected_brief`)."""
+    ranges the editor rejected before (`rejected_brief`) and, given the current edit
+    (`segments`) and the locked ids (`keep`), the locked shots' speeds (`speed_brief`)."""
     lead = ("Re-run the first pass: rebuild this cut as the first pass would, from the "
             "index, the ranked events and the editor's picks, for the target length.")
     if locked:
@@ -799,6 +888,9 @@ def plan_note(locked: int, mode: str, extra: str = "",
                  "anything else.")
     else:
         lead += " Nothing is locked: replace whatever the material serves better."
+    sp = speed_brief(segments or [], keep or [])
+    if sp:
+        lead += f"\n\n{sp}"
     no = rejected_brief(rejected or [])
     if no:
         lead += f"\n\n{no}"
