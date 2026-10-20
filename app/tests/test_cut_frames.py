@@ -364,7 +364,7 @@ SLOW_ARM = r"""() => { window.__fl = []; window.__rf = []; window.__on = true; w
      window.__fl.push({t: now, ed: md.expectedDisplayTime || now, v: v.id, live: v.classList.contains('live'), mt: md.mediaTime});
      v.requestVideoFrameCallback(cb); }; v.requestVideoFrameCallback(cb); });
   const look = (ft) => { if (!window.__on) return;
-     window.__rf.push({ft, playing: player.playing, idx: player.idx, draws: grade.draws,
+     window.__rf.push({ft, t: performance.now(), playing: player.playing, idx: player.idx, draws: grade.draws,
                        on: !!document.querySelector('#gradeCanvas.on')});
      requestAnimationFrame(look); };
   requestAnimationFrame(look); }"""
@@ -437,11 +437,38 @@ def _slow_facts(rec: dict) -> dict:
     mts = [p for p in rec["pace"] if a - 50 <= p["due"] <= z + 50]
     # the worker's clock: each draw on screen from the first display frame after the worker finished
     # it (the rAF timestamps' grid), so a page late to see a draw does not move it
-    slots = sorted({math.ceil((d["t"] - a) / (1000 / 60) - 1e-6) for d in rec["dl"] if a <= d["t"] <= z})
-    wgaps = [(slots[i] - slots[i - 1]) * 1000 / 60 for i in range(1, len(slots))]
+    V = 1000 / 60
+    drawn = sorted((d for d in rec["dl"] if a <= d["t"] <= z), key=lambda d: d["t"])
+    slot_of = lambda d: math.ceil((d["t"] - a) / V - 1e-6)                      # noqa: E731
+    slots = sorted({slot_of(d) for d in drawn})
+    wgaps = [(slots[i] - slots[i - 1]) * V for i in range(1, len(slots))]
+    # each hold on the worker's clock, with whose it is: the buffer's when the frame that ended it
+    # was presented by the buffer (its frame callback) after the time the pacer's clock had for it
+    # (the frame before it's grade.paceLog `due` and one frame period at the rate on), so no canvas
+    # could have had it up on time (the buffer's own clock fell behind: under load its sound's
+    # clock stalls, and its frames come later and later); else the canvas's
+    pace = {round(p["mt"], 4): p for p in rec["pace"]}
+    came = {}
+    for f in sorted(rec["fl"], key=lambda f: f["t"]):
+        if f["live"]:
+            came.setdefault(round(f["mt"], 4), f["t"])
+    canvas_holds = buffer_late = 0
+    for i in range(1, len(slots)):
+        if (slots[i] - slots[i - 1]) * V <= HOLD_BAR_MS:
+            continue
+        before = [d for d in drawn if slot_of(d) == slots[i - 1]][-1]
+        d = next(d for d in drawn if slot_of(d) == slots[i])
+        m0, m1 = round(before["ts"] / 1e6, 4), round(d["ts"] / 1e6, 4)
+        late = False
+        if m0 in pace and m1 in came:
+            want = pace[m0]["due"] + (m1 - m0) / max(0.05, rec["rate"]) * 1000
+            late = came[m1] > want + 2
+        buffer_late += 1 if late else 0
+        canvas_holds += 0 if late else 1
     return {"load": rec["load"], "rate": rec["rate"], "draws": len(ch),
             "holds": sum(1 for g in gaps if g > HOLD_BAR_MS), "longest_ms": round(max(gaps), 1) if gaps else None,
-            "worker_holds": sum(1 for g in wgaps if g > HOLD_BAR_MS),
+            "worker_holds": sum(1 for g in wgaps if g > HOLD_BAR_MS), "canvas_holds": canvas_holds,
+            "buffer_late_holds": buffer_late,
             "pattern": "".join(str(min(9, round(g / (1000 / 60)))) for g in gaps),
             "paced_frames": len(mts), "drawn_frames": len(ks), "skipped": sum(s - 1 for s in steps if s > 1),
             # up from its first draw on (an ungraded shot's canvas goes up with its first frame drawn;

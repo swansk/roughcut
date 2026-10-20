@@ -1879,24 +1879,32 @@ function release() {
     const x = ((mt - p.m0) / rate) * 1000;
     const o = ed - x;                                       // this frame's display time, less its clock's
     if (p.L == null) {
-      // The run's first frame. A play from a park (this buffer's `play`, or its first callback the
-      // parked frame shown again): the canvas shows the parked frame till then (slowShot; no redraw
-      // on `play`), so the margin is only the play's start that much later, never a hold. (wave 18
-      // PLAY9b) The parked frame is the one at or before the park's time, a frame before it when
-      // the time is a hair short of a frame's start (lane FRAME59's seqFrameAt parks on sequence
-      // frames, at 0.5x half a source frame apart): read as `now`'s time it missed by a frame, and
-      // a play whose first callback is the frame after the parked one (a second play from the same
-      // park: the parked frame is not shown again) had no margin, so the buffer's early-and-late
-      // frames of its first ~2 s held the canvas (test_cut_frames, 2 of 4 runs alone, 4 of 4 with
-      // FRAME59). A cut into the shot: no margin (its first frame on time, after the outgoing's
-      // last), until a later frame moves the clock (one hold at most).
+      // The run's first frame. A play from a park: the canvas shows the parked frame till then
+      // (slowShot; no redraw on `play`), so the margin is only the play's start that much later,
+      // never a hold. (wave 18 PLAY9b) A play from a park is known three ways, as each alone missed:
+      // the first callback is the frame the canvas drew parked (its exact media time, toWorker), or
+      // the one at or before the park's time (the frame before it when the time is a hair short of
+      // a frame's start, as lane FRAME59's seqFrameAt parks: sequence frames, at 0.5x half a source
+      // frame apart), or it comes within PLAY_START_MS of app.js playFrom's play() (`_playStart`)
+      // or of the live buffer's `play` (a second play from the same park starts on the frame after
+      // the parked one, which is not shown again; the first callback can come before `play` fires).
+      // With only the park's time within half a frame, every second play and, with FRAME59, some
+      // first ones had no margin: the buffer's early-and-late frames of its first ~2 s held the
+      // canvas (test_cut_frames: 2 of 4 runs alone, 4 of 4 with FRAME59; dumps: the second play of
+      // every page). A cut into the shot: no margin (its first frame on time, after the outgoing's
+      // last), until a later frame moves the clock (one hold at most). `paceLog`'s first entry of a
+      // run says which (`first`, a record).
       const fd = (typeof window.frameDur === 'function' ? Number(window.frameDur(v)) || 0 : 0) || 1 / 30;
       const pk = v.__gradeParkT;
       // the frame the canvas drew parked (toWorker), else the one at or before the park's time
       const parked = (v.__gradeParkedMt != null && Math.abs(mt - v.__gradeParkedMt) < 0.001)
         || (pk != null && mt <= pk + 0.0005 && mt > pk - fd - 0.0005);
-      const played = G.playV === v && performance.now() - G.playAt < PLAY_START_MS;
+      const played = (G.playV === v && performance.now() - G.playAt < PLAY_START_MS)
+        || (v._playStart > 0 && performance.now() - v._playStart < PLAY_START_MS);   // app.js playFrom
       p.L = parked || played ? o + PACE_MARGIN * V : o;
+      p.why = { parkedMt: v.__gradeParkedMt != null ? v.__gradeParkedMt : null, parkT: pk != null ? pk : null,
+                sincePlay: G.playV === v ? Math.round(performance.now() - G.playAt) : null,
+                sinceStart: v._playStart > 0 ? Math.round(performance.now() - v._playStart) : null, margin: parked || played };
     } else if (o > p.L + V / 4) { p.L = o + V; p.lo = []; }   // later than the clock: the clock moves
     else if (o < p.L - (PACE_MARGIN + 1) * V + V / 4) {
       p.lo.push(o);
@@ -1906,7 +1914,8 @@ function release() {
     // and unrounded the time crept 0.07 ms a frame through the worker's frame (WORKER_SRC
     // HOLD_AFTER_MS), its draws ending either side of a display frame by turns for a second at a time
     const due = now + Math.round((x + p.L - now) / V) * V;
-    G.paceLog.push({ mt, ed: Math.round(ed * 10) / 10, due: Math.round(due * 10) / 10 });
+    G.paceLog.push({ mt, ed: Math.round(ed * 10) / 10, due: Math.round(due * 10) / 10, ...(p.why ? { first: p.why } : {}) });
+    p.why = null;
     if (G.paceLog.length > 200) G.paceLog.splice(0, G.paceLog.length - 200);
     return due;
   }

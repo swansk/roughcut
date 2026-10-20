@@ -2047,6 +2047,9 @@ function playFrom(i, { single = false } = {}) {
     // parked on the in-point already (arm): the same time again would be a second seek
     if (!resume && !parkedOn(v, parkAt(shotBase(seg)))) v.currentTime = parkAt(shotBase(seg));
     setShotRate(v, seg);
+    // (wave 18 PLAY9b) a play from a park, for the grade's pacer (grade.js paceDue): its first
+    // frame callback can come before the element's `play` event
+    v._playStart = performance.now();
     v.play().catch((err) => { if (g === player.gen) playRefused(err); });
   };
   // The timeline's render before the play, not after it (wave 13 CANVAS2): after play()
