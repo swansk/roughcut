@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **Karl's K4 in REDESIGN-GOAL.md** (verbatim, 2026-10-19, after trying b12b979): what indexing ran over the footage and how to re-run or tune it is still unclear; the old "pass" screens reached from the top are still there.
 - **Loop state: wave 16 merged; the gate's perf line GREEN in both runs; judge 13 launched** (judge/LOOP.md).
 - **The journey's one-Accept-two-undos mutant targets the accept's current line** (test_journey_tool; AIUX's `labelFor` label had made it miss its text, so the lead's gate on 3b37b53 read it BROKEN). 19 passed.
 - **Merge: wave 16 lane LAYOUT2** (with Selects open the AI prompt keeps a 160 px input and a whole chip and its status line moves under the header; ruler labels never overlap; tour cards never cover an Accept or a status line; hover cards close when clicked; the re-run says which shots the AI cut; the Lumetri UI timing tests measure from the input to the frame). **Lead fix in the merge: the Marker dialog gives up the focus when it closes**, so Ctrl+Z right after Delete works (timeline.js `dropDialogFocus`; test_markers failed 2 in 3).

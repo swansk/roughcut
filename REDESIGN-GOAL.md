@@ -144,6 +144,13 @@ tools. The bar is a Premiere editor who has never seen Roughcut and never reads 
 
 ## K. Karl's notes (verbatim, newest first; only Karl adds here, the builder may only mark one resolved with evidence)
 
+- **K4 (2026-10-19, after trying `b12b979` on his 8766 preview):** "1. it is still not clear to me what indexing was run over
+  the existing footage, or how to re run / tune that 2. The previous parts where you click on the top and can get to the
+  "pass" and stuff is still here... odd" → (a) the index is visible and controllable from inside the editor: which stages
+  ran on each clip (heard, looked, close looks, telemetry, proxies), when, with what settings (the look interval) and at
+  what cost, and re-running or re-tuning it per clip or for the bin: dimensions 2, 3, 13, 16; (b) the old separate screens
+  (`/open` "Footage and index…", `/floor` "Review the pass…", reached from the File menu and the header's Next chip) do not
+  belong beside the editor: dimensions 1, 4, 9. The lead's reading of (b) is being confirmed with Karl.
 - **K3 (2026-10-16, after trying the paused branch; Karl said "no need to start yet"):** "off what we have
   currently, I still don't like the way the footage and pass look, there is no clear way to add new footage
   or to run the AI tooling on this - remember, it needs to have that premiere pro quality (I like having the
