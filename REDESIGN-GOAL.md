@@ -467,3 +467,9 @@ next judge runs, and the next judge rules it honest or lenient.
   tour step leaves the editor for another page; `/open` and `/floor` are gone (their routes answer with the editor), and
   every feature they had is reachable inside it (an audit listed in the lane's report and checked by the judge).
   Strictly stricter. K4 stays open until Karl looks again.
+
+- 2026-10-20 (lead, after verdict 13's rulings): **logged what the Lumetri timing tests skip.** `test_lumetri_ui`'s
+  `within_limit` skips its millisecond bars when the box is above 2x its cores (the number is printed), as
+  test_tx_playback does; this was only in a commit message (verdict 13: the log did not say it). More lenient on an
+  overloaded box. Verdict 13 also ruled the design redo's behaviour lenient (it re-asks the model on a keypress); wave
+  17's lane REDO makes a redo restore the same design with no call (punch 6).

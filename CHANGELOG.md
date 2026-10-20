@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **Redesign verdict 13: FAIL, 15 of 16 at 8-9, the judge's gate GREEN** (`judge/verdict-13.md` on b12b979): dimension 16 at 7 (K4: the index and the old pages); K2, K3, K4 open. Rubric log: the Lumetri tests' skip above 2x cores, said in the log. Wave 17 grows five lanes from its punch list.
 - **Loop state: Karl is done looking at 8766; merges resume** (judge/LOOP.md).
 - **Loop state: Karl's look and K4; wave 17 launched** (judge/LOOP.md).
 - **K4's two answers recorded and turned into bars** (REDESIGN-GOAL.md section K + rubric log): an Index panel in the editor; the old `/open` and `/floor` pages folded in and removed. Wave 17 plan in judge/WAVE17.md.
