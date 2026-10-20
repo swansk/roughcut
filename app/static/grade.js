@@ -1702,16 +1702,34 @@ onmessage = (e) => {
     if (!seg || !Number.isFinite(seg.out)) return true;
     return seg.out - v.currentTime < CUT_NEAR_S * (Number(seg.speed) || 1);
   }
+  /* (wave 17 PLAY8, verdict 13 punch 9) A frame whose callback runs a display frame before the
+   * frame is shown (its expectedDisplayTime; on the headless box 30 % of a play's callbacks at 1x
+   * and 12 % at 0.5x, the live buffer's own frames even all the while) is drawn in the
+   * animation frame it is shown in. Drawn at the callback, the canvas showed it a display frame
+   * early: the frame before it held one frame short and it one frame long, which on a 0.5x shot
+   * of a 29.97 proxy (a new frame every 66.7 ms) is 50 then 83 ms, 1-4 times in a 3 s play. */
+  const DUE_EARLY_MS = 8;
+  function drawWhenShown(gen, v, due) {
+    const step = (ts) => {
+      if (gen !== G.frameGen || v !== live()) return;
+      if (ts < due - DUE_EARLY_MS) { requestAnimationFrame(step); return; }
+      if (!G.drawReq) settle();
+    };
+    requestAnimationFrame(step);
+  }
   function armFrames() {
     const v = live();
     const gen = ++G.frameGen;
     G.rides = v || null;
     if (!v) return;
-    const again = () => {
+    const again = (now, md) => {
       if (gen !== G.frameGen) return;
       if (v !== live()) { G.rides = null; return; }
-      if (G.worker && !G.drawReq && !G.mix && !G.mixZone && playerPlaying() && !v.paused && !nearCut(v)) settle();
-      else drawSoon();
+      if (G.worker && !G.drawReq && !G.mix && !G.mixZone && playerPlaying() && !v.paused && !nearCut(v)) {
+        const due = md && md.expectedDisplayTime;
+        if (due && due - now > DUE_EARLY_MS) drawWhenShown(gen, v, due);
+        else settle();
+      } else drawSoon();
       if ('requestVideoFrameCallback' in v) v.requestVideoFrameCallback(again);
       else requestAnimationFrame(again);
     };
