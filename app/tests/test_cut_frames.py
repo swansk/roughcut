@@ -38,6 +38,7 @@ held 83 ms 5-6 times in the 0.5x shot.
 from __future__ import annotations
 
 import json
+import math
 import os
 import socket
 import subprocess
@@ -274,12 +275,14 @@ def test_a_half_speed_shot_changes_picture_every_four_display_frames(live):
 # at 1280 and scaled up, proxied by the server's own `ensure_proxies` to the 1280 proxy), a shot at
 # 0.5x: its proxy has a new frame every 66.7 ms of film, four display frames at 60 Hz. Played for
 # 4.5 s from 1 s into it, twice on one page (the first play is the page's first: its sound starts
-# then), what the screen shows is measured on the frame clock (rAF's timestamp): the canvas's draws
-# while it is the picture, graded at 1440 and 1920 and ungraded at 1440 (grade.js draws a slowed
-# shot through the canvas either way: slowPlaying). ASSERTED: no picture held past 67.5 ms (its
-# cadence and a hair: a frame held a display frame long reads 83.3), every source frame of the play
-# drawn (the pacer's frames step one proxy frame at a time: none skipped), the canvas up at every
-# animation frame. The buffer's own frames (rVFC expectedDisplayTime) are in the record: they hold
+# then), what the screen shows is measured on the frame clock (rAF's timestamp) and the worker's
+# (each draw up from the display frame after the worker finished it): the canvas's draws while it
+# is the picture, graded at 1440 and 1920 and ungraded at 1440 (grade.js draws a slowed shot
+# through the canvas either way: slowPlaying). ASSERTED: no picture held past 67.5 ms on the
+# worker's clock, nor on the frame clock (one a play allowed past one runnable task a core: the
+# page's animation frames then run late enough to see a draw a display frame early or late; the
+# worker's clock of such a play was even), every source frame of the play drawn (none skipped),
+# the canvas up from its first draw. The buffer's own frames (rVFC expectedDisplayTime) are in the record: they hold
 # 83 ms 0-12 times a play on the base and the head alike (the renderer's frame choice before its
 # cadence locks, ~2 s), which the canvas no longer shows. Base 1fc6907, this fixture, load 3.6-4.9:
 # the graded canvas held 83 ms 3-12 times in each of its 4 plays, and the ungraded shot was the raw
@@ -429,8 +432,13 @@ def _slow_facts(rec: dict) -> dict:
     ks = sorted({round(d["ts"] / 1e6 * FPS) for d in rec["dl"] if a <= d["t"] <= z})
     steps = [ks[i] - ks[i - 1] for i in range(1, len(ks))]
     mts = [p for p in rec["pace"] if a - 50 <= p["due"] <= z + 50]
+    # the worker's clock: each draw on screen from the first display frame after the worker finished
+    # it (the rAF timestamps' grid), so a page late to see a draw does not move it
+    slots = sorted({math.ceil((d["t"] - a) / (1000 / 60) - 1e-6) for d in rec["dl"] if a <= d["t"] <= z})
+    wgaps = [(slots[i] - slots[i - 1]) * 1000 / 60 for i in range(1, len(slots))]
     return {"load": rec["load"], "rate": rec["rate"], "draws": len(ch),
             "holds": sum(1 for g in gaps if g > HOLD_BAR_MS), "longest_ms": round(max(gaps), 1) if gaps else None,
+            "worker_holds": sum(1 for g in wgaps if g > HOLD_BAR_MS),
             "pattern": "".join(str(min(9, round(g / (1000 / 60)))) for g in gaps),
             "paced_frames": len(mts), "drawn_frames": len(ks), "skipped": sum(s - 1 for s in steps if s > 1),
             # up from its first draw on (an ungraded shot's canvas goes up with its first frame drawn;
@@ -458,4 +466,9 @@ def test_a_half_speed_shot_of_a_4k_proxy_plays_evenly(slow_proj, slow_live, grad
         assert f["skipped"] == 0, f"a source frame of the play was never drawn: {f}"
     if load0 > 2 * cores:
         pytest.skip(f"box at load {load0:.1f} on {cores} cores before the test: holds measured, not judged: {facts}")
-    assert all(f["holds"] == 0 for f in facts), facts
+    # Past one runnable task a core, the page's own animation frames run late enough (6-15 ms) to
+    # see a draw the worker finished in the display frame before, or the next: one hold a play on
+    # the frame clock that the worker's clock does not have (lane PLAY9, slow.py's `attr.py`)
+    allowed = 0 if load0 <= cores else 1
+    assert all(f["worker_holds"] == 0 for f in facts), f"the canvas held a frame on the worker's clock: {facts}"
+    assert all(f["holds"] <= allowed for f in facts), (allowed, load0, facts)
