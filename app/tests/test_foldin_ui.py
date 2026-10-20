@@ -657,3 +657,32 @@ def test_the_mic_is_not_there_without_the_recogniser_and_goes_on_a_501(mic_brows
         assert pg.errors == []
     finally:
         pg.close()
+
+
+# ------------------------------------------------- junk, in the Project panel's Status
+
+def test_a_junk_proposal_shows_in_the_project_panels_status(browser, live, fold):
+    """/open's card badge ("a problem shows as one badge and junk is answered on the
+    card"): a clip the junk pass proposes reads "junk?" in the Project panel's Status,
+    its hover says where it is answered (Selects' Confirm / Keep), and a confirmed one
+    "junk"."""
+    _fresh(fold)
+
+    def edit(route):
+        r = route.fetch()
+        d = r.json()
+        for c in d["clips"]:
+            c["junk"] = {"CLIP_A.MP4": "proposed", "CLIP_B.MP4": "confirmed"}.get(c["clip"], "clean")
+        route.fulfill(response=r, body=json.dumps(d), content_type="application/json")
+    pg = _open(browser, live, routes=[("**/api/clips", edit)])
+    try:
+        pg.evaluate("dock.open('project')")
+        pg.wait_for_selector("#projList [data-clip='CLIP_A.MP4'] td.st", timeout=10000)
+        st = pg.evaluate("""() => Object.fromEntries([...document.querySelectorAll('#projList tr[data-clip]')]
+            .map((r) => [r.dataset.clip, [r.querySelector('td.st').dataset.state, r.querySelector('td.st').title]]))""")
+        assert st["CLIP_A.MP4"][0] == "junk?" and "Selects" in st["CLIP_A.MP4"][1], st
+        assert st["CLIP_B.MP4"][0] == "junk", st
+        assert st["CLIP_C.MP4"][0] not in ("junk?", "junk"), st
+        assert pg.errors == []
+    finally:
+        pg.close()

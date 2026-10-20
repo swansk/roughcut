@@ -784,6 +784,9 @@
     // verdict 8: the Program sat black on a clip the bin called "indexed"
     if (c.media === 'building') return ['building', 'wait', 'preview building: the monitors show its poster until it plays; it can be cut now'];
     if (c.media === 'queued') return ['queued', 'wait', 'preview queued: made in the background; it can be cut now'];
+    // junk, as the footage screen's card badge said it (wave 17 FOLDIN): answered in Selects
+    if (c.junk === 'proposed') return ['junk?', 'warn', 'junk? proposed by a measurement (black, one flat field, or a blip with no words): Confirm or Keep it in Selects'];
+    if (c.junk === 'confirmed') return ['junk', '', 'junk: out of the Ask, Find and Selects; the index skips its look'];
     if (c.analysed && c.looked) return ['indexed', 'ok', 'indexed: its sound heard and its pictures read'];
     if (c.analysed) return ['heard', 'part', 'heard: its sound is transcribed, its pictures not read yet'];
     if (c.looked) return ['looked', 'part', 'looked: its pictures are read, its sound not heard yet'];
