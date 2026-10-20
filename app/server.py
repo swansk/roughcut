@@ -3951,8 +3951,10 @@ def _snap_key() -> tuple:
             tuple(sorted((k, v) for k, v in os.environ.items()
                          if k.startswith("ROUGHCUT_"))),
             bool(os.environ.get("ANTHROPIC_API_KEY")),
-            # the CLI's sign-in is re-asked once its cache is stale (`cli_facts`)
-            (int(time.time() // CLI_FACTS_TTL_S), _CLI_FACTS["gen"]) if STATE.get("cli_facts") else 0,
+            # the CLI's sign-in is re-asked once its cache is stale (`cli_facts`): when it
+            # was asked, and what it said (all a late answer compares: `_snap_lag_view`)
+            (int(time.time() // CLI_FACTS_TTL_S), _CLI_FACTS["gen"],
+             tuple(sorted((_CLI_FACTS["facts"] or {}).items()))) if STATE.get("cli_facts") else 0,
             STATE.get("edl_created"), _snap_paths(),
             # a clip's length landing (the facts warm-up) re-prices the look (visual_status)
             len(STATE.get("durations") or {}))
@@ -4008,12 +4010,25 @@ def _json_bytes(content) -> bytes:
 # that write nothing an answer reads — `snap_wrote` — is read back fresh), a first pass
 # starting or moving, another backend, settings, code or bin (`_snap_may_lag`). Outside
 # an import nothing changes: a miss waits for its rebuild.
+#
+# Wave 18 (verdict 14 punch 10): on the judge's Killington server the status read right
+# after its own import POST still waited 526 ms on the firstpass snapshot's rebuild. Two
+# things refused it the last answer that had nothing to do with what it says: the CLI's
+# facts are asked again every CLI_FACTS_TTL_S, and the key's clock bucket and ask count
+# moved with them (SNAP's probe ran --no-probe, where they never move) — so a late answer
+# compares what the CLI said, not when it was asked (`_snap_lag_view`); and a write that
+# changed nothing the answer reads (the Index panel's price) left the stored answer's
+# write count behind for good, since a hit served it without a rebuild — a hit is the
+# answer as of now, so it takes the count it was checked at (`snap_respond`). The late
+# body says `"importing": true` beside the header, and the board asks again until the
+# answer knows the new clips (import.js `landed`).
 SNAP_LAG_WAIT_S = 0.1
 IMPORT_SETTLE_S = 120.0
 # requests that change nothing a snapshot reads, or are the import itself: never a "write"
 SNAP_NOT_WRITES = ("/api/import", "/api/upload", "/api/playing", "/api/lut/",
                    "/api/proxies/toast", "/api/snap", "/api/find", "/api/edits/preview",
-                   "/api/assist/preview", "/api/export/sample", "/api/deep/quote")
+                   "/api/assist/preview", "/api/export/sample", "/api/deep/quote",
+                   "/api/index/price")
 SNAP_POOL: dict = {"pool": None, "lock": threading.Lock()}
 
 
@@ -4057,7 +4072,24 @@ def _snap_may_lag(prev) -> bool:
     if not isinstance(old, tuple):
         return False
     new = _snap_key()
-    return len(old) == len(new) and old[3:13] == new[3:13]
+    return len(old) == len(new) and _snap_lag_view(old) == _snap_lag_view(new)
+
+
+def _snap_lag_view(key: tuple) -> tuple:
+    """The parts of a `_snap_key` a late answer must share with the current one: the first
+    pass (3), the code (4, 5), the backend (6, 7), the settings (8, 9), what the CLI said
+    about itself (10 — its facts, not the clock bucket or the count of asks, which move
+    every CLI_FACTS_TTL_S whatever it says), the project and the bin (11, 12)."""
+    cli = key[10]
+    return key[3:10] + ((cli[2:] if isinstance(cli, tuple) else cli),) + key[11:13]
+
+
+def _importing(body: bytes) -> bytes:
+    """A late answer's JSON object with `"importing": true` in it: what was known before
+    the import, said to be so (the board asks again: import.js `landed`)."""
+    if body[:1] != b"{" or body[-1:] != b"}":
+        return body
+    return b'{"importing":true' + (b"," if body.strip() != b"{}" else b"") + body[1:]
 
 
 def _snap_pool():
@@ -4110,6 +4142,10 @@ async def snap_respond(name: str, fn: Callable[[], dict],
             lk = (SNAP["cache"][name][0], live())
             hit = SNAP["bytes"].get(name)
             if hit is not None and hit[0] == lk:
+                # the answer as of now: no write since has changed what it reads, so it
+                # counts the writes it was checked at (a late answer compares them)
+                if hit[2] != SNAP["writes"] and SNAP["bytes"].get(name) is hit:
+                    SNAP["bytes"][name] = (hit[0], hit[1], SNAP["writes"])
                 return Response(hit[1], media_type="application/json")
             writes = SNAP["writes"]
             body = _json_bytes(fn())
@@ -4126,7 +4162,7 @@ async def snap_respond(name: str, fn: Callable[[], dict],
                 await asyncio.sleep(0.01)
         if not fut.done():
             SNAP["late"][name] = SNAP["late"].get(name, 0) + 1
-            return Response(prev[1], media_type="application/json",
+            return Response(_importing(prev[1]), media_type="application/json",
                             headers={"X-Roughcut-Snapshot": "last"})
     with req_wait(f"the {name} snapshot's rebuild"):
         body = await asyncio.shield(asyncio.wrap_future(fut))
@@ -4186,7 +4222,7 @@ async def late_respond(key: tuple, build: Callable[[], dict], what: str,
         if not fut.done():
             SNAP["late"][key[0]] = SNAP["late"].get(key[0], 0) + 1
             body = _json_bytes(known(last[0])) if known is not None else last[1]
-            return Response(body, media_type="application/json",
+            return Response(_importing(body), media_type="application/json",
                             headers={"X-Roughcut-Snapshot": "last"})
     with req_wait(what):
         body = await asyncio.shield(asyncio.wrap_future(fut))

@@ -33,6 +33,7 @@
   const KEY = IS_MAC ? '⌘I' : 'Ctrl+I';
   const VIDEO = /\.(mp4|mov|mkv|avi|m4v|mts|webm)$/i;
   const LAST = 'rc.import.path';
+  const IMPORTING_ASK_MS = 600;     // the first pass's status asked again while the import settles
   const S = {
     dlg: null, mode: 'import', data: null, path: '', back: [], fwd: [], sel: new Set(),
     anchor: -1, cursor: -1, busy: false, err: '', host: '', type: '', typeAt: 0, seq: 0,
@@ -419,7 +420,14 @@
       window.dispatchEvent(new CustomEvent('rc:clips-changed', { detail: { added: added.slice() } }));
     } catch (_) { /* old browser */ }
     if (window.rcFirstPass && typeof window.rcFirstPass.refresh === 'function') {
-      setTimeout(() => window.rcFirstPass.refresh(), 300);    // "3 new clips: add them…?"
+      // "3 new clips: add them…?" While the import settles the server answers at once with
+      // what it knew, marked `importing` (its rebuild runs on; verdict 14 punch 10), so this
+      // asks again until an answer knows these clips or is not marked (about 9 s at most).
+      const knows = (s) => Array.isArray(s.new_clips) && added.every((c) => s.new_clips.includes(c));
+      const ask = (left) => Promise.resolve(window.rcFirstPass.refresh()).then((s) => {
+        if (s && s.importing && !knows(s) && left > 0) setTimeout(() => ask(left - 1), IMPORTING_ASK_MS);
+      }, () => {});
+      setTimeout(() => ask(15), 300);
     }
     if (info.quiet) return;
     const free = info.index ? ' — hearing them now (free)' : '';

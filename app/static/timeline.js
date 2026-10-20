@@ -773,6 +773,7 @@
    * the next (each sits the same offset right of its tick). Measured once the ruler is in
    * the page. */
   let labelRoom = 0;
+  let labelW = 0;                  // a label's own width, measured with its room
   function labelPx() {
     if (labelRoom) return labelRoom;
     if (!el.ruler || !el.ruler.isConnected || !el.ruler.getClientRects().length) return LABEL_PX;
@@ -785,8 +786,37 @@
     el.ruler.appendChild(tick);
     const w = lab.getBoundingClientRect().width;
     tick.remove();
-    if (w > 0) labelRoom = Math.ceil(w + LABEL_GAP);
+    if (w > 0) { labelRoom = Math.ceil(w + LABEL_GAP); labelW = w; }
     return labelRoom || LABEL_PX;
+  }
+  const labelWidth = () => labelW || LABEL_PX - LABEL_GAP;
+
+  /* A label is whole or not drawn (verdict 14 punch 10: the cold land's last label read
+   * "00:00:20:0" at the Timeline's right edge, at 1440 and 1920; Premiere never shows half a
+   * timecode). One the canvas's end would cut is never made (`paintRuler`); the one the
+   * view's visible edge crosses, left or right — zoomed in and scrolled — is hidden until it
+   * is whole (`rulerEdges`, on every render, scroll and resize: two binary searches over the
+   * labels' x and at most four class changes, no layout read). */
+  const LABEL_X = 3;               // px: a major tick's label sits this far right of it (timeline.css)
+  let rulerLabs = [];              // the drawn labels by x: [left in canvas px, label]
+  let edgeCut = [];                // the labels `rulerEdges` hid
+  function rulerEdges() {
+    const n = rulerLabs.length;
+    const cut = [];
+    if (n) {
+      const w = labelWidth();
+      const a = state.scrollX || 0, b = a + viewWidth();
+      for (const edge of [a, b]) {
+        // the last label that starts before the edge: the only one that can cross it
+        let lo = 0, hi = n;
+        while (lo < hi) { const m = (lo + hi) >> 1; if (rulerLabs[m][0] < edge - 0.5) lo = m + 1; else hi = m; }
+        const lab = lo > 0 && rulerLabs[lo - 1][0] + w > edge + 0.5 ? rulerLabs[lo - 1][1] : null;
+        if (lab && !cut.includes(lab)) cut.push(lab);
+      }
+    }
+    for (const lab of edgeCut) if (!cut.includes(lab)) lab.classList.remove('edge-cut');
+    for (const lab of cut) if (!edgeCut.includes(lab)) lab.classList.add('edge-cut');
+    edgeCut = cut;
   }
 
   /* A labelled step in frames: 1, 2, 5 or 10 frames, else whole seconds of timecode —
@@ -824,16 +854,22 @@
     const minor = step / ratio;
     const end = (width - PAD) / state.zoom;
     const frag = document.createDocumentFragment();
+    const lw = labelWidth();
+    rulerLabs = [];
+    edgeCut = [];
     for (let k = 0; k * minor <= end + 1e-9 && k < 5000; k++) {
       const t = k * minor;
       const tick = document.createElement('i');
       const major = k % ratio === 0;
+      const x = timeToX(t);
       tick.className = major ? 'tick major' : 'tick';
-      tick.style.left = `${timeToX(t)}px`;
-      if (major) {
+      tick.style.left = `${x}px`;
+      // a label the canvas's end would cut is not made (its tick stays)
+      if (major && x + LABEL_X + lw <= width + 0.5) {
         const lab = document.createElement('label');
         lab.textContent = tc(t, r);
         tick.appendChild(lab);
+        rulerLabs.push([x + LABEL_X, lab]);
       }
       frag.appendChild(tick);
     }
@@ -2478,6 +2514,7 @@
     positionHead();
     // the scroll as read above, clamped to the new width (no read after the writes)
     state.scrollX = Math.min(at, Math.max(0, width - vw));
+    rulerEdges();
     paintUndo();
   }
 
@@ -2573,6 +2610,7 @@
     canvasW = need;
     el.canvas.style.width = `${need}px`;
     paintRuler(need);
+    rulerEdges();
   }
 
   /* `opts.quiet` (wave 13 CANVAS2): the playhead's time and its event, without moving the
@@ -4494,6 +4532,7 @@
     el.view.addEventListener('wheel', onWheel, { passive: false });
     el.view.addEventListener('scroll', () => {
       state.scrollX = el.view.scrollLeft;
+      rulerEdges();                // a label the edge now crosses hides; a whole one is back
       scheduleA1();                // a block scrolled into view gets its waveform
       // the headers ride the rows when the tracks are taller than the panel
       const hb = el.side.querySelector('.tl-heads');
@@ -4525,7 +4564,7 @@
         // read here, where the layout is fresh: everything else uses these (viewWidth)
         viewW = el.view.clientWidth;
         viewH = el.view.clientHeight;
-        if (autoFit) render(); else layoutTracks();
+        if (autoFit) render(); else { layoutTracks(); rulerEdges(); }
       }).observe(el.view);
     }
     tl.on('playhead', applyMonitorAudio);

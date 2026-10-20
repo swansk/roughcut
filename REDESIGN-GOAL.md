@@ -530,3 +530,12 @@ next judge runs, and the next judge rules it honest or lenient.
   appears only while a Selects verdict is what Ctrl+Z takes next; the reject and batch toasts say "Ctrl+Z undoes it" /
   "Ctrl+Z brings them back" instead of "right-click › Undo". A tagged undo entry where nothing on the board moved is neither
   restored nor autosaved (it would have saved an unchanged cut and re-synced Selects).
+- 2026-10-20 (wave 18, lane POLISH12, punch 10; logged by the lead): **SNAP's late answers during an import's settle widen
+  (a measurement choice already logged).** A read may also answer late (1) across a re-ask of the CLI's facts when the facts
+  are unchanged (only what the CLI said counts, not its 30 s clock bucket or ask count), and (2) after a client write that
+  changed nothing the answer reads (a snapshot hit takes the write count it was checked at); POST /api/index/price is not a
+  write. Every late body says `"importing": true`, and the board re-asks the first pass's status every 600 ms after an
+  import until it knows the new clips. Read-your-write for writes that change what an answer reads, and fresh reads on a
+  real change in the CLI's facts, are unchanged and tested. Lenient only in what counts as "the same answer"; the judge
+  should check that no stale read survives a real change. The ruler drops a label the panel's edge would cut (stricter for
+  dimension 9).
