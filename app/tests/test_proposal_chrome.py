@@ -17,6 +17,8 @@ The server, seed and waiting-proposal helpers are test_proposal_review's.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 pytest.importorskip("playwright.sync_api", reason="playwright not installed")
@@ -200,6 +202,15 @@ def test_building_proxies_toast_once_per_pass(browser, live_server, project):
             pg.wait_for_function("P.proxies_ready === true", timeout=10000)
             pg.reload()
             assert _boot_toasts(pg) == 0
+            # (the board ends the pass with a POST late in its boot, app.js `proxyPassOver`, sent
+            # after its first poll of the jobs, not waited on. On a loaded box it could land after
+            # the flip below, where the server took it for one more ask of the same pass, and the
+            # next pass was never said: [0, 0], 1 run in 20 at load 12-16 (lane TESTS2, wave 17).
+            # So the server has ended the pass before the next one starts.)
+            end = time.monotonic() + 10
+            while server.PROXY_TOAST["key"] is not None and time.monotonic() < end:
+                time.sleep(0.05)
+            assert server.PROXY_TOAST["key"] is None, "the board never ended the pass"
             # ... and the next pass is said again, once
             server.STATE["proxies_ready"] = False
             pg.reload()

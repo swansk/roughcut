@@ -508,3 +508,9 @@ next judge runs, and the next judge rules it honest or lenient.
   order, workers, budget cap), Window › Events (the index journal), the pass's verdicts on Selects rows, junk in the
   Project panel's Status, and a hold-to-speak mic in the AI prompt (shown only while the prompt has focus, only where the
   recogniser is installed).
+
+- 2026-10-20 (wave 17, lane TESTS2; logged by the lead): **the Lumetri UI timing tests gain a frame bar.** `arm()` now starts
+  at the first value-changing input since the base probe (verdict 13's ruling), and the curve and wheel tests also require
+  the change to show by the second animation frame after that input, asserted at any load (the logged `within_limit`
+  skip above 2x cores still applies only to the millisecond bar). A mutant that shows the preview 3 frames late passed the
+  old 150 ms bar 3/3 and fails the new one 5/5. Stricter.

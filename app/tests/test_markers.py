@@ -250,16 +250,22 @@ def test_an_in_out_export_carries_its_named_markers_as_chapters(client, project,
                         {"t": 3.5, "name": "landing", "comment": "clean"}, {"t": 6.5, "name": "out"}]}
     Path(project["edl"]).write_text(json.dumps(body), encoding="utf-8")
     seen: dict = {}
+    ran = threading.Event()
 
     def fake_render(job, edl_path, out_path, meta):
         seen["edl"] = json.loads(Path(edl_path).read_text(encoding="utf-8"))
         server.RENDERS[job].finish("done")
+        ran.set()
 
     monkeypatch.setattr(server, "_render_job", fake_render)
     sent = [{**SEGS[0], "in": 2.0}, dict(SEGS[1]), {**SEGS[2], "out": 3.0}]   # In 1.0 / Out 5.0
     r = client.post("/api/render", json={"segments": sent, "preset": "quick", "name": "chapters",
                                           "folder": "markers-test"})
     assert r.status_code == 200, r.text
+    # /api/render answers once it has started the job's thread (server.py `threading.Thread(
+    # target=_render_job)`), not once the job ran: read what it wrote when it has (lane TESTS2,
+    # wave 17: `KeyError: 'edl'` 1 run in 20 at load 9-10; 3 of 3 with the thread 0.3 s late)
+    assert ran.wait(10), "the render job's thread never ran"
     assert seen["edl"]["markers"] == [{"t": 1.0, "name": "best trick", "colour": "red"},
                                       {"t": 2.5, "name": "landing", "comment": "clean"}]
     edl_path = tmp_path / "range.json"
