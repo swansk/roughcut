@@ -990,7 +990,8 @@ def test_the_monitor_fetches_the_shot_not_the_top_of_the_file(page):
             r.push([el.buffered.start(i), el.buffered.end(i)]);
         return {src: el.getAttribute('src'), ranges: r, t: el.currentTime};
     }""")
-    assert v["src"].endswith("#t=1.00"), v["src"]
+    # the in-point 1 ms on (wave 17 PLAY8: the frame the in names, the export's rule)
+    assert v["src"].endswith("#t=1.001"), v["src"]
     assert any(a <= 1.0 <= b for a, b in v["ranges"]), \
         f"the in-point is not what got buffered: {v['ranges']}"
 

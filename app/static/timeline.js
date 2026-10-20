@@ -57,7 +57,7 @@
  *   tl.filmStart(id)            Film time the shot starts at, or -1.
  *   tl.total()                  The film's length in seconds.
  *   tl.shotAt(filmTime)         `{id, index, clipT}` under a film time (null on an empty cut);
- *                               `clipT` is `in + (filmTime − start) × speed`.
+ *                               `clipT` is `in + (filmTime − start) × speed`, exact.
  *   tl.timeToX(t) / tl.xToTime(x)   Film time ↔ CANVAS x in px (scroll included — for a
  *                               pointer event, x = e.clientX − view.left + view.scrollLeft;
  *                               `tl.eventTime(e)` does exactly that).
@@ -744,8 +744,11 @@
     for (let i = 0; i < list.length; i++) {
       const s = list[i], d = dur(s);
       if (t < start + d || i === list.length - 1) {
+        // exact, never rounded (wave 17 PLAY8): rounded to 0.01 s, the time a frame names
+        // landed under that frame's start as often as not, and the monitor parked on the
+        // frame before the export's (FRAMEACC: 27 of 48 right at 29.97)
         return { id: s.id, index: i,
-                 clipT: round2(clamp(s.in + (t - start) * speedOf(s), s.in, s.out)) };
+                 clipT: clamp(s.in + (t - start) * speedOf(s), s.in, s.out) };
       }
       start += d;
     }

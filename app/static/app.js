@@ -406,11 +406,17 @@ function boundaryWarning(seg) {
 const posterAt = new WeakMap();
 let posterTimer = 0;
 
+/* (wave 17 PLAY8) A still's time in its URL: to the edit grid's 4 places, the server's (it cuts
+ * the frame at or before it + 1 ms, the export's), its trailing zeros past the second place
+ * dropped, so a time on the 0.01 s grid is the URL every other still of it asks for (1.00, not
+ * 1.0000): one request for one frame. */
+const posterT = (t) => Math.max(0, Number(t) || 0).toFixed(4).replace(/(\.\d\d\d*?)0+$/, '$1');
+
 function posterSrc(seg) {
   if (!posterAt.has(seg)) posterAt.set(seg, seg.in);
   const base = (P.clips[seg.clip] || {}).poster;
   if (!base) return '';
-  return `${base}${base.includes('?') ? '&' : '?'}t=${Math.max(0, posterAt.get(seg)).toFixed(2)}`;
+  return `${base}${base.includes('?') ? '&' : '?'}t=${posterT(posterAt.get(seg))}`;
 }
 
 /* Catch the still up to the in-point, once the trimming stops — the timeline's rule and
@@ -1233,8 +1239,62 @@ function filmStart(i) {
  * so the outgoing buffer, steered to it, sped up and dropped frames (wave 14 PLAY4). */
 function filmAt(i, clipT, early = 0) {
   const seg = segs[i];
-  return filmStart(i) + Math.max(-early, clipT - seg.in) / speedOf(seg);
+  return filmStart(i) + Math.max(-early, clipT - shotBase(seg)) / speedOf(seg);
 }
+/* The same for a clip time that is the in-point's own (the timeline's clip time under a
+ * playhead, a clock run from it): no shotBase. */
+function filmAtIn(i, clipT) {
+  const seg = segs[i];
+  return filmStart(i) + Math.max(0, clipT - seg.in) / speedOf(seg);
+}
+
+/* (wave 17 PLAY8, verdict 13 punch 9) Where a playing buffer's clock is when its shot's film
+ * starts (shotBase), and when it ends (shotEnd: that and the shot's clip length). The export
+ * shows on each of the shot's sequence frames the source frame at or before its time (+1 ms,
+ * assemble.py SEEK_TOL_S); a buffer playing from the in itself changes frame wherever the
+ * source's frames fall inside the sequence's, up to a sequence frame before the export does:
+ * an in 24 ms into its frame put the next frame up 24 ms into the shot's first sequence frame
+ * (the in's own frame up 9 ms of its 33), and an out 24 ms into its frame put the frame after
+ * the shot up for the last 24 ms of it. So the clock runs that much behind the in: back to the
+ * start of the source frame the in names, for a source at the sequence's rate; for one at a
+ * multiple of it (a 29.97 clip in a 59.94 sequence, 0.5x), back to the sequence frame its
+ * first frame change is the export's on. Every frame then goes up and comes down on the
+ * sequence frames the export has it on, and the frame parked on is the in's all the same. Not
+ * a shot a transition touches: its followers play on the in's own clock (txFollow). */
+const NTSC = [[23.976, 24000 / 1001], [29.97, 30000 / 1001], [47.952, 48000 / 1001],
+  [59.94, 60000 / 1001], [119.88, 120000 / 1001]];
+function clipRate(clip) {
+  const f = Number((P.clips[clip] || {}).fps) || 0;
+  const n = NTSC.find(([k]) => Math.abs(f - k) < 0.01);
+  return n ? n[1] : f;
+}
+function txTouches(seg) {
+  const i = segs.indexOf(seg);
+  if (i < 0 || !window.tl || typeof tl.transitionHalves !== 'function') return false;
+  const now = performance.now();
+  if (now - txHalvesMemo.at > 4) txHalvesMemo = { at: now, v: tl.transitionHalves() };
+  const on = (c) => !!c && (c.video > 0 || c.audio > 0);
+  return on(txHalvesMemo.v[i - 1]) || on(txHalvesMemo.v[i]);
+}
+const baseMemo = new WeakMap();
+function shotBase(seg) {
+  if (!seg) return 0;
+  const seq = window.tl && typeof tl.gridRate === 'function' ? tl.gridRate() : 0;
+  const fps = clipRate(seg.clip), sp = speedOf(seg), tx = txTouches(seg);
+  const key = `${seg.in}|${sp}|${seq}|${fps}|${tx}`;
+  const m = baseMemo.get(seg);
+  if (m && m.key === key) return m.base;
+  let base = seg.in;
+  if (fps > 0 && seq > 0 && !tx) {
+    const k = Math.floor((seg.in + PARK_TOL_S) * fps + 1e-9);   // the source frame the in names
+    const f = ((k + 1) / fps - seg.in) * seq / sp;               // its end, in sequence frames of film
+    const j = Math.ceil(f - (PARK_TOL_S * seq) / sp - 1e-9);     // the export's frame it ends on
+    base = seg.in - Math.min(1 / fps, Math.max(0, ((j - f) / seq) * sp));
+  }
+  baseMemo.set(seg, { key, base });
+  return base;
+}
+function shotEnd(seg) { return shotBase(seg) + (seg.out - seg.in); }
 
 function liveVideo() { return player.vids[player.cur]; }
 
@@ -1331,9 +1391,22 @@ function whenParked(v, fn) {
  * which resets `playbackRate` to the default, and kept on `dataset.speed` so the JKL
  * shuttle (timeline-keys.js, which rides on `defaultPlaybackRate`) can multiply it
  * rather than overwrite it. A generated clip (`gen_…`) is armed like any other: the
- * server lists it with a proxy. */
+ * server lists it with a proxy.
+ *
+ * (wave 17 PLAY8) It parks PARK_TOL_S past `at` (parkAt): the frame a <video> shows parked
+ * is the last one starting at or before its time, and the export's is the last one at or
+ * before the time + assemble.py's SEEK_TOL_S (1 ms) — an in kept to the edit grid's 4
+ * places sits up to 0.05 ms under the start of the frame it names, and parked on it
+ * exactly the monitor showed the frame before (FRAMEACC: 27 of 48 right at 29.97, 48 of 48
+ * at the time + 1 ms). The fragment says the same time to 3 places (within half a
+ * millisecond of it, past the frame's start), and a buffer is left alone only that close
+ * to it (parkedOn). */
+const PARK_TOL_S = 0.001;
+const parkAt = (t) => Math.max(0, t) + PARK_TOL_S;
+const parkedOn = (v, want) => v.currentTime >= want - 0.0005 && v.currentTime - want <= 0.002;
 function arm(v, seg, at = seg.in) {
   const src = proxyOf(seg);
+  const want = parkAt(at);
   v._for = null;                    // armNext says which upcoming shot it holds
   v._used = performance.now();
   v._at = at;                       // where it is parked (a waited-on clip's head is made there)
@@ -1344,7 +1417,7 @@ function arm(v, seg, at = seg.in) {
     v.dataset.src = src;
     v._head = null;
     if (v._waitStop && !headMiss) { v._waitStop(); v._waitStop = null; }
-    v.src = src ? `${src}#t=${Math.max(0, at).toFixed(2)}` : src;
+    v.src = src ? `${src}#t=${want.toFixed(3)}` : src;
     v._shown = false;               // a new file: no frame on screen until loadeddata
     v._status = null;
     v.load();
@@ -1364,8 +1437,8 @@ function arm(v, seg, at = seg.in) {
   // A buffer already there is left alone: the same time set again is still a seek (a
   // decode from the keyframe before it) — verdict 4 punch 5.
   const park = () => {
-    if (v.dataset.src === src && Math.abs(v.currentTime - at) > 0.002) {
-      v.currentTime = at;
+    if (v.dataset.src === src && !parkedOn(v, want)) {
+      v.currentTime = want;
       seekTimed(v);
     }
   };
@@ -1420,11 +1493,12 @@ async function freshen(v) {
   const t = v.currentTime;
   v._kind = k;
   v._head = null;
-  v.src = `${src}#t=${Math.max(0, t).toFixed(2)}`;
+  v.src = `${src}#t=${Math.max(0, t).toFixed(3)}`;
   v._shown = false;
   v.load();
   const park = () => {
-    if (v.dataset.src === src && Math.abs(v.currentTime - t) > 0.002) { v.currentTime = t; seekTimed(v); }
+    // the same frame as before the reload (arm's parkedOn: never one under it)
+    if (v.dataset.src === src && !parkedOn(v, t)) { v.currentTime = t; seekTimed(v); }
   };
   v.addEventListener('loadedmetadata', park, { once: true });
 }
@@ -1854,7 +1928,7 @@ function offTick() {
   const seg = segs[player.idx];
   if (!seg || seg !== o.seg) { player.off = null; return false; }   // edited out from under it
   const clipT = Math.min(seg.out, offClip(o));
-  const filmT = filmAt(player.idx, clipT);
+  const filmT = filmAtIn(player.idx, clipT);
   paintPos(filmT, clipT, seg);
   bedTick(filmT, clipT, seg);
   const v = liveVideo();
@@ -1921,14 +1995,14 @@ function playFrom(i, { single = false } = {}) {
   i = Math.max(0, Math.min(segs.length - 1, i));
   const seg = segs[i];
   const resume = player.idx === i && !player.playing && !!liveVideo().dataset.src
-    && liveVideo().currentTime > seg.in && liveVideo().currentTime < seg.out - 0.1;
+    && liveVideo().currentTime > shotBase(seg) && liveVideo().currentTime < shotEnd(seg) - 0.1;
   if (!resume) pickBuffer(seg);
   const v = liveVideo();
   const g = ++player.gen;
   player.idx = i;
   player.single = single;
   sel = i;
-  if (!resume) arm(v, seg);         // the seek first: the inspector's work runs while it decodes
+  if (!resume) arm(v, seg, shotBase(seg));   // the seek first: the inspector's work runs while it decodes
   paint();
   // On screen once it has the frame; the buffer it replaces is re-armed only after that
   showWhenReady(g, (b) => b.readyState >= 2 && !b.seeking, () => {
@@ -1939,7 +2013,7 @@ function playFrom(i, { single = false } = {}) {
   // Verdict 8: Play plays past it on the film clock, as Premiere plays past offline media.
   if (v.error) {
     mediaWaitFor(v);
-    const filmT0 = filmAt(i, playheadClip(i));
+    const filmT0 = filmAtIn(i, playheadClip(i));
     cueBed(filmT0);
     tl.setPlayhead(filmT0);
     offStart(i, playheadClip(i));
@@ -1947,12 +2021,13 @@ function playFrom(i, { single = false } = {}) {
     return;
   }
   player.off = null;
+  v._plays = seg;                   // (wave 17 PLAY8) the shot it plays (rcPastShot)
   frameWatch(v, seg);
   hush(v, false, a1Moved(seg));     // a moved sound plays from #pvA1 (programSync)
   const go = () => {
     if (g !== player.gen || !player.playing) return;   // pause, or a later command, won
     // parked on the in-point already (arm): the same time again would be a second seek
-    if (!resume && Math.abs(v.currentTime - seg.in) > 0.002) v.currentTime = seg.in;
+    if (!resume && !parkedOn(v, parkAt(shotBase(seg)))) v.currentTime = parkAt(shotBase(seg));
     setShotRate(v, seg);
     v.play().catch((err) => { if (g === player.gen) playRefused(err); });
   };
@@ -1990,14 +2065,16 @@ function cueAt(i, clipT) {
   const v = liveVideo();
   player.idx = i;
   sel = i;
-  arm(v, seg, at);
+  // (wave 17 PLAY8) on the shot's clock (shotBase): the export's frame for the sequence frame
+  // under the playhead, and a play from here changes frame where the export does
+  arm(v, seg, at - (seg.in - shotBase(seg)));
   freshen(v);
   paint();
   showWhenReady(g, (b) => b.readyState >= 2 && !b.seeking, () => {
     if (g === player.gen) armUpcoming(i, g);
   });
   if (v.error) { mediaWaitFor(v); monWait(true); } else frameWatch(v, seg);
-  paintPos(filmAt(i, at), at, seg);
+  paintPos(filmAtIn(i, at), at, seg);
   paintTransport();
   tl.render();
 }
@@ -2782,14 +2859,14 @@ function toggleCut() {
 /* True when the shot under the playhead ended and the monitor moved on or stopped. The
  * shot ends at its `out` in CLIP time whatever its speed; the film position it reports
  * is the clip offset at the rate. */
-function boundary() {
+function boundary(ts = performance.now()) {
   if (player.off) return offTick();   // a shot whose preview is being made: the film clock
   const v = liveVideo();
   const seg = segs[player.idx];
   if (!seg) { pauseCut(); return true; }
   const clipT = v.currentTime;
   // (a shot a dissolve comes into is live from just before the edit: its own clock)
-  const filmT = filmAt(player.idx, clipT, clipT < seg.in && txLeadIn(seg) > 0 ? 0.1 * speedOf(seg) : 0);
+  const filmT = filmAt(player.idx, clipT, clipT < shotBase(seg) && txLeadIn(seg) > 0 ? 0.1 * speedOf(seg) : 0);
   paintPos(filmT, clipT, seg);
   bedTick(filmT, clipT, seg);
   if (v._head && clipT < seg.out - 0.05 && (v.ended || clipT >= v._head.b - 0.08)) {
@@ -2797,9 +2874,47 @@ function boundary() {
     return false;
   }
   if (v._head) headNext(v, seg, clipT);
-  if (clipT >= seg.out - 0.04 || v.ended) { advance(); return true; }
-  preroll((seg.out - clipT) / speedOf(seg));
+  if (cutNow(v, seg, clipT, ts)) { advance(); return true; }
+  preroll((shotEnd(seg) - clipT) / speedOf(seg));
   return false;
+}
+
+/* (wave 17 PLAY8, verdict 13 punch 9) Whether the cut is made in this animation frame (`ts`, its
+ * time): when the media time the outgoing buffer would put on screen at the next display frame
+ * (shownAt: its presented frames, never its currentTime, which runs 0-30 ms off the picture and
+ * steps by ~11 ms) is its shot's end (shotEnd) or past it: the frame after the shot's last
+ * never goes up, and its last is up to the edit. The incoming buffer rolls on the film's clock
+ * (rollStart), so its picture there is the in's frame. Without its frames' timing (no frame
+ * callbacks yet, a dissolve's cut, the last shot, a single shot) the clock's rule as before,
+ * CUT_EARLY_S (cutEarly) ahead of the end. */
+function cutNow(v, seg, clipT, ts) {
+  if (v.ended) return true;
+  const early = cutEarly(v, seg), end = shotEnd(seg);
+  const nseg = segs[player.idx + 1];
+  if (!nseg || player.single || txLeadIn(nseg) > 0) return clipT >= end - early;
+  if (clipT >= end + early) return true;                 // far past it on its clock: now
+  const slot = player.slot || 1000 / 60;
+  const shown = shownAt(v, ts + slot);
+  if (shown == null) return clipT >= end - early;
+  if (shown < end - 0.0005 * v.playbackRate) return false;
+  // for the cut's record (cutLog `ahead_ms`): where the incoming buffer's picture is against the
+  // film's clock at that display frame, in film ms (+ ahead; both read off presented frames, so
+  // to a display frame)
+  const nb = player.vids.find((b) => b !== v && b._roll && b._roll.seg === nseg);
+  const pi = nb ? shownAt(nb, ts + slot) : null;
+  player.cutAt = pi == null ? null : { ahead_ms: Math.round(((pi - shotBase(nseg)) / speedOf(nseg)
+    - (shown - end) / speedOf(seg)) * 1000) };
+  return true;
+}
+
+/* The clock's rule (cutNow without frame timing): the cut CUT_EARLY_S of real time before the
+ * outgoing buffer's clock reaches its end (a buffer made live in an animation frame is on screen
+ * from the next display frame, and shows there the frame its clock holds 0-30 ms on). In clip
+ * seconds at the buffer's rate (wave 17 PLAY8: the shot's speed times the J/L shuttle; it was
+ * 0.04 clip seconds whatever the speed, 0.08 s of film at 0.5x). */
+const CUT_EARLY_S = 0.04;
+function cutEarly(v, seg) {
+  return CUT_EARLY_S * Math.max(0.1, (v && v.defaultPlaybackRate) || 1) * speedOf(seg);
 }
 
 /* The cut, prepared (verdict 4 punch 5). The buffer holding the next shot is parked
@@ -2809,8 +2924,13 @@ function boundary() {
  * is shown. Without this, every cut paid for a pipeline start (~50 ms) and before that a
  * re-seek, a decode from the keyframe (the 317 ms hole verdict 4 measured on Killington). */
 const PREROLL_S = 0.3;
-// seconds from play() to the first frame, and from a park's seek to `seeked`; learned
-const roll = { lat: 0.06, seek: 0.12 };
+// seconds from play() to the first frame, and from a park's seek to `seeked`; learned. And
+// (wave 17 PLAY8) from play() to the buffer's clock leaving its park (rollClock), per playback
+// rate (rollRate): 0-5 ms at 1x on Killington's proxies and the suite's (where the first new
+// frame comes 25-55 ms after play()); 40-47 ms at 0.5x (the sound's time-stretch fills first)
+const roll = { lat: 0.06, seek: 0.12, clock: { 1: 0.005 } };
+const rollRate = (rate) => String(Math.round(Math.max(0.1, rate) * 8) / 8);
+const rollClockOf = (rate) => { const c = roll.clock[rollRate(rate)]; return c != null ? c : roll.clock[1] + 0.045; };
 // A shot shorter than this (film seconds) is short: the shot after it is parked the moment
 // it is on screen, not three frames later, and as far ahead of its in-point as the short
 // shot leaves room for (verdict 5: a 12-frame shot, then a black "buffering…" hold).
@@ -2823,7 +2943,7 @@ function prerollAt(seg, room = Infinity) {
   const tx = txLeadIn(seg);
   if (tx > 0) return Math.max(0, seg.in - tx * speedOf(seg));
   const lead = Math.max(0.04, Math.min(PREROLL_S, room - roll.seek - roll.lat - 0.05));
-  return Math.max(0, seg.in - lead * speedOf(seg));
+  return Math.max(0, shotBase(seg) - lead * speedOf(seg));
 }
 
 /* A shot a Cross Dissolve (or a crossfade) comes into (wave 11 CANVAS; verdict 8 punch 3):
@@ -2848,7 +2968,8 @@ function txHalf(c) {
 
 function armNext(v, seg, room, ahead = null) {
   // `ahead` (film s): a lead of its own (the third buffer's, thirdAhead), else prerollAt's
-  const at = ahead != null ? Math.max(0, seg.in - ahead * speedOf(seg)) : prerollAt(seg, room);
+  const base = shotBase(seg);
+  const at = ahead != null ? Math.max(0, base - ahead * speedOf(seg)) : prerollAt(seg, room);
   v._posterUp = false;              // off screen: whatever poster stood in for it is gone
   // the grade fetches the next shot's LUT and makes its texture now, not at the cut
   const gr = gradeApi();
@@ -2864,23 +2985,23 @@ function armNext(v, seg, room, ahead = null) {
   // would only cost a decode from the keyframe.
   // A park further ahead than `room` wants (up to PREROLL_S) is kept too: preroll() runs
   // a late start faster until the cut, which costs less than a second seek.
-  const lead = (seg.in - v.currentTime) / speedOf(seg);
+  const lead = (base - v.currentTime) / speedOf(seg);
   // (a dissolve's park is exact: the buffer starts as the incoming picture from it)
   const tx = txLeadIn(seg);
   // (the third buffer's own lead, thirdAhead, kept when it is re-armed for its shot at the cut)
   const own = v._for === seg && v._lead != null && Math.abs(lead - v._lead) < 0.04;
-  const near = tx > 0 ? Math.abs(lead - (seg.in - at) / speedOf(seg)) < 0.04
-    : own || lead <= Math.max(seg.in - at, PREROLL_S * speedOf(seg)) / speedOf(seg) + 1e-3;
+  const near = tx > 0 ? Math.abs(lead - (base - at) / speedOf(seg)) < 0.04
+    : own || lead <= Math.max(base - at, PREROLL_S * speedOf(seg)) / speedOf(seg) + 1e-3;
   if (v.dataset.src === proxyOf(seg) && !v.error && v.paused
       && !v._roll && !v.seeking && v.readyState >= 2 && lead >= 0 && near) {
     setShotRate(v, seg);
-    if (!own) v._lead = (seg.in - at) / speedOf(seg);
+    if (!own) v._lead = (base - at) / speedOf(seg);
     v._for = seg;
     freshen(v);
     return;
   }
   arm(v, seg, at);
-  v._lead = (seg.in - at) / speedOf(seg);   // the lead it is parked for (rollStart)
+  v._lead = (base - at) / speedOf(seg);     // the lead it is parked for (rollStart)
   v._for = seg;
   freshen(v);
 }
@@ -2937,7 +3058,7 @@ function preroll(left) {
   if (!nseg) return;
   const lv = liveVideo();
   const nb = player.vids.find((b) => b !== lv && b._for === nseg);
-  if (nb) rollStart(nb, nseg, left);
+  if (nb) { rollClock(nb); rollStart(nb, nseg, left); }
   // (wave 16 PERF7, verdict 12 punch 3) The shot after a short one is parked in the third
   // buffer (armUpcoming) and its start waited for the short shot to be on screen. From there
   // a 0.4 s shot left less than its lead and a start take, so it always ran late, at 1.1-1.3x,
@@ -2951,26 +3072,56 @@ function preroll(left) {
   if (!n2 || !nb || !nb._roll || nb.paused || nb.seeking || tl.dur(nseg) >= SHORT_S) return;
   if (txLeadIn(nseg) > 0 || txLeadIn(n2) > 0) return;
   const nb2 = player.vids.find((b) => b !== lv && b !== nb && b._for === n2);
-  if (nb2) rollStart(nb2, n2, (nseg.out - nb.currentTime) / speedOf(nseg));
+  if (nb2) { rollClock(nb2); rollStart(nb2, n2, (shotEnd(nseg) - nb.currentTime) / speedOf(nseg)); }
+}
+
+/* (wave 17 PLAY8) When a rolled buffer's clock left its park, learned from the first tick that
+ * finds it moved (its clock at that tick, back at its rate): roll.clock. */
+function rollClock(b) {
+  const r = b._roll;
+  if (!r || r.clock !== false || b.paused || !(r.t0 > 0)) return;
+  const moved = b.currentTime - r.p0;
+  if (!(moved > 0.004 * b.playbackRate)) return;
+  r.clock = true;
+  const lat = (performance.now() - (moved / b.playbackRate) * 1000 - r.t0) / 1000;
+  const k = r.rate || rollRate(b.playbackRate), was = roll.clock[k];
+  roll.clock[k] = Math.max(0, Math.min(0.15, was != null ? was * 0.7 + lat * 0.3 : lat));
 }
 
 /* Start buffer nb playing toward its shot's in-point (muted, unseen) when the shot before it
- * has `left` film seconds to its out-point: its lead from the park and a start's latency. */
+ * has `left` film seconds to its out-point: its lead from the park and a start's latency.
+ *
+ * (wave 17 PLAY8, verdict 13 punch 9) On the film's clock: its clock reaches the in when the
+ * outgoing one reaches the out, so the cut (CUT_EARLY_S before that, cutEarly) shows the in's
+ * own frame first. It started roll.lat (play() to the first NEW frame, 25-55 ms: mostly the
+ * wait for that frame, not a start) ahead of the cut's 0.04 s before the out: on Killington the
+ * incoming clock was 0.06-0.09 s past its in at the cut and every cut opened 1-3 frames into
+ * the shot (PERF7: a 12-frame shot showed 9-10). Its start's own latency is roll.clock, and it
+ * starts on the animation frame nearest its time (ROLL_HALF_S). A dissolve's incoming buffer is
+ * the mix's picture before the edit and keeps its own rule. */
 const LATE_OK_S = 0.035;            // (wave 16 PERF7) late by up to a frame: no faster rate
+const ROLL_HALF_S = 0.008;          // half a display frame: the start's nearest animation frame
+// (wave 17 PLAY8) the film seconds the incoming buffer is rolled ahead of the film's clock, a
+// quarter of its frame at most: at the cut its picture is the in's frame even when its start
+// or the outgoing's last frame came a few ms off, never the frame before it
+const rollAhead = (seg) => Math.min(0.006, frameDurOf(seg) / speedOf(seg) / 4);
 function rollStart(nb, nseg, left) {
   if (nb._roll || !nb.paused || nb.seeking || nb.readyState < 2) return;
   if (nb.classList.contains('live')) return;                  // still on screen (held)
   if (nb.dataset.src !== proxyOf(nseg)) return;
-  const lead = (nseg.in - nb.currentTime) / speedOf(nseg);    // film seconds to its in-point
+  const lead = (shotBase(nseg) - nb.currentTime) / speedOf(nseg);   // film seconds to its in-point
   const tx = txLeadIn(nseg);                                    // a dissolve's park: further ahead
   // (and the third buffer's: thirdAhead, kept on the buffer by armNext)
   const own = nb._for === nseg && nb._lead != null ? nb._lead : 0;
   if (lead < -0.01 || lead > Math.max(PREROLL_S, tx, own) + 0.05) return;   // not parked for this cut
-  // boundary() cuts 0.04 s before the out; the start's latency is real time, the
-  // rest film time, so it scales with the J/L shuttle's rate
+  // the start's latency is real time, the rest film time, so it scales with the J/L shuttle's
+  // rate; a dissolve's incoming buffer starts as before (boundary()'s 0.04 s, roll.lat)
   const shuttle = (liveVideo() && liveVideo().defaultPlaybackRate) || 1;
-  if (left - 0.04 > lead + roll.lat * shuttle) return;
-  const r0 = nb._roll = { gen: player.gen, seg: nseg };
+  const rate = (nb.defaultPlaybackRate || 1) * speedOf(nseg);   // its start's latency is per rate
+  const start = tx > 0 ? 0.04 + roll.lat * shuttle : rollClockOf(rate) * shuttle + rollAhead(nseg);
+  if (left - start - lead > (tx > 0 ? 0 : ROLL_HALF_S * shuttle)) return;
+  const r0 = nb._roll = { gen: player.gen, seg: nseg, t0: performance.now(), p0: nb.currentTime, clock: false,
+                          rate: rollRate(rate) };
   hush(nb, true, a1Moved(nseg));    // silent until its cut, by its gain (a paused buffer: no jump)
   setShotRate(nb, nseg);
   // Late — the park after a short shot landed with less time left than its lead needs —
@@ -2980,9 +3131,9 @@ function rollStart(nb, nseg, left) {
   // NEW frame, a frame period more than the clock's own start, so a start a tick late still
   // lands on its in-point (measured: the speed test's prerolls came in 1-2 frames past it),
   // and each faster rate is a second rate change at the cut, on the picture's first frames.
-  const avail = left - 0.04 - roll.lat * shuttle;
+  const avail = left - start;
   if (lead > 0.02 && avail < lead - LATE_OK_S) nb.playbackRate *= Math.min(4, lead / Math.max(0.05, avail));
-  const t0 = performance.now();
+  const t0 = r0.t0;
   if (typeof nb.requestVideoFrameCallback === 'function') {
     nb.requestVideoFrameCallback(() => {
       roll.lat = Math.min(0.25, roll.lat * 0.7 + ((performance.now() - t0) / 1000) * 0.3);
@@ -2991,9 +3142,78 @@ function rollStart(nb, nseg, left) {
   nb.play().catch(() => { if (nb._roll === r0) nb._roll = null; });
 }
 
-function tick() {
+function tick(ts) {
   if (!player.playing) return;
-  if (!boundary()) player.raf = requestAnimationFrame(tick);
+  // (wave 17 PLAY8) the display frame's length, from the animation frames that came in turn
+  const dt = ts - (player.lastTs || 0);
+  if (dt > 4 && dt < 25) player.slot = (player.slot || dt) * 0.9 + dt * 0.1;
+  player.lastTs = ts;
+  if (!boundary(ts)) player.raf = requestAnimationFrame(tick);
+}
+
+/* (wave 17 PLAY8) Each Program buffer's latest presented frame: its media time, when it is on
+ * screen (the frame callback's expectedDisplayTime) and the media it came from; and its frame
+ * period, a step seen twice running between two frames presented in turn while playing. */
+function trackFrames(v) {
+  if (typeof v.requestVideoFrameCallback !== 'function') return;
+  const cb = (now, md) => {
+    const p = v._pf, src = v.dataset.src;
+    if (p && p.src === src && !v.paused && md.presentedFrames === p.n + 1) {
+      const d = md.mediaTime - p.mt;
+      if (d > 0.004 && d < 0.25 && Math.abs(d - (v._pfStep || 0)) < 2e-4) { v._pfDur = d; v._pfDurSrc = src; }
+      v._pfStep = d;
+    }
+    // `moved`: a frame on from the one before it, while playing (not a parked frame shown again
+    // as a play starts, which says nothing yet of where its clock is)
+    v._pf = { mt: md.mediaTime, ed: md.expectedDisplayTime || now, n: md.presentedFrames, src,
+              moved: !!p && p.src === src && !v.paused && md.mediaTime > p.mt + 1e-4 };
+    v.requestVideoFrameCallback(cb);
+  };
+  v.requestVideoFrameCallback(cb);
+}
+
+/* The media time a playing buffer has on screen at display time t (ms, the page clock): its
+ * last presented frame's, run on at its rate from when that frame went up; null without a
+ * fresh frame of its current media to go on. frameShownAt: the start of the frame up then. */
+function shownAt(v, t) {
+  const p = v._pf, dur = frameDur(v);
+  if (!p || !p.moved || v.paused || !dur || p.src !== v.dataset.src) return null;
+  const rate = Math.max(0.05, v.playbackRate);
+  const since = t - p.ed;
+  if (since < -1 || since > (3 * dur / rate) * 1000) return null;
+  return p.mt + Math.max(0, since / 1000) * rate;
+}
+/* The time of the animation frame being run (its callbacks' timestamp), else now. */
+function frameNow() {
+  const t = document.timeline && document.timeline.currentTime;
+  return Number.isFinite(t) ? t : performance.now();
+}
+/* (wave 17 PLAY8) For the grade's canvas (grade.js draw): true while buffer v, playing its shot
+ * into a plain cut, has a frame after the shot's last up (the cut's hold: the outgoing buffer
+ * stays up, paused, until the incoming shot's first frame is, and a pause does not stop the
+ * frame the compositor already took). The canvas does not draw it: the shot's last stays up. */
+window.rcPastShot = (v) => {
+  const seg = v && v._plays, p = v && v._pf;
+  if (!seg || !p || !player.playing || p.src !== v.dataset.src || p.src !== proxyOf(seg)) return false;
+  const i = segs.indexOf(seg);
+  if (i < 0 || !segs[i + 1] || txLeadIn(segs[i + 1]) > 0) return false;
+  return p.mt >= shotEnd(seg) - 0.0005;
+};
+function frameShownAt(v, t) {
+  const at = shownAt(v, t);
+  if (at == null) return null;
+  const dur = frameDur(v);
+  return v._pf.mt + Math.floor((at - v._pf.mt) / dur + 1e-6) * dur;
+}
+/* A buffer's frame period: seen (trackFrames), else its clip's proxy's (server.py proxy_rate:
+ * the source's rate over the smallest whole number that brings it to 30.5 or under). */
+function frameDur(v) {
+  if (v._pfDur && v._pfDurSrc === v.dataset.src) return v._pfDur;
+  return frameDurOf(segs.find((s) => proxyOf(s) === v.dataset.src));
+}
+function frameDurOf(seg) {
+  const f = seg ? clipRate(seg.clip) : 0;
+  return f > 0 ? Math.max(1, Math.ceil(f / 30.5)) / f : 1 / 30;
 }
 
 /* The shot ended: stop, or hand over to the buffer that is holding the next one. */
@@ -3042,10 +3262,19 @@ function advance() {
   // in the frame whose callbacks give the grade the new shot's first frame. The block that plays
   // is highlighted AT the cut (below); the selection's outline comes 1-2 frames after it.
   afterFirstFrames(nv, () => { if (g === player.gen || !player.playing) tl.syncSel(); }, 2);
+  // (wave 17 PLAY8, verdict 13 punch 9) The playhead is on the new shot in the frame of the cut,
+  // with the buffer that plays it: boundary() drew it from the outgoing clock, CUT_EARLY_S short
+  // of the edit, and the next tick moved it on, so the cut's own frame had the new buffer under
+  // the old shot's playhead (edit.py: 1-2 frames a cut). Not into a dissolve's second half,
+  // whose film clock is the incoming buffer's own from before the edit (boundary's `early`).
+  // Drawn whatever paintPos last drew: an edit's 4-place time can fall a hair under its
+  // sequence frame, the same frame index as the outgoing clock's last draw.
+  if (txLeadIn(segs[next]) <= 0) { posFrame = -1; paintPos(filmStart(next), segs[next].in, segs[next]); }
   // Prerolled for this cut (see preroll): it is playing, near its in-point; keep it so.
   const rolled = !!nv._roll && nv._roll.gen === g - 1 && nv._roll.seg === segs[next] && !nv.paused;
   const parked = nv._for === nseg;
   nv._for = null;                   // on screen: it holds no upcoming shot
+  nv._plays = nseg;                 // (wave 17 PLAY8) the shot it plays (rcPastShot)
   // (wave 16 PERF7) a buffer already rolling for the shot after this one (started on this short
   // shot's clock: preroll) is that cut's preroll now
   for (const b of player.vids) {
@@ -3054,9 +3283,9 @@ function advance() {
   if (rolled) {
     nv._roll = null;
     // a start that went badly wrong is put right; a frame or two either side is not
-    if (Math.abs(nv.currentTime - segs[next].in) > 0.15) nv.currentTime = segs[next].in;
+    if (Math.abs(nv.currentTime - shotBase(nseg)) > 0.15) nv.currentTime = parkAt(shotBase(nseg));
   } else {
-    arm(nv, segs[next]);        // normally armed already; re-arming survives edits made mid-play
+    arm(nv, nseg, shotBase(nseg));   // normally armed already; re-arming survives edits made mid-play
   }
   hush(nv, false, a1Moved(segs[next]));
   // The new shot goes on screen with its first frame: a buffer still seeking, still
@@ -3066,13 +3295,23 @@ function advance() {
   // A dissolve's incoming buffer plays on the film clock (programMix's hand), so at the cut
   // (boundary()'s 0.04 s before the edit) it is that far short of its in-point, showing the
   // dissolve's own frame of the shot: on screen at once, not a frame or two later.
-  const early = rolled && txLeadIn(nseg) > 0 ? 0.05 * speedOf(nseg) : 0;
+  // (wave 17 PLAY8) So is a rolled buffer at a cut now (rollStart: on the film's clock): it is
+  // cutEarly short of its in at the cut, and shows the in's frame from the next display frame.
+  const early = !rolled ? 0 : txLeadIn(nseg) > 0 ? 0.05 * speedOf(nseg)
+    : cutEarly(nv, nseg) + ROLL_HALF_S * speedOf(nseg);
   const short = tl.dur(nseg) < SHORT_S;
   // the last few cuts, for the judge and the perf test: prerolled or not, how long held
   const rec = { shot: next, rolled, parked, buf: nv.id, held_ms: 0, t: performance.now(),
-                kept: keep ? v.id : null };
+                kept: keep ? v.id : null, ...(player.cutAt || {}) };
+  player.cutAt = null;
   player.cutLog = [...(player.cutLog || []).slice(-7), rec];
-  showWhenReady(g, (b) => b.readyState >= 2 && !b.seeking && b.currentTime >= nseg.in - eps - early, () => {
+  // (wave 17 PLAY8) A rolled buffer at a plain cut goes up when the frame it shows at the next
+  // display frame is the in's or later (frameShownAt), never one from before the in.
+  const inFrame = (b) => {
+    const at = rolled && txLeadIn(nseg) <= 0 ? frameShownAt(b, frameNow() + (player.slot || 1000 / 60)) : null;
+    return at == null ? b.currentTime >= shotBase(nseg) - eps - early : at + frameDur(b) > nseg.in + PARK_TOL_S;
+  };
+  showWhenReady(g, (b) => b.readyState >= 2 && !b.seeking && inFrame(b), () => {
     rec.held_ms = Math.round(performance.now() - rec.t);
     // Off screen now, the buffers take the shots after this one (armUpcoming): after a
     // short shot at once (normally the shot after it was parked during the shot before,
@@ -3092,7 +3331,7 @@ function advance() {
     // keyframe before it, up to a second of frames — and it was most of the hole at the
     // cut (verdict 4 punch 5: 317 ms on Killington, 450 ms on a 59.94 fixture at load 20).
     // (currentTime is already the target while a seek to it is pending: no second one)
-    if (Math.abs(nv.currentTime - segs[next].in) > 0.002) nv.currentTime = segs[next].in;
+    if (!parkedOn(nv, parkAt(shotBase(nseg)))) nv.currentTime = parkAt(shotBase(nseg));
     setShotRate(nv, segs[next]);
     nv.play().catch((err) => { if (g === player.gen) playRefused(err); });
   };
@@ -3244,7 +3483,10 @@ function paintRestStill() {
   const base = seg && (P.clips[seg.clip] || {}).poster;
   if (live || !base) { img.hidden = true; return; }
   const sep = base.includes('?') ? '&' : '?';
-  const t = Math.max(0, at.clipT).toFixed(2);
+  // the playhead's exact clip time to 4 places (posterT): the server cuts the frame at or
+  // before it + 1 ms, the export's and the parked buffer's (wave 17 PLAY8; at 0.01 s, cut
+  // with the first frame from that time on, it was the frame after as often as not)
+  const t = posterT(at.clipT);
   const src = `${base}${sep}t=${t}`;
   img.hidden = false;
   if (img.getAttribute('src') === src || img._want === src) return;
@@ -6262,6 +6504,7 @@ function waitForProxies() {
 
 async function boot() {
   player.vids = [...document.querySelectorAll('#player video.pvbuf')];
+  player.vids.forEach(trackFrames);
   player.vids.forEach((v) => {
     // rAF stops in a background tab; timeupdate (4Hz) keeps the cut points honest there
     v.addEventListener('timeupdate', () => {

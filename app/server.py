@@ -9630,10 +9630,22 @@ POSTER_SLOTS = threading.BoundedSemaphore(3)
 POSTER_CACHE = {"cache-control": "public, max-age=31536000, immutable"}
 
 
+# (wave 17 PLAY8) A poster is the frame on screen at its time: the last one that starts at or
+# before it + POSTER_TOL_S, the export's frame (assemble.py SEEK_TOL_S, lane FRAMEACC) and the
+# Program monitor's parked <video>'s (app.js parkAt). Its time is kept to 4 places (the edit
+# grid's): at 0.01 s, and cut with `-ss <t>` ahead of `-i` (the first frame from that time
+# on), the rest still was the frame after the export's as often as not (31 of 48 right at
+# 29.97, 23 of 48 at 23.976; test_parked_frame). The read is sought POSTER_LEAD_S early, so
+# the frame holding the time is never the one a seek drops.
+POSTER_TOL_S = 0.001
+POSTER_LEAD_S = 0.1
+
+
 def poster_path(stem: str, t: float) -> Path:
     # PICTURE_V in the name: a poster cut from a v1 preview of a rotation-flagged clip is
     # upside down, and an old cache must be rebuilt rather than served (verdict 3 punch 1).
-    return STATE["posters"] / f"{stem}@{t:09.2f}.{PICTURE_V}.jpg"
+    # The time to 4 places (wave 17 PLAY8): a name of the old 0.01 s cut is never served.
+    return STATE["posters"] / f"{stem}@{t:012.4f}.{PICTURE_V}.jpg"
 
 
 def build_poster(src: Path, dest: Path, t: float, original: bool = False) -> None:
@@ -9673,18 +9685,25 @@ def build_poster(src: Path, dest: Path, t: float, original: bool = False) -> Non
     # a card showing the first frame beats a card showing a broken image.
     for ss in dict.fromkeys((max(0.0, t), 0.0)):
         for dec in decoders:
-            r = subprocess.run(
-                ["ffmpeg", "-v", "error", "-y", "-nostdin", *pre, *dec, "-ss", f"{ss:.3f}",
-                 "-i", str(src), "-frames:v", "1",
-                 "-vf", vf, "-q:v", str(POSTER_Q),
-                 "-f", "image2", str(tmp)],
-                capture_output=True, text=True)
-            if r.returncode == 0 and tmp.exists() and tmp.stat().st_size:
-                tmp.replace(dest)
-                return
-            err = r.stderr[-200:]
-            tmp.unlink(missing_ok=True)
-    raise RuntimeError(f"poster failed for {src.name} at {t:.2f}s: {err}")
+            # (wave 17 PLAY8) the frame on screen at ss: sought POSTER_LEAD_S early (the read's
+            # timestamps then start at the seek), every frame up to ss + POSTER_TOL_S kept
+            # (trim), the last of them first (reverse); a read that keeps none (a head with
+            # no frame that early) takes the first frame from ss on, as before
+            at = f"{max(0.0, ss - POSTER_LEAD_S):.6f}"
+            end = ss + POSTER_TOL_S - float(at) + 1e-6
+            for args in (["-ss", at, "-t", f"{POSTER_LEAD_S + 0.5:.3f}", "-i", str(src),
+                          "-vf", f"trim=end={end:.6f},{vf},reverse"],
+                         ["-ss", f"{ss:.4f}", "-i", str(src), "-vf", vf]):
+                r = subprocess.run(
+                    ["ffmpeg", "-v", "error", "-y", "-nostdin", *pre, *dec, *args,
+                     "-frames:v", "1", "-q:v", str(POSTER_Q), "-f", "image2", str(tmp)],
+                    capture_output=True, text=True)
+                if r.returncode == 0 and tmp.exists() and tmp.stat().st_size:
+                    tmp.replace(dest)
+                    return
+                err = r.stderr[-200:] or err
+                tmp.unlink(missing_ok=True)
+    raise RuntimeError(f"poster failed for {src.name} at {t:.4f}s: {err}")
 
 
 def nearest_poster(stem: str, t: float) -> tuple[Path, float] | None:
@@ -9738,7 +9757,7 @@ def media_poster(name: str, t: float = 0.0, near: int = 0) -> Response:
         raise HTTPException(404, f"no such clip: {name}")
     if not math.isfinite(t) or t < 0:
         t = 0.0
-    t = round(min(t, 86400.0), 2)
+    t = round(min(t, 86400.0), 4)               # the edit grid's places (wave 17 PLAY8)
     dest = poster_path(stem, t)
     if dest.exists():
         return FileResponse(dest, media_type="image/jpeg", headers=POSTER_CACHE)
