@@ -18,9 +18,17 @@
  * in the Source monitor and its In / Out were moved there, exactly those (Premiere's way
  * to trim before you keep); verdicts are ranges on clip time (POST /api/floor/verdict,
  * the same endpoint, the same EDL fields); a note goes with POST /api/floor/note; and
- * every verdict is undone from the menu (Undo, its range and note put back). A rejected
- * pick leaves the list and is listed under the "rejected" chip, where Restore brings it
- * back. Nothing here spends a model call.
+ * every verdict can be taken back (its range and note put back). A rejected pick leaves
+ * the list and is listed under the "rejected" chip, where Restore brings it back.
+ * Nothing here spends a model call.
+ *
+ * One history (wave 18 UNDO5, verdict 14 punch 5: "Premiere's undo covers bin actions
+ * too"): each verdict — keep, hero, reject, later, a note, their clears, a batch — is one
+ * entry on the board's undo stack with the timeline's edits (tl.mark with a tag, labelled
+ * `Selects: reject` …), so Ctrl+Z / Edit › Undo / the header's ↶ take back whatever was
+ * done last, a trim or a verdict, and Ctrl+Shift+Z sends the verdict again. The board's
+ * `change` says which entry moved (its tag); the server is told here, one write at a
+ * time and in order. The menu's Undo is the same undo, shown while a verdict is next.
  *
  * app.js draws the rows (keepRow) and hands over its lists (window.rcSelects); this owns
  * the verdicts, the menu and the note box. Test hooks: `sel-menu` (the menu, items by
@@ -45,9 +53,13 @@
     return `${m}:${(v - m * 60).toFixed(1).padStart(4, '0')}`;
   };
   const say = (msg, ms) => { if (typeof window.toast === 'function') window.toast(msg, ms || 3200); };
-  const UNDO_LABEL = { pick: 'keep', reject: 'reject', later: 'later', clear: 'restore', hero: 'hero', note: 'note' };
+  const UNDO_LABEL = { pick: 'keep', reject: 'reject', later: 'later', clear: 'restore', hero: 'hero', note: 'note',
+                       unhero: 'not a hero', remove: 'remove' };
 
-  const R = { undo: [], busy: false, writes: 0, menu: null, note: null, ask: null };
+  // undo / redo: this module's entries, oldest first; `follows`: board undos and redos
+  // still to reach the server
+  const R = { undo: [], redo: [], busy: false, idle: null, follows: 0, seq: 0, writes: 0,
+              menu: null, note: null, ask: null };
 
   const sel = () => window.rcSelects || null;
   const picks = () => { const s = sel(); return s ? s.picks() : []; };
@@ -104,6 +116,12 @@
       R.writes++;
     }
   }
+  /* A write that a redo can send again: `ops` collects it as it was sent. */
+  async function send(ops, url, body) {
+    const data = await post(url, body);
+    ops.push({ url, body });
+    return data;
+  }
   function vbody(s, kind, range, hero, note) {
     return { clip: s.clip, start: range[0], end: range[1], verdict: kind, hero: !!hero,
              why: s.why || '', witnesses: s.witnesses || [], tags: s.tags || [],
@@ -114,10 +132,109 @@
     return { verdict: s.pick ? (s.verdict || null) : 'pick', hero: !!s.hero,
              note: String(s.note || ''), range: [r2(s.start), r2(s.end)] };
   }
+
+  /* One write at a time. A verdict asked for while another lands is dropped (a double
+   * click); a board undo or redo waits for its turn (Ctrl+Z pressed while the verdict
+   * before it is still landing), and they reach the server in the order they were made. */
+  let wake = null;
+  function hold() {
+    R.busy = true;
+    R.idle = new Promise((res) => { wake = res; });
+  }
+  function release() {
+    R.busy = false;
+    const w = wake;
+    wake = null;
+    if (w) w();
+  }
+
+  /* ------------------------------------------------- the board's one history */
+  const TL = () => (window.tl && typeof window.tl.mark === 'function' ? window.tl : null);
+  const keyZ = () => {
+    const t = window.tl;
+    return t && typeof t.keyLabel === 'function' ? t.keyLabel('⌘Z') : 'Ctrl+Z';
+  };
+  const word = (e) => `${UNDO_LABEL[e.label] || e.label}${e.items.length > 1 ? ` ×${e.items.length}` : ''}`;
+  // ≤ 25 characters, so the header's "undo: … (Ctrl+Z)" stays within its 40
+  const boardLabel = (e) => `Selects: ${word(e)}`;
+  const TAG = 'selects:';
+  const told = (e) => `${boardLabel(e)}${e.items.length === 1 ? ` · ${what(e.items[0].s)}` : ''}`;
+
+  /* A verdict landed: one entry here and one on the board's stack (tl.mark, tagged), so
+   * Ctrl+Z reaches it in its turn among the timeline's edits. `board` false: the board
+   * refused it (an edit was open) or there is none, and only the menu's Undo takes it. */
   function push(label, items) {
-    if (!items.length) return;
-    R.undo.push({ label, items });
+    if (!items.length) return null;
+    const entry = { label, items, tag: `${TAG}${++R.seq}`, board: false };
+    R.undo.push(entry);
     if (R.undo.length > 100) R.undo.shift();
+    R.redo.length = 0;
+    const t = TL();
+    entry.board = !!(t && t.mark(boardLabel(entry), entry.tag));
+    return entry;
+  }
+  // how a toast says the verdict is taken back
+  const undoWords = (entry) => (entry && entry.board ? `${keyZ()} undoes it` : 'right-click › Undo');
+
+  /* The board moved one of these entries: Ctrl+Z (undo) or Ctrl+Shift+Z (redo), Edit ›
+   * Undo, the header's ↶ ↷, or the menu's Undo, which is the board's. A new entry of
+   * any kind empties the board's redo stack, and with it the verdicts that can be sent
+   * again. */
+  function onBoard(ev) {
+    if (!ev) return;
+    if (ev.kind === 'commit') { R.redo.length = 0; return; }
+    if ((ev.kind !== 'undo' && ev.kind !== 'redo') || !String(ev.tag || '').startsWith(TAG)) return;
+    const back = ev.kind === 'undo';
+    const from = back ? R.undo : R.redo;
+    let k = from.length - 1;
+    while (k >= 0 && from[k].tag !== ev.tag) k -= 1;
+    if (k < 0) return;
+    const [entry] = from.splice(k, 1);
+    (back ? R.redo : R.undo).push(entry);
+    follow(entry, back);
+  }
+  let chain = Promise.resolve();
+  function follow(entry, back) {
+    R.follows += 1;
+    const job = async () => {
+      while (R.busy) await R.idle;
+      hold();
+      try {
+        if (back) await takeBack(entry); else await sendAgain(entry);
+        await refresh();
+        say(`${back ? 'undone' : 'redone'}: ${told(entry)}`);
+      } catch (e) {
+        say(`${back ? 'undo' : 'redo'} did not land: ${e.message || e}`, 6000);
+      } finally {
+        R.follows -= 1;
+        release();
+      }
+    };
+    chain = chain.then(job, job);
+    return chain;
+  }
+  /* Each range cleared, then what was there before put back (newest item first). */
+  async function takeBack(entry) {
+    for (const it of entry.items.slice().reverse()) {
+      const s = it.s;
+      if (entry.label === 'note') {
+        // a note on an undecided pick made it a later (selects.note): undone, it is undecided
+        if (it.prev.verdict) await post('/api/floor/note', { clip: s.clip, start: it.sent[0], end: it.sent[1], text: it.prev.note });
+        else await post('/api/floor/verdict', { clip: s.clip, start: it.sent[0], end: it.sent[1], verdict: 'clear' });
+        continue;
+      }
+      await post('/api/floor/verdict', { clip: s.clip, start: it.sent[0], end: it.sent[1], verdict: 'clear' });
+      if (it.prev.verdict) {
+        await post('/api/floor/verdict', vbody(s, it.prev.verdict, it.prev.range, it.prev.hero, it.prev.note));
+      }
+    }
+  }
+  /* The same writes the verdict made, in their order: the server is where it was before
+   * them (the undo put it back), so it comes out where the verdict left it. */
+  async function sendAgain(entry) {
+    for (const it of entry.items) {
+      for (const op of it.ops || []) await post(op.url, op.body);
+    }
   }
   async function refresh() {
     try {
@@ -127,19 +244,23 @@
   }
   const what = (s) => `${stemOf(s.clip)} ${at(s.start)}–${at(s.end)}`;
 
-  /* One verdict on one row. `kind`: pick | reject | later | clear; `hero` with pick. */
-  async function verdict(s, kind, { hero = false, quiet = false } = {}) {
+  /* One verdict on one row. `kind`: pick | reject | later | clear; `hero` with pick.
+   * `label`: the undo's word when it is not the kind's (Remove from Selects); `into`: a
+   * list that takes the item instead of an entry of its own (Keep this take). */
+  async function verdict(s, kind, { hero = false, quiet = false, label = null, into = null } = {}) {
     if (!s || R.busy) return false;
-    R.busy = true;
+    hold();
     try {
       const range = kind === 'pick' && s.pick ? keepRange(s) : [r2(s.start), r2(s.end)];
       const heroNow = kind === 'pick' && !!hero;
-      await post('/api/floor/verdict', vbody(s, kind, range, heroNow, s.note));
-      push(kind === 'pick' && hero ? 'hero' : kind, [{ s, prev: snapshot(s), sent: range }]);
+      const prev = snapshot(s), ops = [];
+      await send(ops, '/api/floor/verdict', vbody(s, kind, range, heroNow, s.note));
+      const item = { s, prev, sent: range, ops };
+      const entry = into ? (into.push(item), null) : push(label || (kind === 'pick' && hero ? 'hero' : kind), [item]);
       await refresh();
       if (!quiet) {
         say(kind === 'pick' ? `${heroNow ? 'hero' : 'kept'} · ${stemOf(s.clip)} ${at(range[0])}–${at(range[1])}`
-          : kind === 'reject' ? `rejected · ${what(s)} — right-click › Undo, or more found › rejected restores it`
+          : kind === 'reject' ? `rejected · ${what(s)} — ${undoWords(entry)}, or more found › rejected restores it`
             : kind === 'later' ? `marked later · ${what(s)}`
               : `back on the list · ${what(s)}`);
       }
@@ -148,21 +269,22 @@
       say(`the verdict did not land: ${e.message || e}`, 6000);
       return false;
     } finally {
-      R.busy = false;
+      release();
     }
   }
 
   /* A keep's hero mark: the same keep, its range and note, hero or not. */
   async function hero(s, on) {
     if (!s || s.pick || R.busy) return false;
-    R.busy = true;
+    hold();
     try {
       const range = [r2(s.start), r2(s.end)];
+      const prev = snapshot(s), ops = [];
       // a keep merges into the keep it overlaps, hero if either was (selects.apply_verdict):
       // taking the mark off is the keep cleared, then kept again without it
-      if (!on) await post('/api/floor/verdict', { clip: s.clip, start: range[0], end: range[1], verdict: 'clear' });
-      await post('/api/floor/verdict', { ...vbody(s, 'pick', range, on, s.note), source: s.source || 'selects' });
-      push('hero', [{ s, prev: snapshot(s), sent: range }]);
+      if (!on) await send(ops, '/api/floor/verdict', { clip: s.clip, start: range[0], end: range[1], verdict: 'clear' });
+      await send(ops, '/api/floor/verdict', { ...vbody(s, 'pick', range, on, s.note), source: s.source || 'selects' });
+      push(on ? 'hero' : 'unhero', [{ s, prev, sent: range, ops }]);
       await refresh();
       say(on ? `hero · ${what(s)}` : `not a hero · ${what(s)}`);
       return true;
@@ -170,64 +292,54 @@
       say(`the hero mark did not land: ${e.message || e}`, 6000);
       return false;
     } finally {
-      R.busy = false;
+      release();
     }
   }
 
-  /* Several picks, one verdict each, one Undo for the lot (the pass's ⇧X). */
-  async function many(list, kind, why, done) {
+  /* Several picks, one verdict each, one Undo for the lot (the pass's ⇧X). `into` as
+   * verdict's. Resolves to {n, entry}. */
+  async function many(list, kind, why, done, into = null) {
     const items = [];
-    if (R.busy) return 0;
-    R.busy = true;
+    if (R.busy) return { n: 0, entry: null };
+    hold();
     try {
       for (const q of list) {
         const range = [r2(q.start), r2(q.end)];
+        const prev = snapshot(q), ops = [];
         try {
-          await post('/api/floor/verdict', { ...vbody(q, kind, range, false, q.note), why: why || q.why || '' });
+          await send(ops, '/api/floor/verdict', { ...vbody(q, kind, range, false, q.note), why: why || q.why || '' });
         } catch (e) {
           say(`${kind} did not land: ${e.message || e}`, 6000);
           break;
         }
-        items.push({ s: q, prev: snapshot(q), sent: range });
+        items.push({ s: q, prev, sent: range, ops });
       }
-      push(kind, items);
+      const entry = into ? (into.push(...items), null) : push(kind, items);
       await refresh();
-      if (items.length && done) say(done(items.length), 4000);
-      return items.length;
+      if (items.length && done) say(done(items.length, entry), 4000);
+      return { n: items.length, entry };
     } finally {
-      R.busy = false;
+      release();
     }
   }
 
-  /* Undo the last verdict: each range cleared, then what was there before put back. */
+  /* The menu's Undo: the board's undo while a verdict is what it takes back next (so the
+   * two never part); a verdict the board never held is taken back here. */
+  function undoable() {
+    const top = R.undo[R.undo.length - 1];
+    if (!top) return null;
+    if (!top.board) return top;
+    const t = TL();
+    const next = t && typeof t.nextUndo === 'function' ? t.nextUndo() : null;
+    return next && next.tag === top.tag ? top : null;
+  }
   async function undo() {
-    const entry = R.undo.pop();
-    if (!entry) { say('no verdict to undo'); return false; }
-    if (R.busy) { R.undo.push(entry); return false; }
-    R.busy = true;
-    try {
-      for (const it of entry.items.slice().reverse()) {
-        const s = it.s;
-        if (entry.label === 'note') {
-          // a note on an undecided pick made it a later (selects.note): undone, it is undecided
-          if (it.prev.verdict) await post('/api/floor/note', { clip: s.clip, start: it.sent[0], end: it.sent[1], text: it.prev.note });
-          else await post('/api/floor/verdict', { clip: s.clip, start: it.sent[0], end: it.sent[1], verdict: 'clear' });
-          continue;
-        }
-        await post('/api/floor/verdict', { clip: s.clip, start: it.sent[0], end: it.sent[1], verdict: 'clear' });
-        if (it.prev.verdict) {
-          await post('/api/floor/verdict', vbody(s, it.prev.verdict, it.prev.range, it.prev.hero, it.prev.note));
-        }
-      }
-      await refresh();
-      say(`undone · ${UNDO_LABEL[entry.label] || entry.label}${entry.items.length > 1 ? ` ×${entry.items.length}` : ''}`);
-      return true;
-    } catch (e) {
-      say(`undo did not land: ${e.message || e}`, 6000);
-      return false;
-    } finally {
-      R.busy = false;
-    }
+    const top = undoable();
+    if (!top) { say(R.undo.length ? `${keyZ()} takes back the last edit first` : 'no verdict to undo'); return false; }
+    if (top.board) return TL().undo();
+    R.undo.pop();
+    await follow(top, true);
+    return true;
   }
 
   /* --------------------------------------------------------- takes and clips */
@@ -244,12 +356,11 @@
   }
   async function keepTake(p) {
     const others = takesOf(p).filter((q) => q.id !== p.id && undecided(q));
-    const ok = await verdict(p, 'pick', { quiet: true });
+    const bag = [];                          // one undo for the take and its rejected siblings
+    const ok = await verdict(p, 'pick', { quiet: true, into: bag });
     if (!ok) return;
-    const kept = R.undo.pop();               // one Undo for the take and its rejected siblings
-    const n = await many(others, 'reject', `other take of ${p.take.id}`);
-    const last = n ? R.undo.pop() : null;
-    push('pick', [...(kept ? kept.items : []), ...(last ? last.items : [])]);
+    const { n } = await many(others, 'reject', `other take of ${p.take.id}`, null, bag);
+    push('pick', bag);
     say(`kept take ${p.take.n} of ${p.take.of}${n ? ` · rejected ${plural(n, 'other take')}` : ''}`, 4000);
   }
 
@@ -333,10 +444,10 @@
       add('source', 'Open in Source');
       add('remove', 'Remove from Selects', { title: 'the keep goes; a pick it covered comes back undecided' });
     }
-    if (R.undo.length) {
+    const last = undoable();
+    if (last) {
       sep();
-      const last = R.undo[R.undo.length - 1];
-      add('undo', `Undo ${UNDO_LABEL[last.label] || last.label}${last.items.length > 1 ? ` ×${last.items.length}` : ''}`);
+      add('undo', `Undo ${word(last)}`, last.board ? { k: keyZ(), title: 'the board\'s undo: Edit › Undo does the same' } : {});
     }
     return out;
   }
@@ -378,7 +489,7 @@
     if (act === 'reject' || act === 'later' || act === 'clear') return verdict(s, act);
     if (act === 'mkhero') return hero(s, true);
     if (act === 'unhero') return hero(s, false);
-    if (act === 'remove') return verdict(s, 'clear', { quiet: true }).then((ok) => { if (ok) say(`removed from Selects · ${what(s)}`); });
+    if (act === 'remove') return verdict(s, 'clear', { quiet: true, label: 'remove' }).then((ok) => { if (ok) say(`removed from Selects · ${what(s)}`); });
     if (act === 'note') return openNote(s, row);
     if (act === 'source') { if (typeof window.openPickInSource === 'function') window.openPickInSource(s); return undefined; }
     if (act === 'takes') { if (sel()) sel().show({ chip: `take:${s.take.id}` }); return undefined; }
@@ -390,7 +501,7 @@
     if (act === 'batch') {
       const words = sel() ? sel().filtered() : '';
       return many(shownUndecided(), 'reject', `filtered out: ${words}`,
-        (n) => `rejected ${plural(n, 'pick')} · ${words} — right-click › Undo brings them back`);
+        (n, entry) => `rejected ${plural(n, 'pick')} · ${words} — ${entry && entry.board ? keyZ() : 'right-click › Undo'} brings them back`);
     }
     if (act === 'undo') return undo();
     void btn;
@@ -435,13 +546,18 @@
     closeNote();
     const s = n.s;
     const range = [r2(s.start), r2(s.end)];
+    while (R.busy) await R.idle;             // typed while a verdict lands: it waits, not lost
+    hold();
     try {
-      await post('/api/floor/note', { clip: s.clip, start: range[0], end: range[1], text: String(text || '').trim() });
-      push('note', [{ s, prev: snapshot(s), sent: range }]);
+      const prev = snapshot(s), ops = [];
+      await send(ops, '/api/floor/note', { clip: s.clip, start: range[0], end: range[1], text: String(text || '').trim() });
+      push('note', [{ s, prev, sent: range, ops }]);
       await refresh();
       say(String(text || '').trim() ? `note kept · ${what(s)}${s.pick && !s.verdict ? ' (marked later)' : ''}` : `note cleared · ${what(s)}`);
     } catch (e) {
       say(`the note did not land: ${e.message || e}`, 6000);
+    } finally {
+      release();
     }
   }
 
@@ -503,7 +619,11 @@
     closeMenu();
   }, true);
 
-  window.rcPassReview = { state: R, verdict, hero, undo, menu, closeMenu, keepRange, takesOf, restOf,
+  // the board's one undo history: timeline.js loads before this, and its `on` works
+  // before the cut mounts
+  if (window.tl && typeof window.tl.on === 'function') window.tl.on('change', onBoard);
+
+  window.rcPassReview = { state: R, verdict, hero, undo, undoable, menu, closeMenu, keepRange, takesOf, restOf,
                           keepTake, many, openNote, saveNote };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();

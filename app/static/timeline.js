@@ -94,6 +94,10 @@
  *                               Designed Effect that only draws): its undo / redo change
  *                               nothing here and emit `change` under the label, which its
  *                               owner follows. False while an entry is open.
+ *   tl.mark(label, tag)         The same, with the owner's tag on the entry: the `change`
+ *                               its undo / redo emit carries `tag` (Selects' verdicts,
+ *                               passreview.js, wave 18 UNDO5).
+ *   tl.nextUndo()               {label, tag} of the entry Ctrl+Z takes back now, or null.
  *   Every mutation below is undoable on its own when called outside begin/commit (it wraps
  *   itself with its own name as the label), goes through hooks.touch() so autosave and
  *   roughcutFlush behave exactly as before, repaints the board and emits `change`.
@@ -3465,19 +3469,30 @@
     seek(tot);
   }
 
+  /* An owner's entry (tl.mark with a tag) while the board is as it left it: nothing on
+   * the board to put back and nothing for the autosave to write — its owner writes what
+   * it changed (Selects' verdicts, wave 18 UNDO5). A save here would also have the bin
+   * re-learn the timeline (selects.sync_timeline) on a Ctrl+Z that changed no shot. */
+  function untouched(e) {
+    return !!e.tag && e.before === e.after && snapshot() === e.before;
+  }
+
   function undo() {
     unrec = null;
     const e = undoStack.pop();
     if (!e) { toast('nothing to undo'); return false; }
     pending = null;
     const was = total();
-    restore(e.before);
+    const still = untouched(e);
+    if (!still) restore(e.before);
     redoStack.push(e);
-    if (hooks.render) hooks.render();
-    headBack(was);
-    if (hooks.touch) hooks.touch();     // undoing is an edit too, and must reach the disk
+    if (!still) {
+      if (hooks.render) hooks.render();
+      headBack(was);
+      if (hooks.touch) hooks.touch();   // undoing is an edit too, and must reach the disk
+    }
     paintUndo();
-    emit('change', { label: e.label, kind: 'undo' });
+    emit('change', { label: e.label, kind: 'undo', tag: e.tag });
     toast(`undone: ${e.label}`);
     return true;
   }
@@ -3488,13 +3503,16 @@
     if (!e) { toast('nothing to redo'); return false; }
     pending = null;
     const was = total();
-    restore(e.after);
+    const still = untouched(e);
+    if (!still) restore(e.after);
     undoStack.push(e);
-    if (hooks.render) hooks.render();
-    headBack(was);
-    if (hooks.touch) hooks.touch();
+    if (!still) {
+      if (hooks.render) hooks.render();
+      headBack(was);
+      if (hooks.touch) hooks.touch();
+    }
     paintUndo();
-    emit('change', { label: e.label, kind: 'redo' });
+    emit('change', { label: e.label, kind: 'redo', tag: e.tag });
     toast(`redone: ${e.label}`);
     return true;
   }
@@ -3518,16 +3536,26 @@
    * put nothing back on the board, and the `change` they emit under its label is how its
    * owner follows them (fx.js → POST /api/fx/undo, /api/fx/redo). Refused (false) while
    * an entry is open. */
-  function markEntry(label) {
+  /* `tag` (wave 18, UNDO5): the owner's own name for the entry, handed back on the
+   * `change` its undo and redo emit, so an owner with many entries under one label (the
+   * Selects verdicts, passreview.js) knows which one the board took back. */
+  function markEntry(label, tag) {
     if (pending) return false;
     const now = unrec || snapshot();
     const name = String(label || 'edit');
-    undoStack.push({ label: name, before: now, after: now });
+    const e = { label: name, before: now, after: now };
+    if (tag != null) e.tag = String(tag);
+    undoStack.push(e);
     if (undoStack.length > UNDO_LIMIT) undoStack.shift();
     redoStack.length = 0;
     paintUndo();
-    emit('change', { label: name, kind: 'commit' });
+    emit('change', { label: name, kind: 'commit', tag: e.tag });
     return true;
+  }
+  /* What Ctrl+Z would take back now: the top entry's label and tag, or null. */
+  function nextUndo() {
+    const e = undoStack[undoStack.length - 1];
+    return e ? { label: e.label, tag: e.tag } : null;
   }
 
   /* ------------------------------------------------------------ mutations */
@@ -4517,6 +4545,7 @@
     byId, indexOf, idAt, dur, speedOf, filmStart, total, shotAt, timeToX, xToTime, eventTime, snapsFor,
     begin, commit, cancel, batch, unrecorded, undo, redo, clearHistory,
     mark: markEntry,                // an entry for a change outside the cut (fx.js's Accept)
+    nextUndo,                       // {label, tag} of what Ctrl+Z takes back now, or null
     setRange, move, split, remove, insert, setSpeed, insertAt, overwrite,
     select, syncSel, seek, setPlayhead, zoomTo, fit,
     forSave, needsRekey, afterSave, applyIds, idFor, putTurn, saveHeaders, seqForFlush, seqDirty,
