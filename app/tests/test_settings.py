@@ -86,6 +86,37 @@ def test_the_cap_and_the_workers_reach_the_index(tmp_path, project, monkeypatch)
             assert j.state(clip, "asr") == "done"
 
 
+def test_the_index_order_is_a_setting_the_next_run_and_the_journal_keep(tmp_path, project, monkeypatch):
+    """Wave 17 FOLDIN: the footage screen's order toggle (most promising first / capture
+    order) rode with its Index button; the screen is gone and the Index panel does not
+    carry it, so it is Project Settings': validated, saved, written to the journal at once
+    when one exists and no run holds it, and taken by a run that names no order."""
+    import server
+
+    monkeypatch.delenv("ROUGHCUT_BUDGET_USD", raising=False)
+    with _fresh(tmp_path, project, sidecars=project["sidecars"], visual=None) as c:
+        d = c.get("/api/settings").json()
+        assert d["order"] == "priority" and d["defaults"]["order"] == "priority"
+        assert c.put("/api/settings", json={"order": "random"}).status_code == 400
+        assert not server.settings_path().exists(), "a refused write writes nothing"
+        # no journal yet: kept in the settings only (a journal is the index's, not made here)
+        d = c.put("/api/settings", json={"order": "capture"}).json()
+        assert d["order"] == "capture" and not server.journal_path().exists()
+        # a run that names no order takes it, and the journal keeps it
+        _stub_tools(server, monkeypatch, tmp_path)
+        s = _wait_index(c, c.post("/api/index", json={}).json()["job"])
+        assert s["state"] == "done", s
+        assert journal.Journal.load(server.journal_path()).order == "capture"
+        assert c.get("/api/index").json()["order"] == "capture"
+        # with a journal and no run: written to it at once
+        assert c.put("/api/settings", json={"order": "priority"}).json()["order"] == "priority"
+        assert journal.Journal.load(server.journal_path()).order == "priority"
+        # a run that names its own order has its way, and the setting follows it
+        s = _wait_index(c, c.post("/api/index", json={"order": "capture"}).json()["job"])
+        assert journal.Journal.load(server.journal_path()).order == "capture"
+        assert c.get("/api/settings").json()["order"] == "capture"
+
+
 def test_a_cap_on_this_project_leaves_every_other_bin_uncapped(tmp_path, project, monkeypatch):
     """Review of I16.0g: the drawer says "cap this project at $__", but the cap was one
     setting under --work — capping Killington at $5 capped copper too."""

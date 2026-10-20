@@ -7,11 +7,12 @@ meaning in the hover. Verdict 1 found "Indexing · 0 of 12 ready · about 0:10 l
 spent $0.27" on /open (open.js `spentLine` in the progress line). On `anthropic_api`
 (`charged: true`) the money is real and "spent" is the honest word.
 
-This serves the suite's synthetic bin from its own work dir (a real journal on disk, so
-/open's at-rest "how it was indexed" line shows), pins this project's spend at $0.27,
-fakes a running index by rewriting GET /api/index in the page (the existing UI tests mock
-/api/flow the same way), and reads `document.body.innerText` — only what is drawn — on
-/, /open (at rest and mid-index) and /floor.
+This serves the suite's synthetic bin from its own work dir (a real journal on disk),
+pins this project's spend at $0.27, and reads `document.body.innerText` — only what is
+drawn — on the board, its bin menu and File › Project Settings… (where this project's
+spend is said beside its cap since wave 17 FOLDIN folded /open's settings drawer into the
+editor; /open and /floor are gone, and the index's own money line is lane INDEXPANEL's
+Index panel's).
 
     uv run --with pytest --with fastapi --with uvicorn --with httpx --with numpy \
         --with playwright pytest app/tests/test_price_wording.py -q
@@ -94,45 +95,11 @@ def visible(page) -> str:
     return page.evaluate("document.body.innerText")
 
 
-def running_index(page) -> None:
-    """GET /api/index says a run is going, with the journal's real progress: the page
-    then shows its one progress line, money and all."""
-    def handle(route):
-        resp = route.fetch()
-        data = resp.json()
-        data["running"] = True
-        data["job"] = "fake"
-        if data.get("progress"):
-            data["progress"]["eta_s"] = 10
-        route.fulfill(response=resp, body=json.dumps(data),
-                      headers={**resp.headers, "content-type": "application/json"})
-    page.route("**/api/index", handle)
-
-
 def open_page(browser, url: str):
     pg = browser.new_page(viewport={"width": 1440, "height": 900})
     errors: list[str] = []
     pg.on("pageerror", lambda e: errors.append(str(e)))
     pg._price_errors = errors                       # read back by the tests
-    return pg
-
-
-def at_open(browser, live, *, running: bool):
-    pg = open_page(browser, live)
-    if running:
-        running_index(pg)
-    pg.goto(f"{live}/open")
-    pg.wait_for_function(
-        "window.sheet && sheet.state.clips && sheet.state.status && sheet.state.index",
-        timeout=20000)
-    if running:
-        pg.wait_for_selector("#progress:not([hidden])", timeout=10000)
-        pg.wait_for_function("/\\$0\\.27/.test(document.querySelector('#progLine').textContent)",
-                             timeout=10000)
-    else:
-        pg.wait_for_selector("#howLine:not([hidden])", timeout=10000)
-        pg.wait_for_function("/\\$0\\.27/.test(document.querySelector('#howLine').textContent)",
-                             timeout=10000)
     return pg
 
 
@@ -144,45 +111,37 @@ def at_board(browser, live):
     return pg
 
 
-def at_floor(browser, live):
-    pg = open_page(browser, live)
-    pg.goto(f"{live}/floor")
-    pg.wait_for_function("window.floor && floor.state", timeout=20000)
-    pg.wait_for_function("window.flowBar && flowBar.state()", timeout=20000)
-    return pg
-
-
 # ------------------------------------------------------------- the subscription
 
 
-def test_the_index_progress_line_never_says_spent_on_the_plan(browser, live):
-    pg = at_open(browser, live, running=True)
-    line = pg.locator("#progLine").inner_text()
+def at_settings(browser, live):
+    """File › Project Settings…, open, with this project's spend read in."""
+    pg = at_board(browser, live)
+    pg.locator("#menubar .menu[data-menu=file] .mtop").click()
+    pg.locator("[data-testid=menu-project-settings]").click()
+    pg.wait_for_selector("[data-testid=project-settings][open]", timeout=5000)
+    pg.wait_for_function("/\\$0\\.27/.test(document.querySelector('[data-testid=ps-spent]').textContent)",
+                         timeout=10000)
+    return pg
+
+
+def test_project_settings_never_says_spent_on_the_plan(browser, live):
+    """/open's progress and how lines (verdict 1) carried this project's money; the
+    settings that cap it are File › Project Settings… now, where it is said beside them."""
+    pg = at_settings(browser, live)
+    line = pg.locator("[data-testid=ps-spent]").inner_text()
     assert not SPENT.search(line), line
-    assert "~$0.27 API-equivalent · free on your plan" in line, line
+    assert line == "This project: ~$0.27 API-equivalent · free on your plan", line
     # the estimate's meaning is in the hover
-    title = pg.locator("#progLine").get_attribute("title") or ""
+    title = pg.locator("[data-testid=ps-spent]").get_attribute("title") or ""
     assert "free on your Claude plan" in title and "$0.27" in title, title
     text = visible(pg)
     assert not SPENT.search(text), [ln for ln in text.splitlines() if SPENT.search(ln)]
     assert not pg._price_errors, pg._price_errors
 
 
-def test_the_how_line_at_rest_never_says_spent_on_the_plan(browser, live):
-    pg = at_open(browser, live, running=False)
-    line = pg.locator("#howLine").inner_text()
-    assert not SPENT.search(line), line
-    assert "~$0.27 API-equivalent · free on your plan" in line, line
-    assert pg.locator("#budgetLine").inner_text() == "$0.27"      # the number itself is kept
-    assert "free on your Claude plan" in (pg.locator("#howLine").get_attribute("title") or "")
-    text = visible(pg)
-    assert not SPENT.search(text), [ln for ln in text.splitlines() if SPENT.search(ln)]
-    assert not pg._price_errors, pg._price_errors
-
-
-@pytest.mark.parametrize("where", ["board", "floor"])
-def test_the_board_and_the_pass_never_say_spent_on_the_plan(browser, live, where):
-    pg = at_board(browser, live) if where == "board" else at_floor(browser, live)
+def test_the_board_never_says_spent_on_the_plan(browser, live):
+    pg = at_board(browser, live)
     st = pg.evaluate("fetch('/api/status').then(r => r.json())")
     assert st["backend"]["charged"] is False and st["backend"]["spent_usd"] == USD
     text = visible(pg)
@@ -202,14 +161,9 @@ def test_the_bin_menu_never_says_spent_on_the_plan(browser, live):
 
 
 def test_on_the_api_backend_spent_is_the_honest_word(browser, live, api_backend):
-    pg = at_open(browser, live, running=True)
-    line = pg.locator("#progLine").inner_text()
-    assert re.search(r" · spent \$0\.27$", line), line
+    pg = at_settings(browser, live)
+    line = pg.locator("[data-testid=ps-spent]").inner_text()
+    assert line == "This project: spent $0.27", line
     assert "free on your plan" not in line, line
-    assert "billed to the API key" in (pg.locator("#progLine").get_attribute("title") or "")
-    pg.unroute("**/api/index")
+    assert "billed to the API key" in (pg.locator("[data-testid=ps-spent]").get_attribute("title") or "")
     pg.close()
-    pg = at_open(browser, live, running=False)
-    line = pg.locator("#howLine").inner_text()
-    assert re.search(r"· spent \$0\.27 ▸$", line), line
-    assert "free on your plan" not in line, line

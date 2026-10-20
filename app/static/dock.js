@@ -349,6 +349,8 @@
     open: () => { const b = $('#hdBin'); if (b) b.click(); },
     footage: () => { location.href = '/open'; },
     pass: () => { location.href = '/floor'; },
+    // File › Project Settings… (wave 17 FOLDIN: the footage screen's settings drawer)
+    projsettings: () => { if (window.rcProjectSettings) window.rcProjectSettings.open(); },
     export: () => open('out'),
     undo: () => { const b = $('#undo'); if (b) b.click(); },
     redo: () => { const b = $('#redo'); if (b) b.click(); },

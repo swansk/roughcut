@@ -451,3 +451,124 @@ def test_show_its_takes_and_keep_one_rejecting_the_others(browser, live, fold):
         assert pg.errors == []
     finally:
         pg.close()
+
+
+# ------------------------------------------------------- File › Project Settings…
+
+def _settings(pg) -> dict:
+    pg.locator("#menubar .menu[data-menu=file] .mtop").click()
+    pg.locator("[data-testid=menu-project-settings]").click()
+    pg.wait_for_selector("[data-testid=project-settings][open]", timeout=3000)
+    pg.wait_for_function("rcProjectSettings.state.settings !== null", timeout=5000)
+    return pg.evaluate("rcProjectSettings.state.settings")
+
+
+def _workers(pg) -> dict:
+    return pg.evaluate("""() => Object.fromEntries([...document.querySelectorAll('#psWorkers input')]
+        .map((f) => [f.dataset.stage, f.value]))""")
+
+
+def test_project_settings_holds_the_cap_and_the_workers_and_says_the_servers_400(browser, live, fold):
+    """/open's settings drawer ("the gear opens settings and a saved cap moves the budget
+    line", "a worker count is clamped in the ui and a bad one sent on purpose shows the
+    400"), as File › Project Settings…: OK writes the whole form once, Cancel and Esc
+    nothing; the toast says what changed."""
+    _fresh(fold)
+    pg = _open(browser, live, size=(1440, 900))
+    try:
+        s = _settings(pg)
+        got = httpx.get(live + "/api/settings", timeout=30).json()
+        assert s["workers"] == got["workers"] and set(got["workers"]) == {"probe", "asr", "proxy", "sheet", "picks"}
+        # no cap is the default: the radio, the field empty, the words
+        assert got["budget_usd"] is None
+        assert pg.locator("[data-testid=ps-cap-none]").is_checked()
+        assert pg.locator("[data-testid=ps-cap]").input_value() == ""
+        assert pg.locator("#psCapAbout").inner_text().startswith("No cap")
+        assert "spent" not in pg.locator("[data-testid=ps-spent]").inner_text() or not s.get("charged", True)
+        assert _workers(pg) == {k: str(v) for k, v in got["workers"].items()}
+        # the index's order, the footage screen's toggle: most promising first by default
+        assert got["order"] == "priority" and pg.locator("[data-testid=ps-order-priority]").is_checked()
+        hints = pg.locator("#psWorkers .ps-about").all_inner_texts()
+        assert any("model loads once" in h for h in hints) and any("spends faster, not better" in h for h in hints)
+        # Esc closes it, nothing written
+        pg.keyboard.press("Escape")
+        assert pg.locator("[data-testid=project-settings]").is_hidden()
+        # a cap of 5: typing it chooses the cap; OK writes it and says what changed
+        _settings(pg)
+        pg.locator("[data-testid=ps-cap]").fill("5")
+        assert pg.locator("[data-testid=ps-cap-on]").is_checked()
+        sheet = pg.locator("#psWorkers input[data-stage=sheet]")
+        step = pg.locator("#psWorkers .ps-step[data-stage=sheet]")
+        sheet.fill("12")
+        sheet.press("Tab")
+        assert sheet.input_value() == "8"
+        step.locator("button[data-d='1']").click()
+        assert sheet.input_value() == "8"
+        sheet.fill("0")
+        sheet.press("Tab")
+        assert sheet.input_value() == "1"
+        step.locator("button[data-d='1']").click()
+        step.locator("button[data-d='1']").click()
+        assert sheet.input_value() == "3"
+        pg.locator("[data-testid=ps-order-capture]").check()
+        pg.locator("[data-testid=ps-ok]").click()
+        pg.wait_for_function("document.querySelector('#toast').textContent.startsWith('Project Settings saved')", timeout=5000)
+        toast = pg.locator("#toast").inner_text()
+        assert "cap none → $5.00" in toast and f"sheet workers {s['workers']['sheet']} → 3" in toast, toast
+        assert "order most promising first → capture order" in toast, toast
+        assert pg.locator("[data-testid=project-settings]").is_hidden()
+        got = httpx.get(live + "/api/settings", timeout=30).json()
+        assert got["budget_usd"] == 5.0 and got["source"]["budget_usd"] == "settings" and got["workers"]["sheet"] == 3
+        assert got["order"] == "capture"
+        # a bad one the form would never send, sent on purpose: the server's 400, in the
+        # dialog, which stays open; nothing written
+        _settings(pg)
+        assert pg.locator("[data-testid=ps-cap]").input_value() == "5"
+        for bad in ({"workers": {"sheet": 12}}, {"workers": {"grade": 1}}, {"budget_usd": 0}):
+            assert pg.evaluate("(b) => rcProjectSettings.ok(b)", bad) is None
+            err = pg.locator("[data-testid=ps-error]")
+            assert err.is_visible() and err.inner_text().startswith("Not saved:"), err.inner_text()
+            assert pg.locator("[data-testid=project-settings]").is_visible()
+        got = httpx.get(live + "/api/settings", timeout=30).json()
+        assert got["workers"]["sheet"] == 3 and got["budget_usd"] == 5.0
+        # Reset fills the defaults; OK applies them (the cap back to none)
+        pg.locator("[data-testid=ps-reset]").click()
+        assert pg.locator("[data-testid=ps-cap-none]").is_checked()
+        assert pg.locator("[data-testid=ps-order-priority]").is_checked()
+        assert _workers(pg) == {k: str(v) for k, v in got["defaults"]["workers"].items()}
+        pg.locator("[data-testid=ps-ok]").click()
+        pg.wait_for_function("document.querySelector('#toast').textContent.includes('cap $5.00 → none')", timeout=5000)
+        got = httpx.get(live + "/api/settings", timeout=30).json()
+        assert got["budget_usd"] is None and got["workers"] == got["defaults"]["workers"]
+        assert got["order"] == "priority"
+        assert pg.errors == []
+    finally:
+        pg.close()
+
+
+def test_a_cap_from_the_environment_disables_the_choice(browser, live, fold, monkeypatch):
+    """/open's "a cap from the environment disables the field": ROUGHCUT_BUDGET_USD in the
+    server's process wins; the choice is disabled with the reason, and OK still writes
+    the workers without sending a cap."""
+    _fresh(fold)
+    monkeypatch.setenv("ROUGHCUT_BUDGET_USD", "7.5")
+    pg = _open(browser, live, size=(1440, 900))
+    try:
+        s = _settings(pg)
+        assert s["source"]["budget_usd"] == "env" and s["budget_usd"] == 7.5
+        cap = pg.locator("[data-testid=ps-cap]")
+        assert cap.is_disabled() and float(cap.input_value()) == 7.5
+        assert pg.locator("[data-testid=ps-cap-none]").is_disabled() and pg.locator("[data-testid=ps-cap-on]").is_checked()
+        about = pg.locator("#psCapAbout").inner_text()
+        assert "ROUGHCUT_BUDGET_USD" in about and "wins" in about, about
+        assert "of $7.50 cap" in pg.locator("[data-testid=ps-spent]").inner_text()
+        pg.locator("#psWorkers .ps-step[data-stage=probe] button[data-d='1']").click()
+        pg.locator("[data-testid=ps-ok]").click()
+        pg.wait_for_function("document.querySelector('#toast').textContent.includes('probe workers')", timeout=5000)
+        got = httpx.get(live + "/api/settings", timeout=30).json()
+        assert got["source"]["budget_usd"] == "env" and got["workers"]["probe"] == s["workers"]["probe"] + 1
+        # back to the defaults for what follows
+        httpx.put(live + "/api/settings", json={"workers": got["defaults"]["workers"]}, timeout=30)
+        assert pg.errors == []
+    finally:
+        pg.close()
