@@ -12065,6 +12065,11 @@ def module_static(name: str) -> Response:
     return Response(p.read_text(encoding="utf-8"), media_type=media, headers=NO_STORE)
 
 
+
+
+# Wave 17 FOLDIN (K4 b): what the old footage and pass screens held, folded into the
+# editor as its own modules: the pass's verdicts in Selects.
+MODULE_FILES |= {"passreview.js"}
 # ---------------------------------------------------------------- audio peaks (wave 3 TLAUDIO)
 #
 # A1 draws each shot's real waveform (verdict 3, punch 6: "A1 has no waveform, just

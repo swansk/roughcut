@@ -455,8 +455,10 @@
     },
     {
       key: 'why', title: 'See why a pick was made',
+      // the pass's review is Selects' (wave 17 FOLDIN): its verdicts are on the rows
       body: () => 'Every pick carries its reason. Hover a pick in Selects, or an amber mark on a shot,'
-        + ' to read what was heard and seen there.',
+        + ' to read what was heard and seen there. ✓ keeps a pick, ✗ rejects it; right-click it for'
+        + ' a hero, later, a note or its takes.',
       anchor: ['#tl .tl-pick', '#pProject .ws-tab[data-tool="bin"]'], fallback: () => menuTop('window'),
       show: () => { if (window.dock) dock.open('bin', { remember: false }); },
     },

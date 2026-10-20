@@ -1701,8 +1701,9 @@ def test_an_empty_bin_offers_the_footage_and_says_where_to_keep_things(page):
     page.wait_for_function(
         "document.querySelector('#library').textContent.includes('nothing kept yet')",
         timeout=5000)
-    assert "keep moments on the pass" in box.inner_text()
-    assert box.locator("a[href='/floor']").count() == 1
+    # the pass's picks are kept or rejected here (wave 17 FOLDIN), no link off the editor
+    assert "the first pass lists its picks here, to keep or reject" in box.inner_text()
+    assert box.locator("a[href]").count() == 0
     stems = sorted(c.split(".")[0] for c in page.evaluate(
         "Object.keys(P.clips).filter(c => !isGenClip(c) && P.clips[c].proxy)"))
     rows = box.locator(".keep")
