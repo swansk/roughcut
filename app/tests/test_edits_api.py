@@ -70,17 +70,23 @@ def test_a_bad_speed_is_a_400_with_the_sentence_and_nothing_is_written(client, p
 
 def test_a_render_plans_the_cut_at_its_speed(client, monkeypatch):
     import server
+    import threading
     started: dict = {}
+    ran = threading.Event()
 
     def fake_render(job, edl_path, out_path, meta):
         started["meta"] = meta
         server.RENDERS[job].finish("done")
+        ran.set()
 
     monkeypatch.setattr(server, "_render_job", fake_render)
     segs = _segments(client)
     segs[0]["speed"] = 0.5                     # 2 s of clip → 4 s of film
     r = client.post("/api/render", json={"segments": segs, "profile": "preview"})
     assert r.status_code == 200, r.text
+    # the job runs on its own thread, started before the answer: wait for it (test_markers'
+    # chapters test read its fake render's record before the thread ran, 1 run in 20)
+    assert ran.wait(10), "the render job's thread never ran"
     job = r.json()["job"]
     assert server.RENDERS[job]["planned_s"] == 6.0
     assert started["meta"]["planned_s"] == 6.0
