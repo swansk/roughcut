@@ -39,7 +39,7 @@ def stub_looker(server, monkeypatch, tmp_path, calls: list, *, sleep: float = 0.
         "    (out / f'{stem}.visual.json').write_text(json.dumps({\n"
         "        'clip': f'{stem}.MP4', 'moments': [], 'unusable': [], 'summary': '',\n"
         "        'projected_usd': 0.09, 'sheets_read': 1, 'sheets_total': 1,\n"
-        "        'frames_sampled': 6, 'forced': force,\n"
+        "        'frames_sampled': [i * interval for i in range(6)], 'forced': force,\n"
         "        'params': {'interval_s': interval}}))\n", encoding="utf-8")
 
     def cmd(only, force):
@@ -128,6 +128,20 @@ def test_the_report_says_what_ran_on_each_clip(indexed):
     assert s["looked_at"] == {"4": 3} and s["no_telemetry"] == 3
     assert rep["charged"] is False and rep["backend"] == "claude_cli"
     assert rep["intervals"] == [4.0, 3.0, 2.0, 1.0] and rep["running"] is False
+
+
+def test_a_look_sidecar_whose_frames_are_a_count_does_not_take_the_picks_down(indexed):
+    """A visual sidecar with `frames_sampled` as a count, not the list visual_pass.py
+    writes, is re-derived from its interval like an old one, and /api/picks still answers
+    (one bad sidecar took the whole bin's picks down: wave 17's gate)."""
+    c, server = indexed["c"], indexed["server"]
+    p = server.STATE["visual"] / "CLIP_B.visual.json"
+    d = json.loads(p.read_text(encoding="utf-8"))
+    d["frames_sampled"] = 6
+    p.write_text(json.dumps(d), encoding="utf-8")
+    got = server.looked_at("CLIP_B.MP4")
+    assert got["frames"] and got["frames"][:2] == [0.0, got["interval_s"]], got
+    assert c.get("/api/picks").status_code == 200
 
 
 def test_a_clip_is_retuned_and_looked_at_again_alone(indexed):

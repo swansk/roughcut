@@ -3108,7 +3108,10 @@ def looked_at(clip: str) -> dict | None:
         return None
     params = d.get("params") or {}
     interval = float(params.get("interval_s") or VISUAL_INTERVAL_S)
-    frames = [float(f) for f in (d.get("frames_sampled") or [])]
+    got = d.get("frames_sampled")
+    # (a sidecar whose frames are not a list — a count, say — is re-derived like an old one:
+    # one bad sidecar must not take /api/picks down for the whole bin)
+    frames = [float(f) for f in got] if isinstance(got, list) else []
     if not frames:
         dur = clip_duration(clip) or 0.0
         n = int(dur // interval) + 1 if dur else 0
@@ -12500,10 +12503,20 @@ def _sprite_frame(src: Path, t: float, original: bool) -> bytes:
         norm = source_normalise(src)
         if norm:
             vf = f"{norm},{vf}"
-    for ss in dict.fromkeys((t, max(0.0, t - 0.3), max(0.0, t - 1.0), 0.0)):
+    # The frame on screen at t, as the poster takes it (build_poster, wave 17 PLAY8): sought
+    # POSTER_LEAD_S early, every frame up to t + POSTER_TOL_S kept, the last of them first.
+    # `-ss t` alone gives the first frame from t on — a frame after the Program's and the
+    # export's whenever t falls between two frames. Then the old reads, for a read that
+    # keeps none (a head with no frame that early) or a file a hair short.
+    at = max(0.0, t - POSTER_LEAD_S)
+    reads = [["-ss", f"{at:.6f}", "-t", f"{POSTER_LEAD_S + 0.5:.3f}", "-i", str(src),
+              "-vf", f"trim=end={t + POSTER_TOL_S - at + 1e-6:.6f},{vf},reverse"]]
+    reads += [["-ss", f"{ss:.3f}", "-i", str(src), "-vf", vf]
+              for ss in dict.fromkeys((t, max(0.0, t - 0.3), max(0.0, t - 1.0), 0.0))]
+    for args in reads:
         r = subprocess.run(
-            ["ffmpeg", "-v", "error", "-nostdin", *pre, "-ss", f"{ss:.3f}", "-i", str(src),
-             "-map", "0:v:0", "-frames:v", "1", "-an", "-sn", "-dn", "-vf", vf,
+            ["ffmpeg", "-v", "error", "-nostdin", *pre, *args,
+             "-map", "0:v:0", "-frames:v", "1", "-an", "-sn", "-dn",
              "-f", "rawvideo", "-"], capture_output=True)
         if r.returncode == 0 and r.stdout:
             return r.stdout

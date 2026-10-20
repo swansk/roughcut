@@ -27,7 +27,6 @@ suite's synthetic bin (copied, so a replaced file can be faked):
 
 from __future__ import annotations
 
-import math
 import os
 import shutil
 import subprocess
@@ -167,18 +166,17 @@ def test_each_cell_is_the_clips_frame_at_its_time(bin_copy):
     w, h = sp["w"], sp["h"]
     grid = _rgb(c.get(sp["url"]).content, w * 5, h * 4)
     cell = lambda k: grid[(k // 5) * h:(k // 5 + 1) * h, (k % 5) * w:(k % 5 + 1) * w]  # noqa: E731
-    still = lambda t: _rgb(c.get(f"/media/poster/CLIP_A.v2.jpg?t={t:.2f}").content, 320, 180,  # noqa: E731
+    still = lambda t: _rgb(c.get(f"/media/poster/CLIP_A.v2.jpg?t={t:.4f}").content, 320, 180,  # noqa: E731
                            scale=(w, h))
-    # a still's time to the hundredth below (the poster route's 2 decimals: 5.958 rounded
-    # up to 5.96 is past the last frame, and that still is the clip's first frame)
-    at = lambda t: math.floor(t * 100) / 100  # noqa: E731
+    # a still at the cell's own time (the poster route keeps 4 places since wave 17 PLAY8, and
+    # both take the frame on screen at t: the one the Program and the export show)
     diffs = []
     for k in (0, 5, 9, 14, 19):
         t = sp["times"][k]
-        same = float(np.abs(cell(k) - still(at(t))).mean())
-        other = float(np.abs(cell(k) - still(at(sp["times"][(k + 10) % 20]))).mean())
+        same = float(np.abs(cell(k) - still(t)).mean())
+        other = float(np.abs(cell(k) - still(sp["times"][(k + 10) % 20])).mean())
         diffs.append((k, round(same, 1), round(other, 1)))
-        assert same < 10.0 and other > 2.0 * same, diffs
+        assert same < 5.0 and other > 4.0 * same, diffs   # a frame off reads 7-10
     # and no two of them are the same picture (the scrub moves through the clip)
     print("cell vs its still / vs a still 3 s away:", diffs)
 
