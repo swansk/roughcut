@@ -641,9 +641,14 @@
   /* …and what it is never placed over at all, wherever it ends up (verdict 12, punch 8: step
    * 5's callout covered the Assistant's Accept, "ccept", and step 1's the Source's
    * "preparing preview…"): the proposal's and the AI review's Accept / Discard, and the
-   * monitors' status lines. */
+   * monitors' status lines. Verdict 13, punch 8: and the AI's own line (aiprompt.js), which
+   * step 5's callout, under the prompt it points at, covered in its row under the Timeline's
+   * header ("2 changes ready · Review", the Review unclickable): that row, the line and its
+   * Review / Show, wherever the line is. `watchAI` re-places the callout as they come and go. */
+  const AI_LINE = ['#aiUnder', '[data-testid="ai-status"]', '[data-testid="ai-result-open"]'];
   const NEVER_COVER = ['#acceptProposal', '#acceptAll', '#rejectProposal', '#playProposal',
-    '[data-testid="ai-accept-all"]', '[data-testid="ai-reject-all"]', '.monWait span', '#screenMsg'];
+    '[data-testid="ai-accept-all"]', '[data-testid="ai-reject-all"]', '.monWait span', '#screenMsg',
+    ...AI_LINE];
   const DOCK_MIN_W = 200;                 // px: narrowest the callout gets beside a dialog
 
   /* The modal dialog on top (Import, Export…), if one is up. A modal is in the top layer,
@@ -811,6 +816,23 @@
     place();
   }
 
+  /* The AI's line appears, changes or moves (its row under the header shown or hidden, the
+   * prompt moved to its own row, an answer landing): the callout is placed again on the
+   * next frame, not on the tick's next turn, so it is never left over the line. */
+  function watchAI() {
+    const els = [$('#aiUnder'), $('#aiRow'), $('[data-testid="ai-status"]')].filter(Boolean);
+    if (!els.length || !('MutationObserver' in window)) return null;
+    let queued = false;
+    const again = () => {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(() => { queued = false; if (T.root) place(); });
+    };
+    const mo = new MutationObserver(again);
+    els.forEach((el) => mo.observe(el, { attributes: true, attributeFilter: ['hidden'], childList: true, subtree: true }));
+    return mo;
+  }
+
   function go(i) {
     if (!T.steps) return;
     if (i >= T.steps.length) { stop('done'); return; }
@@ -850,11 +872,13 @@
     window.addEventListener('keyup', onKey, true);
     window.addEventListener('resize', place);
     T.tick = setInterval(tick, 120);
+    T.aiWatch = watchAI();
   }
 
   function stop(how) {
     if (how) remember(how);
     clearInterval(T.tick);
+    if (T.aiWatch) { T.aiWatch.disconnect(); T.aiWatch = null; }
     window.removeEventListener('keyup', onKey, true);
     window.removeEventListener('resize', place);
     if (T.root) T.root.remove();
