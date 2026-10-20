@@ -54,7 +54,9 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
   recorded verbatim: what indexing ran and how to re-run / tune it is unclear; the old "pass" screens reachable from the
   top are odd. His answers: an **Index panel** in the editor; **fold in, then remove** `/open` and `/floor`. Bars logged.
   **Wave 17** (judge/WAVE17.md) from `af20bf8`: INDEXPANEL, FOLDIN. Judge 13 still running on `b12b979`. **Merges into the
-  redesign worktree are held while Karl may be using 8766** (it serves this worktree's static files live).
+  redesign worktree are held while Karl may be using 8766** (it serves this worktree's static files live). Karl, same
+  evening: "I'm done looking at the 8766 preview for now; go ahead and merge" -> merges resume. Next time he wants to look,
+  restart 8766 on the judged rev first.
 - 2026-10-19 ~20:10 (box clock): **wave 16 fully merged** (AIHONEST `f508f77`, MARKERS `a14c1fe`, INOUT `d363ccd`, SRVBUDGET2
   `1f426e8`, VFXPLAY `fdf8ed8`, LAYOUT2 `270651b` + lead marker-dialog focus fix, FRAMEACC `7b53414`, PERF7 `3b37b53`).
   **Lead full gate on `3b37b53`: RED on 2 broken** = the journey tool's one-accept mutant (stale target text: fixed next
