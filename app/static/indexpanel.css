@@ -79,3 +79,9 @@ table.ixt tr.empty td { padding: 8px; height: auto; }
 .ix-foot .ix-run { background: #2b4f78; border-color: #3a6698; color: #fff; }
 .ix-foot .ix-run:hover { background: #335c8b; }
 .ix-foot .ix-stop[hidden] { display: none; }
+
+/* a link that opens this panel, in another module's words: the walk-through's first-pass
+   step (tour.js, verdict 14 punch 6) */
+button.ix-open-link { display: inline; height: auto; padding: 0; border: 0; background: transparent;
+                      color: var(--accent, #4a9df8); font: inherit; line-height: inherit; cursor: pointer; }
+button.ix-open-link:hover { background: transparent; text-decoration: underline; }

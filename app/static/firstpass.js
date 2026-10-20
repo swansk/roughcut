@@ -286,9 +286,16 @@
     const ran = live && live.steps && live.steps[st.key];
     const state = ran ? ran.state : (st.needed === false ? 'skip' : 'todo');
     const mark = { done: '✓', skipped: '✓', running: '…', failed: '!', cancelled: '–' }[state] || '';
+    // the Index step says where its account is (verdict 14, punch 6): each clip's stages,
+    // when, at what interval and cost, re-run or re-tuned, in the Index panel
+    const ix = st.key === 'index'
+      ? ' <span class="fp-ixlink">See <button type="button" class="fp-link" data-fp="index"'
+        + ' data-testid="firstpass-index-link" title="The Index panel: what was heard and looked at on each'
+        + ' clip, when, how often and at what cost — look again or re-tune a clip there">each clip in the'
+        + ' Index panel</button>.</span>' : '';
     return `<li class="fp-step is-${esc(state)}" data-step="${esc(st.key)}">`
       + `<span class="fp-sname">${mark ? `<b>${mark}</b> ` : ''}${esc(st.name)}</span>`
-      + `<span class="fp-swill">${esc(st.will)}</span>`
+      + `<span class="fp-swill">${esc(st.will)}${ix}</span>`
       + `<span class="fp-scost" title="${esc(cost.hover || '')}">${esc(cost.words || '')}</span></li>`;
   }
 
@@ -392,6 +399,7 @@
     else if (what === 'run') run();
     else if (what === 'stop') cancel();
     else if (what === 'show') showResult(FP.s && FP.s.proposal && FP.s.proposal.job, true);
+    else if (what === 'index') openIndex();
     else if (what === 'keepmine') { FP.keepMine = !!t.checked; paintPanel(); }
   }
 
@@ -409,6 +417,13 @@
     paintPanel();
   }
   function toggle() { if (FP.open) close(); else open(); }
+  /* The Index step's link: the panel closes (it drops over the Program) and the Index
+   * panel opens in the Project group (dock.js `rcOpenIndex`, indexpanel.js `rcIndex`). */
+  function openIndex() {
+    close();
+    if (typeof window.rcOpenIndex === 'function') window.rcOpenIndex();
+    else if (window.rcIndex && typeof window.rcIndex.open === 'function') window.rcIndex.open();
+  }
 
   /* ------------------------------------------------------------ actions */
 

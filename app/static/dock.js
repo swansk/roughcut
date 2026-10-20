@@ -359,6 +359,34 @@
     return null;
   }
   window.rcOpenIndex = openIndex;
+  /* The clips of the shots selected in the Timeline (a generated clip has no index), for
+   * the AI menu's "Look again / re-tune the index…": the panel opens on them. */
+  function selectedClips() {
+    const T = window.tl;
+    const ids = T && T.state && T.state.sel ? [...T.state.sel] : [];
+    const clips = ids.map((id) => (typeof T.byId === 'function' ? T.byId(id) : null))
+      .filter(Boolean).map((sg) => sg.clip).filter((c) => c && !/^gen_/.test(c));
+    return [...new Set(clips)];
+  }
+  /* The AI menu's index item (verdict 14, punch 6: a look is a model call, and the AI menu
+   * lists every AI action, but the Index panel's look and close look were not in it). It
+   * opens the Index panel, on the selected shots' clips when there are any; the panel's
+   * Run says what it replaces and its price before anything runs (indexpanel.js). The item
+   * is added here so the menu's markup keeps one owner per wave. */
+  const AI_INDEX_LABEL = 'Look again / re-tune the index…';
+  function addIndexItem() {
+    const drop = $('#menubar .menu[data-menu="ai"] .mdrop');
+    if (!drop || drop.querySelector('[data-cmd="ai:index"]')) return;
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.dataset.cmd = 'ai:index';
+    b.dataset.testid = 'menu-ai-index';
+    b.textContent = AI_INDEX_LABEL;
+    b.title = 'The Index panel: what was heard and looked at on each clip, when, how often and at'
+      + ' what cost; look again or re-tune a clip there, the price shown before Run';
+    const after = drop.querySelector('[data-cmd="ai:deep"]');
+    if (after) after.after(b); else drop.insertBefore(b, drop.querySelector('hr'));
+  }
   document.addEventListener('click', (e) => {
     const b = e.target.closest && e.target.closest('[data-rc-index]');
     if (!b) return;
@@ -371,6 +399,8 @@
     // File › Index… (was "Footage and index…", which went to /open); the pass's review is
     // Selects now, so "Review the pass…" is gone (wave 17 FOLDIN)
     index: () => openIndex(),
+    // AI › Look again / re-tune the index…: the Index panel, on the selected shots' clips
+    'ai:index': () => { const c = selectedClips(); return openIndex(c.length ? c : undefined); },
     projsettings: () => { if (window.rcProjectSettings) window.rcProjectSettings.open(); },
     // Window › Events: the index's journal, as /open showed it behind its how line
     events: () => { if (window.rcEvents) window.rcEvents.open(); },
@@ -402,6 +432,7 @@
   function initMenus() {
     const bar = $('#menubar');
     if (!bar) return;
+    addIndexItem();
     bar.addEventListener('click', (e) => {
       const top = e.target.closest('.mtop');
       if (top) {

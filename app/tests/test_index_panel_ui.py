@@ -281,3 +281,121 @@ def test_a_run_is_stopped_from_the_panel(page, live):
     assert json.loads((server.STATE["visual"] / "CLIP_A.visual.json").read_text())["params"]["interval_s"] == 4.0
     jobs = httpx.get(live["url"] + "/api/jobs", timeout=20).json()["jobs"]
     assert not any(x["kind"] == "index" and x["state"] == "running" for x in jobs)
+
+
+# ------------------------------------------------------------------ taught and tied in (wave 18)
+
+CARD_JS = """() => { const c = document.querySelector('[data-testid="ai-hover"]');
+  if (!c || c.hidden) return null;
+  return {for: c.dataset.for, name: c.querySelector('.hc-name').textContent,
+          what: c.querySelector('.hc-what').textContent,
+          cost: c.querySelector('[data-testid="ai-hover-cost"]').textContent,
+          change: c.querySelector('[data-testid="ai-hover-change"]').textContent}; }"""
+
+
+def _hover_card(pg, sel):
+    pg.mouse.move(2, 890)
+    pg.wait_for_timeout(450)                           # past the warm-up window
+    pg.locator(sel).hover(force=True)
+    pg.wait_for_function("(() => { const c = document.querySelector('[data-testid=ai-hover]');"
+                         " return c && !c.hidden; })()", timeout=3000)
+    return pg.evaluate(CARD_JS)
+
+
+def test_run_has_the_ai_hover_card_what_it_replaces_and_its_price(page, live):
+    """Verdict 14, punch 6: Run is a model call when it looks; it had a plain title. Its AI
+    hover card says what it runs, what it costs on this backend (free on the plan with the
+    API's estimate; the price itself on the API) and what it changes: the clip's looked-at
+    moments replaced, its picks re-ranked, its close looks kept from the old look."""
+    pg, server = page, live["server"]
+    pg.evaluate("rcIndex.open(['CLIP_B.MP4'])")
+    pg.wait_for_selector(PANEL, state="visible")
+    pg.wait_for_function("rcIndex.state().selection.join() === 'CLIP_B.MP4' && "
+                         "document.querySelectorAll('[data-testid=index-row]').length === 3")
+    pg.locator(WHAT).select_option("look")
+    pg.locator(IV).select_option("2")
+    want = httpx.post(live["url"] + "/api/index/price", timeout=20, json={
+        "clips": ["CLIP_B.MP4"], "stages": ["look"], "interval_s": 2}).json()["usd"]
+    pg.wait_for_function("(u) => { const p = document.querySelector('[data-testid=index-price]');"
+                         " return p.dataset.usd === String(u) && p.dataset.local === ''; }",
+                         arg=want, timeout=5000)
+    card = _hover_card(pg, RUN)
+    assert card["for"] == "index-rerun", card
+    assert card["name"] == "Look again — CLIP_B", card
+    assert "one frame every 2 s (10 sheets)" in card["what"], card
+    assert card["cost"] == f"free on your Claude plan — about ${want:.2f} estimated cost if using the API", card
+    assert card["change"].startswith("Replaces CLIP_B’s looked-at moments (the 4 s look → 2 s); its picks are"
+                                     " re-ranked; its close looks are kept from the old look"), card
+    assert "The cut does not change" in card["change"], card
+    # a free stage: no model call
+    pg.locator(WHAT).select_option("asr")
+    pg.wait_for_function("document.querySelector('[data-testid=index-price]').dataset.usd === '0'"
+                         " && document.querySelector('[data-testid=index-price]').dataset.local === ''",
+                         timeout=5000)
+    card = _hover_card(pg, RUN)
+    assert card["name"] == "Hear again — CLIP_B" and card["cost"] == "none — no model call", card
+    assert card["change"].startswith("Replaces CLIP_B’s transcript; its picks are re-ranked."), card
+    # on the API: the price itself, on the foot and in the card, before anything runs
+    live["monkeypatch"].setenv("ROUGHCUT_BACKEND", "anthropic_api")
+    pg.evaluate("rcIndex.refresh()")
+    pg.wait_for_function("rcIndex.state().selection.join() === 'CLIP_B.MP4'")
+    pg.locator(WHAT).select_option("look")
+    pg.locator(IV).select_option("2")
+    pg.wait_for_function("(u) => { const p = document.querySelector('[data-testid=index-price]');"
+                         " return p.dataset.usd === String(u) && p.dataset.local === '' && p.textContent.startsWith('~$'); }",
+                         arg=want, timeout=8000)
+    assert pg.locator(PRICE).inner_text() == f"~${want:.2f}"
+    card = _hover_card(pg, RUN)
+    assert card["cost"] == f"about ${want:.2f}, billed to the API key", card
+    assert live["calls"]["looks"] == [], "a hover runs nothing"
+
+
+def test_the_first_pass_panels_index_step_opens_the_index_panel(page, live):
+    """Verdict 14, punch 6: the first-pass panel's Index step did not lead to the panel that
+    shows it. It links "each clip in the Index panel": the first-pass panel closes and the
+    Index panel opens in the Project group."""
+    pg = page
+    pg.evaluate("dock.open('project')")
+    pg.evaluate("rcFirstPass.open()")
+    link = pg.locator('[data-testid="firstpass-index-link"]')
+    link.wait_for(state="visible", timeout=10000)
+    assert link.inner_text() == "each clip in the Index panel"
+    assert pg.locator('[data-testid="firstpass-panel"] li[data-step=index] [data-testid="firstpass-index-link"]').count() == 1
+    link.click()
+    pg.wait_for_selector(PANEL, state="visible", timeout=5000)
+    assert pg.evaluate("dock.current()") == "index"
+    assert pg.locator('[data-testid="firstpass-panel"]').is_hidden()
+    pg.wait_for_function("document.querySelectorAll('[data-testid=index-row]').length === 3", timeout=10000)
+
+
+def test_a_fresh_browsers_walk_through_points_at_the_index_tab(live, first_run_context):
+    """Verdict 14, punch 6: no step of the walk-through mentioned the Index panel (Karl's K4:
+    "not clear what indexing was run … or how to re run / tune that"). On a first visit the
+    first-pass step says where it is, and its link opens it with the walk-through still up;
+    the AI half's "one menu" step names the index's new look."""
+    with sync_playwright() as pw:
+        b = pw.chromium.launch()
+        ctx = first_run_context(b, viewport={"width": 1440, "height": 900})
+        pg = ctx.new_page()
+        errors: list[str] = []
+        pg.on("pageerror", lambda e: errors.append(str(e)))
+        pg.goto(live["url"] + "/")
+        pg.wait_for_selector('[data-testid="tour"]', timeout=20000)
+        pg.locator('[data-testid="tour-next"]').click()
+        pg.wait_for_function("document.querySelector('[data-testid=tour]').dataset.key === 'firstpass'")
+        body = pg.locator('[data-testid="tour"] .rt-body').inner_text()
+        assert "Index tab" in body and "what was heard and looked at on each clip" in body, body
+        assert "re-tune a clip" in body, body
+        pg.evaluate("dock.open('project')")
+        pg.locator('[data-testid="tour-index-link"]').click()
+        pg.wait_for_selector(PANEL, state="visible", timeout=5000)
+        assert pg.evaluate("dock.current()") == "index"
+        assert pg.evaluate("rcTour.active") is True and pg.locator('[data-testid="tour"]').is_visible()
+        pg.locator('[data-testid="tour-skip"]').click()
+        pg.evaluate("rcTour.start('ai')")
+        for _ in range(2):
+            pg.locator('[data-testid="tour-next"]').click()
+        pg.wait_for_function("document.querySelector('[data-testid=tour]').dataset.key === 'menu'")
+        assert "a new look at the index" in pg.locator('[data-testid="tour"] .rt-body').inner_text()
+        assert errors == [], errors
+        b.close()
