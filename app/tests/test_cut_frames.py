@@ -387,9 +387,12 @@ def _slow_plays(url: str, size: tuple[int, int], plays: int = 2) -> list[dict]:
         pg.goto(url)
         pg.wait_for_function("segs.length === 2 && player.vids.length === 3 && window.grade && grade.ready",
                              timeout=30000)
-        start = pg.evaluate("tl.filmStart(tl.idAt(1))") + SLOW_FROM_S
         for _ in range(plays):
             for _try in range(3):                 # a page still wiring its monitor can drop a cue
+                # (the slowed shot's film start, read once the timeline has it: 1.5 s here)
+                pg.wait_for_function("window.tl && tl.state && tl.state.segs.length === 2"
+                                     " && Number.isFinite(tl.filmStart(tl.idAt(1)))", timeout=15000)
+                start = pg.evaluate("tl.filmStart(tl.idAt(1))") + SLOW_FROM_S
                 pg.evaluate(f"tl.seek({start})")
                 try:
                     pg.wait_for_function("player.idx === 1 && liveVideo().readyState >= 2 && !liveVideo().seeking",

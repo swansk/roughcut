@@ -1280,6 +1280,7 @@ function release() {
     warmLog: [],             // {kinds, ms}: each build, as the worker reports it (a record)
     paceLog: [],             // a slowed shot's frames: {mt, ed, due} (paceDue; a record)
     cutPre: null,            // {v, f}: a plain cut's first picture, from app.js (cutFrame)
+    playAt: 0, playV: null,  // the live buffer's last `play`: when, which (paceDue)
   };
 
   function $(s) { return document.querySelector(s); }
@@ -1356,7 +1357,7 @@ function release() {
     const v = live();
     const adj = raw ? null : adjustNow();
     const mixGraded = mixDrawn();
-    if (!raw && (!G.ok || !G.enabled || !G.lut || (G.lut.identity && !adj && !mixGraded && !slowPlaying()))) return null;
+    if (!raw && (!G.ok || !G.enabled || !G.lut || (G.lut.identity && !adj && !mixGraded && !slowShot()))) return null;
     if (!G.ok || !v || v.readyState < 2) return null;
     const vw = v.videoWidth, vh = v.videoHeight;
     if (!vw || !vh) return null;
@@ -1417,6 +1418,8 @@ function release() {
     // 0-15 ms behind the frame on screen, a frame's number off by one
     try { frame = pre || new VideoFrame(j.v); }
     catch (e) { return; }                       // no frame to take yet: the next one
+    // (wave 18 PLAY9b) the frame up while it is parked, for the pacer's first frame (paceDue)
+    if (!j.playing) j.v.__gradeParkedMt = frame.timestamp / 1e6;
     let mix = null;
     if (j.mix) {
       try {
@@ -1479,7 +1482,7 @@ function release() {
       G.inflight = false;
       if (m.ok && G.showOnDraw) {
         G.showOnDraw = false;
-        if (G.ok && G.enabled && live() && (mixDrawn() || slowPlaying())) show(true);
+        if (G.ok && G.enabled && live() && (mixDrawn() || slowShot())) show(true);
       }
       if (m.ok) {
         G.draws++;
@@ -1761,10 +1764,10 @@ function release() {
     warmCut();
     const graded = !!(G.lut && (!G.lut.identity || adjustNow()));
     const mixGraded = mixDrawn();
-    const on = !!(G.ok && G.enabled && live() && (graded || ((mixGraded || slowPlaying()) && G.lut)));
+    const on = !!(G.ok && G.enabled && live() && (graded || ((mixGraded || slowShot()) && G.lut)));
     // An ungraded shot's dissolve turns the canvas on: its first mixed frame is drawn before
     // it shows, never the canvas's last picture of some other shot (fromWorker shows it). So does
-    // an ungraded slowed shot while it plays (slowPlaying: the canvas paces its frames).
+    // an ungraded slowed shot, played or parked (slowShot: the canvas paces its frames).
     if (on && !graded && G.worker && G.canvas && !G.canvas.classList.contains('on')) {
       G.showOnDraw = true;
       draw();
@@ -1851,12 +1854,16 @@ function release() {
    * any 60 Hz display must. */
   const PACE_BELOW = 0.99;          // a buffer slower than this is paced (the J/L shuttle included)
   const PACE_MARGIN = 2;            // display frames the clock starts after the first frame's own
-  /* A slowed shot playing in the worker's canvas: drawn by it even ungraded (through the identity
-   * table, as an ungraded dissolve is), since the canvas is what paces its frames; paused, the
-   * raw buffer shows its parked frame again. */
-  function slowPlaying() {
+  const PLAY_START_MS = 600;        // a run this soon after the live buffer's `play` is a play's start
+  /* A slowed shot in the worker's canvas: drawn by it even ungraded (through the identity table,
+   * as an ungraded dissolve is), since the canvas is what paces its frames; parked on it too
+   * (wave 18 PLAY9b), so a play starts with the canvas already the picture (no draw of the parked
+   * frame on `play`) and the pacer's margin never shows: with the raw buffer up until the play,
+   * the canvas went up on its first draw, the parked frame, and the first new frame came that
+   * margin (2 display frames) late after it. */
+  function slowShot() {
     const v = live();
-    return !!(G.worker && v && !v.paused && playerPlaying() && v.playbackRate < PACE_BELOW);
+    return !!(G.worker && v && v.playbackRate < PACE_BELOW);
   }
   function displayFrame() {
     try { return (typeof player === 'object' && player && player.slot) || 1000 / 60; } catch (e) { return 1000 / 60; }
@@ -1872,14 +1879,24 @@ function release() {
     const x = ((mt - p.m0) / rate) * 1000;
     const o = ed - x;                                       // this frame's display time, less its clock's
     if (p.L == null) {
-      // The run's first frame. The frame the buffer was parked on (a play's first callback is often
-      // that frame shown again): it is up already, so the margin costs nothing on screen. A new
-      // picture (a play whose clock started late, a cut into the shot): drawn when the buffer shows
-      // it, no later than before, and the clock has no margin until a later frame moves it (one
-      // hold at most)
-      const fd = typeof window.frameDur === 'function' ? Number(window.frameDur(v)) || 0 : 0;
-      const up = v.__gradeParkT != null && Math.abs(mt - v.__gradeParkT) < 0.5 * (fd || 1 / 60);
-      p.L = up ? o + PACE_MARGIN * V : o;
+      // The run's first frame. A play from a park (this buffer's `play`, or its first callback the
+      // parked frame shown again): the canvas shows the parked frame till then (slowShot; no redraw
+      // on `play`), so the margin is only the play's start that much later, never a hold. (wave 18
+      // PLAY9b) The parked frame is the one at or before the park's time, a frame before it when
+      // the time is a hair short of a frame's start (lane FRAME59's seqFrameAt parks on sequence
+      // frames, at 0.5x half a source frame apart): read as `now`'s time it missed by a frame, and
+      // a play whose first callback is the frame after the parked one (a second play from the same
+      // park: the parked frame is not shown again) had no margin, so the buffer's early-and-late
+      // frames of its first ~2 s held the canvas (test_cut_frames, 2 of 4 runs alone, 4 of 4 with
+      // FRAME59). A cut into the shot: no margin (its first frame on time, after the outgoing's
+      // last), until a later frame moves the clock (one hold at most).
+      const fd = (typeof window.frameDur === 'function' ? Number(window.frameDur(v)) || 0 : 0) || 1 / 30;
+      const pk = v.__gradeParkT;
+      // the frame the canvas drew parked (toWorker), else the one at or before the park's time
+      const parked = (v.__gradeParkedMt != null && Math.abs(mt - v.__gradeParkedMt) < 0.001)
+        || (pk != null && mt <= pk + 0.0005 && mt > pk - fd - 0.0005);
+      const played = G.playV === v && performance.now() - G.playAt < PLAY_START_MS;
+      p.L = parked || played ? o + PACE_MARGIN * V : o;
     } else if (o > p.L + V / 4) { p.L = o + V; p.lo = []; }   // later than the clock: the clock moves
     else if (o < p.L - (PACE_MARGIN + 1) * V + V / 4) {
       p.lo.push(o);
@@ -2325,7 +2342,7 @@ function release() {
           // playing in a visible tab, the frame callback draws every frame already: a
           // timeupdate draw on top of it was a second upload four times a second
           if (ev === 'timeupdate' && !v.paused && !document.hidden) return;
-          if (ev === 'play') follow();
+          if (ev === 'play') { follow(); G.playAt = performance.now(); G.playV = v; }
           // (wave 18 PLAY9) a slowed shot's play: the parked frame is up already, and its first
           // frame callback draws on the pacer's clock (paceDue); a redraw of the same picture here
           // came 70-100 ms before the shot's first new frame (its clock starts late at 0.5x)
