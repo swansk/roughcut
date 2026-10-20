@@ -481,7 +481,10 @@ def test_a_batch_hear_reports_each_clip_as_its_sidecar_lands(tmp_path, project, 
                 time.sleep(0.15)
             assert samples[-1] == (3, 3, 3), samples
             assert mid, ("no sample caught the batch half-heard", samples)
-            _end_jobs(server, model)
     finally:
+        # the pass and its index stopped and forgotten: a cancelled index job left in the
+        # registry shows (hidden) in the next file's header job row, before its own
+        _end_jobs(server, model)
         server.FIRSTPASS.clear()
+        server.INDEXES.clear()
         inference.set_backend(None)
