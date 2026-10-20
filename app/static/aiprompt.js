@@ -275,6 +275,7 @@
 
   let host = null, field = null, input = null, chip = null, status = null, statusHtml = '';
   let under = null;           // the row under the Timeline's header the status line moves to
+  let ownRow = null, home = null; // the prompt's own row under the header (`drop`); the header
 
   function mount() {
     host = document.getElementById('aiPrompt');
@@ -306,6 +307,20 @@
       under.hidden = true;
       head.after(under);
     }
+    // verdict 13, punch 5: a header too narrow for the panel's title beside the field at its
+    // least (Selects open on "Timeline: killington-neutral" at 1440) keeps the title alone,
+    // and the prompt has this row under it (dock.js layout decides: `drop`); the line goes
+    // beside the field there, or under it in #aiUnder, as it does in the header
+    home = head;
+    ownRow = document.getElementById('aiRow');
+    if (head && !ownRow) {
+      ownRow = document.createElement('div');
+      ownRow.id = 'aiRow';
+      ownRow.className = 'aip-under';
+      ownRow.dataset.testid = 'ai-row';
+      ownRow.hidden = true;
+      head.after(ownRow);
+    }
     fitLeast();
     paintTitle();
     field.addEventListener('mousedown', (e) => {
@@ -325,7 +340,11 @@
       });
       roomy.observe(field);
       roomy.observe(host);
-      if (head) new ResizeObserver(() => placeStatus()).observe(head);   // the line's room
+      if (head) {                                               // the line's room
+        const ro = new ResizeObserver(() => placeStatus());
+        ro.observe(head);
+        if (ownRow) ro.observe(ownRow);
+      }
     }
     paintScope();
     paintStatus();
@@ -376,17 +395,19 @@
     }, 0);
   }
 
-  /* The status line in the header when the header holds it whole beside the panel's title
-   * and the field at its least; else in its own row under the header (#aiUnder), still in
-   * the Timeline panel: the field never shrinks for it and nothing is laid over the ruler. */
+  /* The status line beside the field when the field's row (the header, or the prompt's own
+   * row under it) holds it whole there, the field at its least (in the header, beside the
+   * panel's title too); else in its own row under that (#aiUnder), still in the Timeline
+   * panel: the field never shrinks for it and nothing is laid over the ruler. */
   function placeStatus() {
     if (!status || !host || !field) return;
-    const head = host.closest('.ws-head');
+    const line = host.parentElement;               // the header, or #aiRow (`drop`)
+    const inHead = !!line && line === home;
     let below = false;
-    if (!status.hidden && statusHtml && head && under) {
-      const hcs = getComputedStyle(head), acs = getComputedStyle(host);
-      const room = head.clientWidth - px(hcs.paddingLeft) - px(hcs.paddingRight) - px(hcs.columnGap)
-        - titleWidth(head) - leastPad - px(acs.columnGap) - (least || fitLeast());
+    if (!status.hidden && statusHtml && under && (inHead || (line && line === ownRow))) {
+      const lcs = getComputedStyle(line), acs = getComputedStyle(host);
+      const room = line.clientWidth - px(lcs.paddingLeft) - px(lcs.paddingRight)
+        - (inHead ? px(lcs.columnGap) + titleWidth(line) : 0) - leastPad - px(acs.columnGap) - (least || fitLeast());
       // its own width, wherever it is (flex: none: its max-content)
       below = status.getBoundingClientRect().width > room + 0.5;
     }
@@ -396,6 +417,27 @@
       else host.insertBefore(status, field);
     }
     if (under && under.hidden === below) under.hidden = !below;
+  }
+
+  /* The prompt in the Timeline's header, or (`on`) in its own row under it: dock.js layout
+   * asks, from the Timeline's width against what its header needs to hold the panel's title
+   * and the field at its least whole (verdict 13, punch 5). A move keeps an ask being typed
+   * focused, its caret where it was. */
+  function drop(on) {
+    if (!host || !ownRow || !home) return false;
+    const want = on ? ownRow : home;
+    if (host.parentElement === want) return on;
+    const typing = document.activeElement === input;
+    const a = input.selectionStart, b = input.selectionEnd;
+    want.appendChild(host);
+    ownRow.hidden = !on;
+    if (typing) {
+      input.focus({ preventScroll: true });
+      try { input.setSelectionRange(a, b); } catch (e) { /* a type with no caret */ }
+    }
+    placeStatus();
+    paintScope();
+    return on;
   }
 
   /* The field's hover: what it does, what it costs, what it changes (dimension 16). */
@@ -422,7 +464,7 @@
 
   /* The chip's words whole, never cut with "…" (verdict 11, punch 8): the longest of its
    * forms that fits the chip's room — its max-width, and the most the field can take (its
-   * own max-width, or its row less the status line beside it) less what the field's other
+   * own max-width, or the row it is in less the status line beside it) less what the field's other
    * parts need (the input keeps its 160 px) — else its shortest ("Shot 5", "In/Out"). The
    * field is then at least wide enough for the words chosen (`--aip-need`): the chip never
    * shrinks under them (verdict 12, punch 8: "Sequ…"). Measured in the label's own font;
@@ -451,7 +493,10 @@
     const pad = px(fcs.paddingLeft) + px(fcs.paddingRight) + px(fcs.borderLeftWidth) + px(fcs.borderRightWidth);
     const row = host.clientWidth - px(hcs.paddingLeft) - px(hcs.paddingRight)
       - (beside ? status.getBoundingClientRect().width + px(hcs.columnGap) : 0);
-    const most = Math.min(px(fcs.maxWidth) || Infinity, Math.max(field.getBoundingClientRect().width, row));
+    // the row, not the field's own width: a field still at the words chosen for a wider row
+    // (`--aip-need`) would keep them there, wider than the row it is in now (verdict 13, punch
+    // 5: Selects opened, the Timeline at its header's least, "In/Out 0:01–0:03" stayed and cut)
+    const most = Math.min(px(fcs.maxWidth) || Infinity, Math.max(row, 0));
     let room = most - pad - gaps - others - fixed;
     if (Number.isFinite(max)) room = Math.min(room, max - fixed);
     chipMeasure = chipMeasure || document.createElement('canvas').getContext('2d');
@@ -1382,6 +1427,10 @@
     // the least width the prompt takes in the Timeline's header row (its padding and the field
     // at its least): dock.js keeps the Timeline wide enough for it and the panel's title
     least: () => (fitLeast() ? least + leastPad : 0),
+    // dock.js: the prompt in its own row under the header (true) or in the header (false);
+    // `dropped()` says where it is now
+    drop: (on) => drop(!!on),
+    dropped: () => !!(host && ownRow && host.parentElement === ownRow),
     state: () => ({ state: AI.state, job: AI.job, text: AI.text, scope: AI.scope, result: AI.result,
       error: AI.error }),
     stop,
