@@ -862,6 +862,93 @@ def test_a_hover_card_goes_when_its_button_is_clicked_and_stays_gone(live, bins,
     _done(pg)
 
 
+# Verdict 13, punch 8: with Selects open at 1440 and an ask answered ("2 changes ready ·
+# Review" in its row under the Timeline's header), step 5's callout sat under the prompt it
+# points at, over that line, and its Review could not be clicked. The AI's line, as boxes:
+# its row under the header (#aiUnder), the line itself and its Review / Show.
+AI_LINE_JS = """() => [...document.querySelectorAll('#aiUnder, [data-testid="ai-status"],'
+    + ' [data-testid="ai-result-open"]')]
+  .filter(e => e.getClientRects().length && getComputedStyle(e).display !== 'none' && !e.closest('[hidden]'))
+  .map(e => { const r = e.getBoundingClientRect();
+    return {id: e.id || e.dataset.testid, l: r.left, t: r.top, r: r.right, b: r.bottom}; })"""
+
+# what a click on the line's Show / Review reaches: the link ("open"), the answer it opened
+# (aiprompt.js's popover under the field: "pop"), else what lies over it
+OPEN_HIT_JS = """() => { const b = document.querySelector('[data-testid="ai-result-open"]');
+  if (!b) return null;
+  const r = b.getBoundingClientRect(), hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+  if (hit && (hit === b || b.contains(hit))) return 'open';
+  if (hit && hit.closest('.aip-pop')) return 'pop';
+  return hit ? (hit.id || hit.className || hit.tagName) : 'nothing'; }"""
+
+
+@pytest.mark.parametrize("size", [(1440, 900), (1280, 800), (1920, 1080)], ids=lambda s: f"{s[0]}x{s[1]}")
+def test_the_ask_steps_callout_never_covers_the_ais_line(live, bins, tmp_path, browser, size):
+    """Step 5 ("Ask the AI for an edit") up, Selects open beside the Timeline, an ask typed in
+    the prompt it points at and answered (scripted: no model call), first in words ("✓
+    Answered · Show"), then as two edits ("2 changes ready · Review", the review opening in
+    the Assistant): the callout lies over neither the line's row under the header
+    (`#aiUnder`), nor the line, nor its Show / Review, which a click still reaches, wherever
+    the line is (under the header at 1440, beside the field at 1280 and 1920)."""
+    _state(bins, tmp_path, "cut")
+    pg = _page(browser, live, size)
+    pg.wait_for_selector("#tl .blk", timeout=15000)
+    answers = []
+    pg.route("**/api/assist", lambda r: r.fulfill(status=200, content_type="application/json",
+                                                   body=json.dumps({"job": f"tour13{len(answers)}"}))
+             if r.request.method == "POST" else r.continue_())
+    pg.route("**/api/assist/tour13*", lambda r: r.fulfill(status=200, content_type="application/json",
+                                                         body=json.dumps(answers[-1])))
+    ids = pg.evaluate("tl.state.segs.map(s => s.id)")
+    pg.evaluate("dock.open('bin', {remember: false, focus: false})")
+    pg.wait_for_timeout(300)
+    pg.evaluate("rcTour.start()")
+    pg.wait_for_selector(TOUR, timeout=3000)
+    while pg.evaluate(STEP_JS)["key"] != "ask":
+        step = pg.evaluate(STEP_JS)["step"]
+        pg.locator('[data-testid="tour-next"]').click()
+        pg.wait_for_function(f"document.querySelector('{TOUR}').dataset.step !== '{step}'", timeout=3000)
+    assert pg.evaluate(STEP_JS)["step"] == "5"
+    ops = [{"op": "set", "id": ids[1], "prop": "temperature", "value": 12},
+           {"op": "set", "id": ids[1], "prop": "exposure", "value": 0.1}]
+    for ask, answer, words in (
+            ("what is this film about", {"status": "done", "kind": "answer", "text": "A greeting.",
+                                         "summary": "a greeting"}, "Show"),
+            ("warmer and a touch brighter on shot 2", {"status": "done", "kind": "ops", "ops": ops,
+                                                       "summary": "warmer, brighter"}, "Review")):
+        answers.append(answer)
+        pg.keyboard.press("Control+j")
+        pg.keyboard.press("Control+a")
+        pg.keyboard.type(ask)
+        pg.keyboard.press("Enter")
+        pg.wait_for_selector('[data-testid="ai-result-open"]', state="visible", timeout=5000)
+        for state in ("answered", "left"):
+            pg.wait_for_timeout(400)                          # the callout follows the line
+            info = pg.evaluate(STEP_JS)
+            assert info["key"] == "ask" and _on_screen(info["callout"], info["vw"], info["vh"]), info
+            assert not info["covered"], info
+            line = pg.evaluate(AI_LINE_JS)
+            assert {"ai-status", "ai-result-open"} <= {k["id"] for k in line}, line
+            if size[0] == 1440:
+                assert "aiUnder" in {k["id"] for k in line}, line   # the line has its own row here
+            for k in line:
+                assert not _overlap(info["callout"], k), (size, words, state, k, info["callout"])
+            assert pg.locator('[data-testid="ai-result-open"]').inner_text().strip() == words
+            # a click reaches the link; just answered in words, the answer Show shows is
+            # already open under the field (Esc closes it)
+            hit = pg.evaluate(OPEN_HIT_JS)
+            assert hit == "open" or (hit == "pop" and words == "Show" and state == "answered"), \
+                (size, words, state, hit, info["callout"])
+            pg.keyboard.press("Escape")                       # out of the prompt: the line stays
+    # Review reopens the review: the click reaches it
+    pg.locator('[data-testid="ai-result-open"]').click()
+    pg.wait_for_selector('[data-testid="ai-review"]', state="visible", timeout=5000)
+    assert pg.evaluate("rcTour.active")
+    pg.evaluate("rcActions.reject()")
+    pg.unroute_all(behavior="ignoreErrors")
+    _done(pg)
+
+
 # ---------------------------------------------------------------- the empty states
 
 

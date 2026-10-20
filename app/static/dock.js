@@ -164,6 +164,13 @@
   // The Project tab gives the width back. Verdict 12, punch 8: the Timeline it leaves is
   // never under what its own header row needs whole (`tlHeadNeed`: the panel's title and the
   // AI prompt at its least: the chip's words, a 160 px input), whichever is more.
+  // Verdict 13, punch 5: on Killington ("Timeline: killington-neutral") that need came to
+  // 472 px with 467 left, and Selects stayed 268 px, its names cut, no Media In or Reason.
+  // So, before Selects is refused its width: Effect Controls at its default width gives the
+  // Timeline what it lacks, up to what it has over its tabs whole (`tabsNeed`: 23 px at 1440,
+  // 365 → 342; nothing with two badges up); if that is not enough the AI prompt goes to its
+  // own row under the header (aiprompt.js `rcAI.drop`), whole at its least in any Timeline
+  // of SEL_TLW.
   const SELECTS_W = 592, SEL_TLW = 460;
   const SPLIT = 4;
   // The Assistant's full-height column (a waiting proposal's `ptall`, app.js; an AI review's
@@ -211,16 +218,27 @@
     // Controls holds its five tabs whole (at 1280 its 25.5 % read "Expo"); a width dragged
     // narrower scrolls the strip, as every group's does.
     const inspW = frac.insp === DEFAULTS.insp ? Math.max(frac.insp * a.W, tabsNeed('#pInspector')) : frac.insp * a.W;
-    const insp = Math.round(clamp(inspW, MIN.insp, a.W * 0.42));
-    const room = a.W - 2 * SPLIT - insp;
+    let insp = Math.round(clamp(inspW, MIN.insp, a.W * 0.42));
+    let room = a.W - 2 * SPLIT - insp;
     let proj = Math.round(clamp(frac.proj * a.W, MIN.proj, Math.min(a.W * 0.42, room - MIN.tlw)));
-    if (selectsOpen() && room - SELECTS_W >= Math.max(SEL_TLW, tlHeadNeed())) proj = Math.max(proj, SELECTS_W);
+    const head = tlHeadNeed();
+    if (selectsOpen() && proj < SELECTS_W && room - SELECTS_W >= SEL_TLW) {
+      // Selects' width: the Timeline left keeps its header whole, Effect Controls at its
+      // default giving down to its tabs whole for it; else the prompt takes its own row
+      const short = head - (room - SELECTS_W);
+      const give = frac.insp === DEFAULTS.insp ? insp - Math.max(MIN.insp, tabsNeed('#pInspector')) : 0;
+      if (short > 0 && short <= give) { insp -= short; room += short; }
+      proj = SELECTS_W;
+    }
     px = { proj, insp, src, top, prog: a.W - SPLIT - src, tl: a.H - SPLIT - top, tlw: room - proj };
     root.setProperty('--c-proj', `${proj}px`);
     root.setProperty('--c-insp', `${insp}px`);
     root.setProperty('--c-src', `${src}px`);
     root.setProperty('--r-top', `${top}px`);
     a.ws.classList.toggle('tallroom', src - insp - SPLIT >= SRC_TALL_MIN);
+    // the AI prompt in the header while the header holds it whole beside the panel's title,
+    // else in its own row under it (a Timeline narrowed by Selects or by a drag)
+    if (head && window.rcAI && typeof rcAI.drop === 'function') rcAI.drop(px.tlw < head);
   }
 
   function saveLayout() { store.set(LAYOUT_KEY, { ...frac, v: LAYOUT_V }); }
@@ -242,7 +260,8 @@
 
   /* The Timeline panel's least width for its header row whole: its borders and padding, its
    * title tab at its own width ("Timeline: <cut>", the label's hidden overflow counted) and
-   * the AI prompt at its least (aiprompt.js `rcAI.least()`; 0 before it has mounted). */
+   * the AI prompt at its least (aiprompt.js `rcAI.least()`; 0 before it has mounted). The
+   * same wherever the prompt is now: the title's own width is measured, not its room. */
   function tlHeadNeed() {
     const p = $('#pTimeline'), head = p && p.querySelector(':scope > .ws-head');
     if (!head || !window.rcAI || typeof rcAI.least !== 'function') return 0;
@@ -2293,8 +2312,9 @@
     const p = $('#progTitle .lbl'), t = $('#tlTitle .lbl');
     if (p) p.textContent = `Program${n}`;
     if (t) t.textContent = `Timeline${n}`;
-    // a longer title needs more of the row: the Selects width is weighed against it again
-    if (selectsOpen()) layout();
+    // a longer title needs more of the row: the Selects width and the prompt's place are
+    // weighed against it again
+    layout();
   }
 
   window.dock = {
