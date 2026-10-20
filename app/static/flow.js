@@ -144,9 +144,41 @@
     if (a.scrollWidth > a.clientWidth + 0.5 || el.scrollWidth > el.clientWidth + 0.5) set(true);
   }
 
+  /* A proposal answered on the board is no longer Next's (verdict 14, dimension 9: journey
+   * step 8 read "Next: Read the proposal and accept or discard it" beside "applied 4 of 5
+   * shots — undo with Ctrl+Z"). The server knows only once the cut and the answer are on
+   * disk — the save, then the answer, then a poll (app.js `flowSoon`, 1.2 s after the last
+   * render) — so the chip named the answered proposal for 1.5 s or more. app.js fires
+   * `rc:proposal-answered` the moment Accept or Discard is pressed: the chip lets go of that
+   * proposal at once and asks again every HOLD_POLL_MS until the server no longer names it
+   * (HOLD_MS at most: then the server's word stands, an answer that never landed included). */
+  const HOLD_MS = 10000, HOLD_POLL_MS = 400;
+  let held = null;                       // {ask, until}: the proposal answered on this page
+  function proposalOf(f) {
+    const n = f && f.next;
+    if (n && n.target && n.target.ask) return n.target.ask;
+    const cut = f && (f.stages || []).find((s) => s.key === 'cut');
+    const a = cut && cut.state === 'needs-you' && cut.needs && cut.needs.action;
+    return (a && a.target && a.target.ask) || null;
+  }
+  function heldBack(f) {
+    if (!held || !f) return f;
+    if (proposalOf(f) !== held.ask || Date.now() > held.until) { held = null; return f; }
+    const n = f.next;
+    return n && n.target && n.target.ask === held.ask ? { ...f, next: null } : f;
+  }
+  function onAnswered() {
+    const ask = proposalOf(last);
+    if (!ask) return;                    // Next named no proposal: nothing to let go of
+    held = { ask, until: Date.now() + HOLD_MS };
+    paint(last);
+    poll();
+  }
+
   function paint(f) {
     const el = mount();
     if (!el || !f) return;
+    f = heldBack(f);
     last = f;
     const yielded = passCovers(f);
     const key = JSON.stringify([f.next, yielded]);
@@ -376,7 +408,7 @@
       if (r.ok) f = await r.json();
     } catch (e) { /* server away: keep the last answer on screen */ }
     if (f) paint(f);
-    timer = setTimeout(poll, f && f.running ? FAST_MS : POLL_MS);
+    timer = setTimeout(poll, held ? HOLD_POLL_MS : f && f.running ? FAST_MS : POLL_MS);
   }
 
   function init() {
@@ -395,6 +427,7 @@
     });
     // the row's room changes with the window: whole or icon, again
     window.addEventListener('resize', soon);
+    window.addEventListener('rc:proposal-answered', onAnswered);
     poll();
   }
 

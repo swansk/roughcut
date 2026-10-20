@@ -5871,6 +5871,7 @@ function acceptProposal(everything) {
   $('#proposal').style.display = 'none';
   $('#lastAsk').style.display = 'none';
   if (window.dock) dock.badge('ask', 0);
+  proposalAnswered('accept');
   render();
   // Straight to disk (a 16-shot cut is not "in progress"), as ONE save: pushUndo's commit
   // runs on the microtask queued above and touches the 700 ms autosave; this microtask
@@ -5911,8 +5912,18 @@ function rejectProposal() {
   $('#proposal').style.display = 'none';
   $('#lastAsk').style.display = 'none';      // answered: not offered again
   if (window.dock) dock.badge('ask', 0);
+  proposalAnswered('discard');
   toast('discarded');
   answerProposal('discard');
+}
+
+/* The proposal is answered here and now: Next lets go of it at once (flow.js; verdict 14,
+ * journey step 8 read "Next: Read the proposal…" beside "applied 4 of 5 shots") rather
+ * than when the save, the answer and its poll have landed. */
+function proposalAnswered(answer) {
+  try {
+    window.dispatchEvent(new CustomEvent('rc:proposal-answered', { detail: { answer } }));
+  } catch (err) { /* old engine */ }
 }
 
 /* The answer, on the proposal's record (INTAKE M14): an Accept saves the cut, which
