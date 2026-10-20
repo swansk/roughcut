@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- FOR-KARL.md names the judged rev 799d8b8 with steps to try K4 (the previous commit's message claimed it; the file write had failed).
 - Loop state: verdict 14 rulings, the ledger finding, wave 18's six lanes (judge/WAVE18.md); FOR-KARL names 799d8b8 with K4 steps.
 - The model-call ledger stays inside the board's own `--work`: a board on any `--work` but the default (`~/work/app`) logs to `<work>/roughcut-ledger.jsonl` (its pass tools inherit it; `ROUGHCUT_LEDGER` still wins), and the startup line names the file. Verdict 14 found judge servers appending to Karl's `~/work/roughcut-ledger.jsonl` (section S). JUDGE.md's server line also sets `ROUGHCUT_LEDGER`. Verdict 14 committed.
 - Loop state: PLAY8b found no regression; the gate's two merge collisions fixed; gate GREEN on 799d8b8; judge 14 running.
