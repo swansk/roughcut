@@ -75,7 +75,9 @@ TRACKS = ("scale", "opacity", "rotate", "dx", "dy")
 LAYERS = ("tone", "noise", "click", "sweep")
 WAVES = ("sine", "square", "saw", "triangle")
 NOISES = ("white", "pink")
-STATUSES = ("proposed", "accepted", "removed")   # removed: out of the cut, kept for Restore
+# removed: out of the cut, kept for Restore; withdrawn: a proposal an AI design request's
+# Ctrl+Z set aside (hidden, files kept) so Ctrl+Shift+Z restores the same design, no call
+STATUSES = ("proposed", "accepted", "removed", "withdrawn")
 
 MAX_EVENTS = 24
 MAX_SHAPES = 24

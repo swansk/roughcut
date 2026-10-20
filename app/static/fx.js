@@ -418,7 +418,7 @@
     if (!ev) return;
     if (ev.kind === 'commit') {
       followUndo.undone.length = 0;
-      asks.undone.length = 0;
+      forget(asks.undone.splice(0));
       const x = followUndo.expect;
       if (x && ev.label === x.label) { followUndo.done.push(x); followUndo.expect = null; }
       return;
@@ -481,12 +481,18 @@
    * allows — and the accept is ONE undo entry with the requests in it: the batch's when the
    * answer changed the cut too, else one of their own (tl.mark, actions.js `applyOps`).
    * Ctrl+Z on that entry takes the request back: a design not asked for yet is not asked,
-   * one still being designed is discarded the moment it lands (its card never shows), one
-   * already a proposal is discarded now — and the toast says so. Ctrl+Shift+Z keeps one
-   * still being designed and asks again for each it discarded (one design call each, at
-   * the price on Design). Entries are found by label, newest first, as followUndo finds an
-   * accept's; a new edit empties the redo side. `rc:ai-designs` tells the AI prompt's line
-   * how they stand. */
+   * one still being designed is set aside the moment it lands (its card never shows), one
+   * already a proposal is set aside now — withdrawn: out of every list, its files kept
+   * (POST /api/fx/discard {withdraw}) — and the toast says so.
+   * Ctrl+Shift+Z is Premiere's redo (verdict 13, punch 6: "a redo that brings back a
+   * different edit is not Premiere's redo"): each design set aside comes back as the same
+   * proposal, the same fx id, with no model call (POST /api/fx/restore); one still being
+   * designed stays; only a design never made — taken back before it was asked for — asks
+   * the designer again: "free on your plan" on the subscription backend, and on the API its
+   * price in a confirm first, never run unasked (REDESIGN-GOAL section S, dimension 13).
+   * Entries are found by label, newest first, as followUndo finds an accept's; a new edit
+   * empties the redo side, and the designs set aside there go for good. `rc:ai-designs`
+   * tells the AI prompt's line how they stand. */
   const asks = { done: [], undone: [], byJob: new Map(), gone: new Set() };
   const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -501,10 +507,15 @@
     }
   }
 
+  /* An item's states: queued → asking → running → landed (a proposal), or failed; taken
+   * back: skipped (never asked), withdrawn (set aside on the server, restorable),
+   * discarded (gone for good). `ep` changes when a Ctrl+Z skips an ask not yet pressed, so
+   * that ask stops; `pressed` is set the moment Design is clicked (a call is on its way). */
   function request(label, items, opts = {}) {
-    const h = { label: String(label || ''), withdrawn: false,
+    const h = { label: String(label || ''), withdrawn: false, ep: 0, dead: false,
                 items: (items || []).map((x) => ({ shot: String(x.shot), note: String(x.note || ''),
-                                                   job: null, fx: null, state: 'queued', why: '' })) };
+                                                   job: null, fx: null, state: 'queued', why: '',
+                                                   ep: 0, pressed: false, pending: null })) };
     // followed only when the accept made its entry (an entry held open refuses tl.mark):
     // an unfollowed request must never be taken for another entry of the same name
     if (opts.undoable !== false) {
@@ -517,31 +528,38 @@
   function askState(h) {
     const n = (s) => h.items.filter((it) => s.includes(it.state)).length;
     return { label: h.label, total: h.items.length, designing: n(['queued', 'asking', 'running']),
-             ready: n(['landed']), failed: n(['failed']), discarded: n(['skipped', 'discarded']),
+             ready: n(['landed']), failed: n(['failed']), discarded: n(['skipped', 'withdrawn', 'discarded']),
              withdrawn: h.withdrawn };
   }
   function tellAsks(h) {
     window.dispatchEvent(new CustomEvent('rc:ai-designs', { detail: askState(h) }));
   }
 
+  const NOT_ASKED = { ok: false, op: 'design_effect', why: 'undone before it was asked' };
   async function pressOne(h, it) {
     if (!it) return { ok: false, op: 'design_effect', why: 'no such design' };
-    if (h.withdrawn) { it.state = 'skipped'; tellAsks(h); return { ok: false, op: 'design_effect', why: 'undone before it was asked' }; }
+    // one ask per design: the accept's own press and a redo's re-ask never both ask
+    if (it.state !== 'queued') {
+      return ['asking', 'running', 'landed'].includes(it.state) ? { ok: true, op: 'design_effect', job: it.job } : NOT_ASKED;
+    }
+    if (h.withdrawn) { it.state = 'skipped'; tellAsks(h); return NOT_ASKED; }
+    const ep = it.ep;
     it.state = 'asking';
+    it.pressed = false;
     let job;
     try {
-      job = await askDesigner(h, it);
+      job = await askDesigner(h, it, ep);
     } catch (err) {
+      if (it.ep !== ep) return NOT_ASKED;           // taken back meanwhile: the undo said so
       it.state = 'failed';
       it.why = err.message;
       tellAsks(h);
       throw err;
     }
-    if (!job) {
-      if (!h.withdrawn) return pressOne(h, it);        // undone and redone while it waited
-      it.state = 'skipped';
+    if (!job) {                                       // taken back before Design was pressed
+      if (it.ep === ep && it.state === 'asking') it.state = 'skipped';
       tellAsks(h);
-      return { ok: false, op: 'design_effect', why: 'undone before it was asked' };
+      return NOT_ASKED;
     }
     it.job = job;
     it.state = 'running';
@@ -553,19 +571,21 @@
   /* Designed Effects, as a person asks it: the shot selected, the tool open on it, the
    * note typed, Design pressed once it carries its price. Null when the request was taken
    * back before Design was pressed. */
-  async function askDesigner(h, it) {
+  async function askDesigner(h, it, ep) {
+    const back = () => h.withdrawn || it.ep !== ep;
     const t = TL();
     if (t && typeof t.select === 'function') t.select([it.shot], { source: 'api' });
     if (window.dock && typeof dock.open === 'function') dock.open('fx');
-    if (!await until(() => String(S.shot) === it.shot)) throw new Error('Designed Effects did not open on that shot');
+    if (!await until(() => back() || String(S.shot) === it.shot)) throw new Error('Designed Effects did not open on that shot');
     // one design at a time, as the button allows: the one before lands first
     const before = () => [...asks.byJob.entries()].some(([id, x]) => x.it.state === 'running' && x.it.job === id)
       || (S.busy && S.busy.fx_kind === 'design');
-    await until(() => h.withdrawn || !before(), 600000, 250);
-    if (h.withdrawn) return null;
+    await until(() => back() || !before(), 600000, 250);
+    if (back()) return null;
     if (String(S.shot) !== it.shot) {
       if (t && typeof t.select === 'function') t.select([it.shot], { source: 'api' });
-      if (!await until(() => String(S.shot) === it.shot)) throw new Error('Designed Effects did not open on that shot');
+      if (!await until(() => back() || String(S.shot) === it.shot)) throw new Error('Designed Effects did not open on that shot');
+      if (back()) return null;
     }
     S.note = it.note;
     S.designOpen = true;
@@ -573,13 +593,14 @@
     const box = await until(() => $('#fxNote'));
     if (box) { box.value = it.note; box.dispatchEvent(new Event('input', { bubbles: true })); }
     const go = await until(() => {
-      if (h.withdrawn) return 'back';
+      if (back()) return 'back';
       const b = $('#fxDesign');
       return b && !b.disabled ? b : null;
     }, 15000);
     if (go === 'back') return null;
     if (!go) throw new Error('Design has no price yet — the note is in Designed Effects, press Design there');
     const n = S.designs;
+    it.pressed = true;                                // from here a call is on its way
     go.click();
     const got = await until(() => (S.designs > n ? S.lastDesign : null), 20000);
     if (!got || !got.job) throw new Error(got && got.why ? got.why : 'the design did not start');
@@ -587,7 +608,8 @@
   }
 
   /* A requested design's job finished (pollJobs): a proposal now, or a failure — and,
-   * when its request was taken back meanwhile, discarded before its card is drawn. */
+   * when its request was taken back meanwhile, set aside before its card is drawn (gone
+   * for good when nothing can redo it any more). */
   function landed(a, j) {
     const { h, it } = a;
     if (it.job !== j.id) { asks.byJob.delete(j.id); return; }   // an earlier ask of this design
@@ -600,7 +622,7 @@
       it.state = 'landed';
       if (h.withdrawn) {
         if (it.fx) asks.gone.add(it.fx);
-        discardOne(it).then(() => refresh());
+        track(it, h.dead ? discardOne(it) : withdrawOne(it)).then(() => { refresh(); tellAsks(h); });
       }
     }
     tellAsks(h);
@@ -608,12 +630,21 @@
   // a design whose request was taken back: its landing is not announced (the undo said it)
   const quietJob = (id) => { const a = asks.byJob.get(id); return !!(a && (a.h.withdrawn || a.it.job !== id)); };
 
-  async function discardOne(it) {
+  // an item's call to the server in flight: an undo or a redo waits for it before acting
+  function track(it, p) {
+    const q = p.finally(() => { if (it.pending === q) it.pending = null; });
+    it.pending = q;
+    return q;
+  }
+  const settled = (h) => Promise.all(h.items.map((it) => it.pending).filter(Boolean));
+
+  /* Set aside, not deleted: Ctrl+Shift+Z brings back this very design (verdict 13, punch 6). */
+  async function withdrawOne(it) {
     if (!it.fx) { it.state = 'discarded'; return true; }
     asks.gone.add(it.fx);
     try {
-      await api('POST', '/api/fx/discard', { id: it.fx });
-      it.state = 'discarded';
+      await api('POST', '/api/fx/discard', { id: it.fx, withdraw: true });
+      it.state = 'withdrawn';
       return true;
     } catch (err) {
       asks.gone.delete(it.fx);                  // accepted meanwhile: it stays, and says so
@@ -622,48 +653,193 @@
     }
   }
 
+  /* The redo: the same proposal back in Designed Effects, no model call. False when there
+   * is nothing on disk to restore (deleted for good meanwhile): that one is asked again. */
+  async function restoreOne(it) {
+    const id = it.fx;
+    try {
+      await api('POST', '/api/fx/restore', { id });
+      it.state = 'landed';
+      return true;
+    } catch (err) {
+      it.state = 'discarded';
+      it.fx = null;
+      return false;
+    } finally {
+      asks.gone.delete(id);
+    }
+  }
+
+  /* Gone for good: a design set aside where no redo can reach it any more. */
+  async function discardOne(it) {
+    if (!it.fx) { it.state = 'discarded'; return true; }
+    asks.gone.add(it.fx);
+    try {
+      await api('POST', '/api/fx/discard', { id: it.fx });
+      it.state = 'discarded';
+      return true;
+    } catch (err) {
+      asks.gone.delete(it.fx);
+      it.why = err.message;
+      return false;
+    }
+  }
+
+  /* A new edit emptied the timeline's redo side: the requests there can never be redone,
+   * so what they set aside goes for good (one still being designed, the moment it lands). */
+  function forget(hs) {
+    for (const h of hs) {
+      h.dead = true;
+      settled(h).then(() => {
+        for (const it of h.items) if (it.state === 'withdrawn') track(it, discardOne(it));
+      });
+    }
+  }
+
   /* Ctrl+Z on the accept: the request taken back, said after the timeline's own
    * "undone: …" (which it would otherwise replace). */
   function withdraw(h) {
     h.withdrawn = true;
+    const ep = (h.ep += 1);
     const live = h.items.filter((it) => it.state !== 'failed');
-    const now = [];
     for (const it of h.items) {
-      if (it.state === 'queued') it.state = 'skipped';
-      else if (it.state === 'landed') now.push(discardOne(it));
-      // asking / running: not asked, or discarded the moment it lands (`landed`)
+      // not asked yet, or not pressed yet: never asked (the ask in progress stops)
+      if (it.state === 'queued' || (it.state === 'asking' && !it.pressed)) { it.state = 'skipped'; it.ep += 1; }
+      // pressed or running: set aside the moment it lands (`landed`)
     }
     const n = live.length;
     setTimeout(() => say(n ? `undone: ${h.label} — ${n === 1 ? 'the design is' : `the ${n} designs are`} discarded`
       : `undone: ${h.label}`, 5000), 0);
-    Promise.all(now).then((oks) => {
-      const kept = oks.filter((ok) => !ok).length;
-      if (kept) say(`${plural(kept, 'design')} could not be discarded (accepted already) — remove ${kept === 1 ? 'it' : 'them'} in Designed Effects`, 6000);
-      if (now.length) refresh();
-      tellAsks(h);
-    });
-    tellAsks(h);
-  }
-
-  /* Ctrl+Shift+Z on the accept: the request back — one still being designed stays, each
-   * one discarded is asked for again. */
-  function reinstate(h) {
-    h.withdrawn = false;
-    let n = 0;
-    for (const it of h.items) {
-      if (it.state === 'failed') continue;
-      n += 1;
-      if (it.state === 'skipped' || it.state === 'discarded') { it.state = 'queued'; it.job = null; it.fx = null; }
-      else if (it.state === 'landed' && it.fx) asks.gone.delete(it.fx);   // its discard failed: still there
-    }
-    setTimeout(() => say(`redone: ${h.label} — ${plural(n, 'effect')} being designed — review ${n === 1 ? 'it' : 'them'} in Designed Effects`, 5000), 0);
     tellAsks(h);
     (async () => {
-      for (const it of h.items) {
-        if (it.state !== 'queued') continue;
-        try { await pressOne(h, it); } catch (err) { say(err.message, 5000); }
-      }
+      await settled(h);                      // a redo's restores still in flight land first
+      if (h.ep !== ep) return;               // redone meanwhile
+      const now = h.items.filter((it) => it.state === 'landed').map((it) => track(it, withdrawOne(it)));
+      if (!now.length) return;
+      const oks = await Promise.all(now);
+      const kept = oks.filter((ok) => !ok).length;
+      if (kept) say(`${plural(kept, 'design')} could not be discarded (accepted already) — remove ${kept === 1 ? 'it' : 'them'} in Designed Effects`, 6000);
+      refresh();
+      tellAsks(h);
     })();
+  }
+
+  /* Ctrl+Shift+Z on the accept: the request back. */
+  function reinstate(h) {
+    h.withdrawn = false;
+    const ep = (h.ep += 1);
+    tellAsks(h);
+    redoAsks(h, ep).catch((err) => say(err.message, 5000));
+  }
+
+  async function redoAsks(h, ep) {
+    await settled(h);                        // the Ctrl+Z's set-asides still in flight land first
+    if (h.ep !== ep) return;                 // taken back again meanwhile
+    for (const it of h.items) if (it.state === 'landed' && it.fx) asks.gone.delete(it.fx);   // never set aside
+    // each design set aside: the same one back, no model call
+    const back = h.items.filter((it) => it.state === 'withdrawn' && it.fx);
+    const restored = (await Promise.all(back.map((it) => track(it, restoreOne(it))))).filter(Boolean).length;
+    if (h.ep !== ep) return;                 // taken back again: that Ctrl+Z sets them aside
+    // only a design never made asks the designer again, its price said first
+    const again = h.items.filter((it) => it.state === 'skipped' || it.state === 'discarded');
+    const kept = h.items.filter((it) => it.state === 'asking' || it.state === 'running').length;
+    let quote = null, asked = 0, declined = 0;
+    if (again.length) {
+      quote = await priceOf(again);
+      if (h.ep !== ep) return;
+      if (!quote) declined = again.length;
+      else if (rcCost.free(quote) || await confirmAsk(again.length, restored, quote)) asked = again.length;
+      else declined = again.length;
+      if (h.ep !== ep) return;
+    }
+    say(redoLine(h, { restored, kept, asked, declined, quote }), 6000);
+    if (restored) refresh();
+    tellAsks(h);
+    if (!asked) return;
+    for (const it of again) Object.assign(it, { state: 'queued', job: null, fx: null, pressed: false, why: '' });
+    tellAsks(h);
+    for (const it of again) {
+      if (h.ep !== ep) break;
+      try { await pressOne(h, it); } catch (err) { say(err.message, 5000); }
+    }
+  }
+
+  /* What the re-ask costs: Design's own price for each shot (the placing look included), and
+   * whether it bills (`charged`). Null when a price did not come: never asked unpriced. */
+  async function priceOf(items) {
+    try {
+      const ps = await Promise.all(items.map((it) => api('GET', `/api/fx/price?place=1&shot=${encodeURIComponent(it.shot)}`)));
+      if (!ps.every((p) => p && typeof p.usd === 'number')) return null;
+      return { ...ps[0], usd: ps.reduce((s, p) => s + p.usd, 0) };
+    } catch (err) {
+      return null;
+    }
+  }
+
+  function redoLine(h, r) {
+    const total = h.items.filter((it) => it.state !== 'failed').length;
+    const parts = [];
+    if (r.restored) {
+      parts.push(r.restored === total ? (total === 1 ? 'the design is back' : `the ${total} designs are back`)
+        : `${plural(r.restored, 'design')} back`);
+    }
+    if (r.kept) parts.push(`${plural(r.kept, 'effect')} being designed`);
+    if (r.asked) parts.push(`asks the designer again${r.asked === total ? '' : ` for ${r.asked}`} · ${rcCost.tag(r.quote.usd, r.quote)}`);
+    if (r.declined) parts.push(`${plural(r.declined, 'design')} not asked again${r.quote ? '' : ' (no price yet)'}`);
+    const shown = r.restored + r.kept + r.asked;
+    return `redone: ${h.label}${parts.length ? ` — ${parts.join(' · ')}` : ''}`
+      + (shown ? ` — review ${shown === 1 ? 'it' : 'them'} in Designed Effects` : '');
+  }
+
+  /* On a backend that bills, a redo that has to ask again says its price first and asks
+   * (REDESIGN-GOAL section S: on the API "a priced call is shown first"). A modal of the
+   * board's own (Effect Controls' confirm look), never window.confirm; Esc or "Don't ask"
+   * keeps the redo without the call. */
+  let askDlg = null;
+  function confirmAsk(n, restored, quote) {
+    if (!askDlg) {
+      askDlg = document.createElement('dialog');
+      askDlg.id = 'fxRedoAsk';
+      askDlg.className = 'ec-confirm';
+      askDlg.dataset.testid = 'redo-ask-confirm';
+      askDlg.setAttribute('aria-labelledby', 'fxRedoAskTitle');
+      askDlg.innerHTML = `
+        <form method="dialog" class="ecq">
+          <div class="ecq-head" id="fxRedoAskTitle">Redo asks the designer again</div>
+          <p class="ecq-body"><span class="ecq-msg"></span><span class="ecq-what"></span></p>
+          <div class="ecq-foot">
+            <button type="button" class="ecq-btn" data-ans="no">Don't ask</button>
+            <button type="button" class="ecq-btn primary" data-ans="ok" data-testid="redo-ask-ok"></button>
+          </div>
+        </form>`;
+      // keys typed in it stay in it (the board undoes, plays and steps from document)
+      askDlg.addEventListener('keydown', (e) => { if (e.key !== 'Escape') e.stopPropagation(); });
+      document.body.appendChild(askDlg);
+    }
+    const d = askDlg;
+    d.querySelector('.ecq-msg').textContent = `${n === 1 ? 'One effect was' : `${n} effects were`} taken back before`
+      + ` ${n === 1 ? 'its design' : 'their designs'} came back, so there is nothing to restore: the redo asks the designer`
+      + ` again — ${n === 1 ? 'one design call' : `${n} design calls`}, ${rcCost.note(quote.usd, quote)}.`;
+    d.querySelector('.ecq-what').textContent = restored
+      ? `${plural(restored, 'design')} came back as ${restored === 1 ? 'it was' : 'they were'}, with no call.` : '';
+    d.querySelector('[data-ans=ok]').textContent = `Ask · ${rcCost.tag(quote.usd, quote)}`;
+    return new Promise((resolve) => {
+      const done = (ok) => {
+        d.removeEventListener('click', onClick);
+        d.removeEventListener('cancel', onCancel);
+        if (d.open) d.close();
+        resolve(ok);
+      };
+      const onClick = (e) => {
+        const b = e.target.closest('[data-ans]');
+        if (b) { e.preventDefault(); done(b.dataset.ans === 'ok'); }
+      };
+      const onCancel = (e) => { e.preventDefault(); done(false); };
+      d.addEventListener('click', onClick);
+      d.addEventListener('cancel', onCancel);
+      d.showModal();
+      d.querySelector('[data-ans=ok]').focus();
+    });
   }
 
   function followAsks(ev) {

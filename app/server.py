@@ -11800,6 +11800,10 @@ def _fx_get(fx_id: str) -> dict:
     e = fx.load(fx_home(), fx_id)
     if e is None:
         raise HTTPException(404, f"no effect {fx_id}")
+    if e.get("status") == "withdrawn":
+        # an AI design request's Ctrl+Z set it aside for a redo: out of every list, so
+        # nothing revises, checks, nudges or accepts it until Ctrl+Shift+Z restores it
+        raise HTTPException(404, f"{e.get('name') or fx_id} was taken back (Ctrl+Z) — Ctrl+Shift+Z brings it back")
     return e
 
 
@@ -12340,6 +12344,8 @@ async def api_fx_accept(request: Request) -> JSONResponse:
     body = await request.json()
     fx_id = str(body.get("id") or "")
     e = fx.load(fx_home(), fx_id) or _fx_get(fx_id)
+    if e.get("status") == "withdrawn":
+        _fx_get(fx_id)                              # refused: taken back, waiting for a redo
     # What the board's Ctrl+Z of this accept takes back (POST /api/fx/undo): the record
     # as proposed and the EDL's effects as they were, before the re-keying. Every accept
     # keeps it (verdict 11, punch 2): one that only draws or sounds (a title, a vignette)
@@ -12495,10 +12501,18 @@ async def api_fx_revert(request: Request) -> JSONResponse:
 
 @app.post("/api/fx/restore")
 async def api_fx_restore(request: Request) -> JSONResponse:
-    """A removed effect back into the cut, as it was."""
+    """A removed effect back into the cut, as it was; a withdrawn design (an AI request's,
+    taken back by Ctrl+Z) back in Designed Effects as the same proposal — the redo of that
+    Ctrl+Z, with no model call (verdict 13, punch 6)."""
     body = await request.json()
     fx_id = str(body.get("id") or "")
     e = fx.load(fx_home(), fx_id)
+    if e is not None and e.get("status") == "withdrawn":
+        e["status"] = (e.pop("withdrawn", None) or {}).get("from") or "proposed"
+        fx.save(fx_home(), e)
+        if not e.get("verify"):
+            _fx_autoverify(fx_id)                   # its check stopped when it was taken back
+        return JSONResponse({"ok": True, "effect": _fx_urls(e, _fx_segments())})
     if e is None or e.get("status") != "removed":
         raise HTTPException(404, f"no removed effect {fx_id}")
     e["status"] = "accepted"
@@ -12521,12 +12535,24 @@ def api_fx_peaks(shot: str = "") -> JSONResponse:
 
 @app.post("/api/fx/discard")
 async def api_fx_discard(request: Request) -> JSONResponse:
+    """A proposal out of Designed Effects. `withdraw: true` is the board's Ctrl+Z of an AI
+    design request (fx.js `withdrawOne`): the proposal is set aside — kept on disk with its
+    files, status `withdrawn`, out of every list — so Ctrl+Shift+Z brings back the same
+    design with no model call (POST /api/fx/restore; verdict 13, punch 6). Without it, the
+    card's Discard: gone for good, files and all (a withdrawn one too, once nothing can
+    redo it)."""
     body = await request.json()
     fx_id = str(body.get("id") or "")
     e = fx.load(fx_home(), fx_id)
     if e is None:
         raise HTTPException(404, f"no proposal {fx_id}")
     current = next((x for x in read_edl().get("effects") or [] if x.get("id") == fx_id), None)
+    if body.get("withdraw") and current is None and e.get("status") in ("proposed", "withdrawn"):
+        if e.get("status") == "proposed":
+            e["status"] = "withdrawn"
+            e["withdrawn"] = {"from": "proposed", "at": datetime.now().isoformat(timespec="seconds")}
+            fx.save(fx_home(), e)
+        return JSONResponse({"ok": True, "withdrawn": True})
     if current is not None and e.get("status") == "proposed":
         fx.save(fx_home(), current)                 # a revision dropped: the accepted one stays
         await asyncio.to_thread(_fx_sound, current)
