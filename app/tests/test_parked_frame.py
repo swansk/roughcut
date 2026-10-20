@@ -254,4 +254,4 @@ def test_the_parked_program_frame_is_the_exports(live, proj, rate):
     R = _rate(rate)
     for k, j, i, v, p, c, s in rows:
         assert c == pytest.approx(round(float(k / R), 4) + j / float(R), abs=1e-6), (k, j, c)
-        assert "t=" in s and len(s.split("t=")[-1].split(".")[-1]) == 4, s
+        assert float(s.split("t=")[-1]) == round(c, 4), (s, c)         # the still at that time to 4 places

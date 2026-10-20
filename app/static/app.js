@@ -406,13 +406,17 @@ function boundaryWarning(seg) {
 const posterAt = new WeakMap();
 let posterTimer = 0;
 
+/* (wave 17 PLAY8) A still's time in its URL: to the edit grid's 4 places, the server's (it cuts
+ * the frame at or before it + 1 ms, the export's), its trailing zeros past the second place
+ * dropped, so a time on the 0.01 s grid is the URL every other still of it asks for (1.00, not
+ * 1.0000): one request for one frame. */
+const posterT = (t) => Math.max(0, Number(t) || 0).toFixed(4).replace(/(\.\d\d\d*?)0+$/, '$1');
+
 function posterSrc(seg) {
   if (!posterAt.has(seg)) posterAt.set(seg, seg.in);
   const base = (P.clips[seg.clip] || {}).poster;
   if (!base) return '';
-  // to 4 places, as the rest still asks (paintRestStill): the server cuts the frame at or
-  // before it + 1 ms, the export's (wave 17 PLAY8)
-  return `${base}${base.includes('?') ? '&' : '?'}t=${Math.max(0, posterAt.get(seg)).toFixed(4)}`;
+  return `${base}${base.includes('?') ? '&' : '?'}t=${posterT(posterAt.get(seg))}`;
 }
 
 /* Catch the still up to the in-point, once the trimming stops — the timeline's rule and
@@ -3260,10 +3264,10 @@ function paintRestStill() {
   const base = seg && (P.clips[seg.clip] || {}).poster;
   if (live || !base) { img.hidden = true; return; }
   const sep = base.includes('?') ? '&' : '?';
-  // the playhead's exact clip time to 4 places (the edit grid's): the server cuts the frame
-  // at or before it + 1 ms, the export's and the parked buffer's (wave 17 PLAY8; at 0.01 s,
-  // cut with the first frame from that time on, it was the frame after as often as not)
-  const t = Math.max(0, at.clipT).toFixed(4);
+  // the playhead's exact clip time to 4 places (posterT): the server cuts the frame at or
+  // before it + 1 ms, the export's and the parked buffer's (wave 17 PLAY8; at 0.01 s, cut
+  // with the first frame from that time on, it was the frame after as often as not)
+  const t = posterT(at.clipT);
   const src = `${base}${sep}t=${t}`;
   img.hidden = false;
   if (img.getAttribute('src') === src || img._want === src) return;
