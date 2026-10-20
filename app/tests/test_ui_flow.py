@@ -1738,8 +1738,9 @@ def test_an_empty_bin_offers_the_footage_and_says_where_to_keep_things(page):
 
 def test_nothing_left_that_was_seen_links_to_where_more_is_looked_at(page):
     """ROUGHCUT-GOAL.md dimension 8: the seen tab's empty state pointed at "the Project
-    panel", which INTAKE M16 removed — words naming a place that is not there. It links
-    to the footage screen, where the look's granularity and the index are."""
+    panel", which INTAKE M16 removed — words naming a place that is not there. It offers
+    the Index panel, where the look's granularity and the index are (it linked to the
+    footage screen, /open, until wave 17 FOLDIN folded that into the editor)."""
     # something was looked at (the tab shows), nothing notable is left to offer
     page.evaluate("P.events = []; Object.values(P.clips).forEach(c => {"
                   " c.visual = {moments: [{start: 0, end: 1, what: 'a sky', kind: 'scenery',"
@@ -1747,7 +1748,10 @@ def test_nothing_left_that_was_seen_links_to_where_more_is_looked_at(page):
     box = page.locator("#library")
     assert "nothing left that was seen" in box.inner_text()
     assert "Project panel" not in box.inner_text()
-    assert box.locator("a[href='/open']").count() == 1
+    assert box.locator("a[href]").count() == 0
+    page.evaluate("window.rcIndex = { open: () => { window.__indexOpened = 1; } }")
+    box.locator("button[data-rc-index]").click()
+    assert page.evaluate("window.__indexOpened") == 1 and page.evaluate("location.pathname") == "/"
 
 
 def test_make_the_film_works_before_the_renders_have_loaded(page):
@@ -2175,7 +2179,7 @@ def test_next_lands_on_a_waiting_first_cut_proposal(page, live_server, project):
     path = _waiting_ask("i16first", [{"clip": "CLIP_A.MP4", "in": 0.5, "out": 2.0, "why": "w"},
                                      {"clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0, "why": "w"}])
     try:
-        page.goto(live_server + "/open")
+        page.goto(live_server + "/")
         nxt = _next_with(page, "ask")
         assert nxt["stage"] == "cut" and nxt["target"] == {"ask": "i16first"}, nxt
         page.locator("#flowNext").click()
@@ -2187,10 +2191,11 @@ def test_next_lands_on_a_waiting_first_cut_proposal(page, live_server, project):
         path.unlink(missing_ok=True)
 
 
-def test_next_lands_on_a_waiting_revision_proposal_in_place_and_from_open(page, live_server):
+def test_next_lands_on_a_waiting_revision_proposal_in_place_and_from_its_href(page, live_server):
     """I16.0a: Next's `{ask}` target opens the waiting proposal — clicked on the board
-    itself (in place, no reload) and from /open (through `/#tool=ask&ask=<job>`). Only
-    the href string was tested; the landing that shows the proposal was not."""
+    itself (in place, no reload) and arrived at by its href (`/#tool=ask&ask=<job>`, a
+    bookmark; it was /open's chip until wave 17 FOLDIN made the editor the one screen).
+    Only the href string was tested; the landing that shows the proposal was not."""
     path = _waiting_ask("i16rev", [{"clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0, "why": "w"}])
     try:
         page.reload()
@@ -2204,9 +2209,8 @@ def test_next_lands_on_a_waiting_revision_proposal_in_place_and_from_open(page, 
         assert page.evaluate("location.hash") == "#tool=ask"
         assert "1 shots" in page.locator("#proposalDiff").inner_text()
 
-        page.goto(live_server + "/open")
-        _next_with(page, "ask")
-        page.locator("#flowNext").click()
+        page.goto("about:blank")
+        page.goto(live_server + nxt["href"])
         page.wait_for_selector("#tl .blk")
         page.wait_for_selector("#proposal", state="visible", timeout=12000)
         assert "ask=" not in page.evaluate("location.hash")

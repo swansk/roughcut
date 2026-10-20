@@ -727,3 +727,205 @@ def test_window_events_lists_the_index_journal_newest_first(browser, live, fold)
     finally:
         pg.close()
         server.journal_path().unlink(missing_ok=True)
+
+
+# ---------------------------------------------------------- nothing leaves the editor
+
+# Only what the crawl expects may write: a menu item may open a dialog, a panel or a
+# prompt, never run a job. Everything else that is not a read is aborted.
+def _reads_only(route):
+    if route.request.method in ("GET", "HEAD"):
+        return route.continue_()
+    return route.abort()
+
+
+NAV_JS = """() => ({path: location.pathname, href: location.href})"""
+
+LINKS_JS = """() => [...document.querySelectorAll('a[href]')].map((a) => ({
+    href: a.getAttribute('href'), abs: a.href, download: a.hasAttribute('download'),
+    text: (a.textContent || '').trim().slice(0, 40), id: a.id}))"""
+
+
+def _no_way_out(pg, where: str) -> None:
+    """Every link on the page stays on `/` (a hash, or a download of the film)."""
+    for a in pg.evaluate(LINKS_JS):
+        href = a["href"] or ""
+        if href.startswith("#") or a["download"] or href.startswith("blob:") or "/media/" in href:
+            continue
+        assert re.fullmatch(r"https?://[^/]+/(#.*)?", a["abs"]), (where, a)
+
+
+def _answer(data):
+    """A route handler that answers with `data` (one argument: Playwright passes the
+    request too to a handler that takes two)."""
+    body = json.dumps(data)
+
+    def handler(route):
+        route.fulfill(status=200, content_type="application/json", body=body)
+    return handler
+
+
+def _reset(pg) -> None:
+    pg.keyboard.press("Escape")
+    pg.evaluate("""() => {
+        document.querySelectorAll('dialog[open]').forEach((d) => d.close());
+        if (window.switcher) switcher.close();
+        if (window.rcTour && rcTour.active) rcTour.stop();
+        if (window.rcPassReview) rcPassReview.closeMenu();
+        document.querySelectorAll('#menubar .menu.open').forEach((m) => m.classList.remove('open'));
+    }""")
+    pg.wait_for_timeout(150)
+
+
+def test_no_menu_item_chip_place_tour_step_or_link_leaves_the_editor(browser, live, fold):
+    """Verdict 13, punch 2 (and K4 b): File › Footage and index… and Review the pass… went
+    to /open and /floor, as did the Next chip, the switcher's place rows and Selects'
+    links. Crawled now: every menu item, the Next chip at each target it can name, every
+    place row, every walk-through step's Show me, and every link in every panel: the page
+    never leaves `/`."""
+    _fresh(fold)
+    navs: list[str] = []
+    pg = browser.new_page(viewport={"width": 1440, "height": 900})
+    errors: list[str] = []
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    pg.on("framenavigated", lambda f: navs.append(f.url) if f == pg.main_frame else None)
+    pg.on("dialog", lambda d: d.dismiss())
+    pg.route("**/*", _reads_only)
+    pg.add_init_script("window.open = () => { window.__opened = (window.__opened || 0) + 1; return null; };")
+    pg.set_default_timeout(10000)               # a crawl that waits on something says what
+    try:
+        pg.goto(live)
+        pg.wait_for_function("window.dock && window.tl && tl.state && window.flowBar && flowBar.state()",
+                             timeout=20000)
+        pg.wait_for_selector("#tl .blk", timeout=15000)
+        start = len(navs)
+        # the File menu's two old items are gone; Index… is there
+        file_items = pg.locator("#menubar .menu[data-menu=file] button[data-cmd]").evaluate_all(
+            "(bs) => bs.map((b) => b.dataset.cmd)")
+        assert "footage" not in file_items and "pass" not in file_items, file_items
+        assert "index" in file_items and "projsettings" in file_items, file_items
+        # every item of every menu
+        cmds = pg.evaluate("""() => [...document.querySelectorAll('#menubar .menu')].map((m) =>
+            [m.dataset.menu, [...m.querySelectorAll('.mdrop button[data-cmd]')].map((b) => b.dataset.cmd)])""")
+        clicked = 0
+        for menu, items in cmds:
+            for cmd in items:
+                # a clip selected, so the items about it are live too
+                if not pg.evaluate("tl.state.sel.size"):
+                    pg.evaluate("tl.state.segs.length && tl.select([tl.state.segs[0].id])")
+                pg.locator(f"#menubar .menu[data-menu={menu}] .mtop").click()
+                item = pg.locator(f"#menubar .menu[data-menu={menu}] .mdrop button[data-cmd='{cmd}']")
+                if not item.is_enabled():
+                    _reset(pg)
+                    continue
+                print(f"crawl: {menu} › {cmd}", flush=True)
+                item.click()
+                pg.wait_for_timeout(200)
+                assert pg.evaluate(NAV_JS)["path"] == "/", (menu, cmd)
+                _no_way_out(pg, f"{menu} › {cmd}")
+                _reset(pg)
+                clicked += 1
+        assert clicked >= 35, clicked
+        # File › Index… opens the Index panel (lane INDEXPANEL's), in place; without its
+        # script (rcIndex), its tab
+        pg.locator("#menubar .menu[data-menu=file] .mtop").click()
+        pg.locator("[data-testid=menu-file-index]").click()
+        pg.wait_for_function("dock.current() === 'index'", timeout=5000)
+        assert pg.evaluate(NAV_JS)["path"] == "/"
+        pg.evaluate("dock.open('project'); delete window.rcIndex")
+        pg.locator("#menubar .menu[data-menu=file] .mtop").click()
+        pg.locator("[data-testid=menu-file-index]").click()
+        pg.wait_for_function("dock.current() === 'index'", timeout=5000)
+        # ...and with a stand-in that counts: rcIndex.open()
+        pg.evaluate("window.rcIndex = { open: () => { window.__indexOpened = (window.__indexOpened || 0) + 1; } }")
+        pg.locator("#menubar .menu[data-menu=file] .mtop").click()
+        pg.locator("[data-testid=menu-file-index]").click()
+        assert pg.evaluate("window.__indexOpened") == 1
+
+        # the Next chip, at every kind of target the flow can name
+        import server
+        from roughcut import flow
+        targets = [flow.action("index", "Index the footage", "Index"),
+                   flow.action("index", "Indexing — heard 0/3", "Watch", kind="wait"),
+                   flow.action("pass", "Start the pass on 3 clips", "Pass"),
+                   flow.action("footage", "Import footage (Ctrl+I)", "Import", screen="/", do="import"),
+                   flow.action("brief", "Say what the film is about", "Brief"),
+                   flow.action("cut", "Ask for the first cut", "Cut")]
+        for a in targets:
+            assert a["screen"] == "/" and (a["href"] == "/" or a["href"].startswith("/#")), a
+            pg.route("**/api/flow", _answer({"stages": [], "next": a, "blockers": [], "running": False}))
+            pg.evaluate("flowBar.poll()")
+            pg.wait_for_function("(s) => { const n = flowBar.state() && flowBar.state().next;"
+                                 " return !!n && n.sentence === s; }", arg=a["sentence"], timeout=5000)
+            chip = pg.locator("#flowNext")
+            before = pg.evaluate("window.__indexOpened || 0")
+            if chip.count() and chip.is_visible():
+                chip.click()
+                pg.wait_for_timeout(250)
+                if a.get("do") == "index":
+                    assert pg.evaluate("window.__indexOpened") == before + 1, a
+            assert pg.evaluate(NAV_JS)["path"] == "/", a
+            _reset(pg)
+            pg.unroute("**/api/flow")
+        pg.evaluate("flowBar.poll()")
+        assert server  # the module is the one serving this page
+
+        # the switcher's place rows: panels, not pages
+        opened = pg.evaluate("window.__indexOpened || 0")
+        pg.locator("#hdBin").click()
+        pg.wait_for_selector("#placeList .place", timeout=5000)
+        places = pg.locator("#placeList .place").evaluate_all("(rs) => rs.map((r) => [r.tagName, r.dataset.place])")
+        assert places == [["BUTTON", "footage"], ["BUTTON", "pass"], ["BUTTON", "cut"]], places
+        for _tag, key in places:
+            if not pg.locator("#picker").is_visible():
+                pg.locator("#hdBin").click()
+            pg.locator(f"#placeList .place[data-place={key}]").click()
+            pg.wait_for_timeout(200)
+            assert pg.evaluate(NAV_JS)["path"] == "/", key
+        assert pg.evaluate("dock.current()") == "bin", "the pass's row opens Selects"
+        assert pg.evaluate("window.__indexOpened") == opened + 1, "the footage row opens the Index panel"
+        _reset(pg)
+
+        # the walk-through: every step, its Show me, Next to the end
+        for which in ("loop", "ai"):
+            pg.evaluate(f"rcTour.start({'undefined' if which == 'loop' else repr(which)})")
+            pg.wait_for_selector("[data-testid=tour]", timeout=5000)
+            for _ in range(12):
+                show = pg.locator("[data-testid=tour-show]")
+                if show.is_visible():
+                    show.click()
+                    pg.wait_for_timeout(250)
+                    assert pg.evaluate(NAV_JS)["path"] == "/"
+                    _no_way_out(pg, "tour")
+                    # what Show me opened (Import's, Export's dialog) is put away for Next
+                    pg.evaluate("document.querySelectorAll('dialog[open]').forEach((d) => d.close())")
+                nxt = pg.locator("[data-testid=tour-next]")
+                if not nxt.is_visible():
+                    break
+                done = nxt.inner_text().strip() == "Done"
+                nxt.click()
+                pg.wait_for_timeout(150)
+                if done:
+                    break
+            _reset(pg)
+
+        # every panel's links: each dock tool open in turn, and Selects' offers
+        for tool in pg.evaluate("[...document.querySelectorAll('.ws-tab.tool')].map((t) => t.dataset.tool)"):
+            pg.evaluate(f"dock.open({tool!r})")
+            pg.wait_for_timeout(200)
+            _no_way_out(pg, tool)
+        pg.evaluate("dock.open('bin')")
+        pg.locator("#moreFound").click()
+        for tab in ("heard", "seen"):
+            t = pg.locator(f"#libTabs .tab[data-tab={tab}]")
+            if t.is_visible():
+                t.click()
+                pg.wait_for_timeout(200)
+                _no_way_out(pg, tab)
+        # nothing on the page names the old screens
+        assert pg.evaluate(r"""document.documentElement.innerHTML.match(/href="\/(open|floor)/g)""") is None
+        assert navs[start:] == [] or all(re.fullmatch(r"https?://[^/]+/(#.*)?", u) for u in navs[start:]), navs[start:]
+        assert pg.evaluate("window.__opened || 0") == 0, "no window opened elsewhere"
+        assert errors == [], errors
+    finally:
+        pg.close()

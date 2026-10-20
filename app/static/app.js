@@ -3628,9 +3628,9 @@ function renderLibrary() {
   paintAudit();
   if (keepsTab()) { renderKept(lib); return; }
   $('#libHint').textContent = '';
+  // more of the footage is looked at from the Index panel (wave 17 FOLDIN: never /open)
   lib.innerHTML = rows.length ? '' : `<div class="hint">${libTab === 'seen'
-    ? `nothing left that was seen — <a href="/open" style="color:var(--accent)">look at more of
-       the footage →</a>`
+    ? 'nothing left that was seen — <button type="button" class="ghost" data-rc-index>look at more of the footage…</button>'
     : 'nothing left to add'}</div>`;
   rows.slice(0, 40).forEach((r) => {
     // The line people read is what is said or seen, not the ranking score that put it here.
@@ -4433,7 +4433,7 @@ function paintBinLine() {
        `${sm.heroes} hero${sm.heroes === 1 ? '' : 'es'}`,
        `${clock(sm.strung_out_s || 0)} if strung out`]
     : ['nothing kept yet'];
-  el.innerHTML = `bin · ${counts.join(' · ')} · <a href="/floor">the pass →</a>`;
+  el.textContent = `bin · ${counts.join(' · ')}`;
 }
 
 async function fetchBin() {

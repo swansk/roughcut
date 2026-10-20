@@ -345,11 +345,32 @@
     if (p) focusPanel(p);
   }
 
+  /* The Index panel (lane INDEXPANEL's `window.rcIndex`): what the index ran on each clip,
+   * re-run and re-tuned in place. Every former way to the footage screen (/open) opens it
+   * now: File › Index…, the Next chip, the switcher's footage row, the seen tab's "look at
+   * more" (wave 17 FOLDIN: nothing leaves the editor). Without its script, its tab; without
+   * that either, a toast. */
+  function openIndex(clips) {
+    if (window.rcIndex && typeof window.rcIndex.open === 'function') return window.rcIndex.open(clips);
+    if ($('.ws-tab[data-tool="index"]')) return open('index');
+    if (typeof window.toast === 'function') {
+      window.toast('The Index panel did not load: reload the page (the header\'s first pass indexes the footage)', 4000);
+    }
+    return null;
+  }
+  window.rcOpenIndex = openIndex;
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest && e.target.closest('[data-rc-index]');
+    if (!b) return;
+    e.preventDefault();
+    openIndex();
+  });
+
   const COMMANDS = {
     open: () => { const b = $('#hdBin'); if (b) b.click(); },
-    footage: () => { location.href = '/open'; },
-    pass: () => { location.href = '/floor'; },
-    // File › Project Settings… (wave 17 FOLDIN: the footage screen's settings drawer)
+    // File › Index… (was "Footage and index…", which went to /open); the pass's review is
+    // Selects now, so "Review the pass…" is gone (wave 17 FOLDIN)
+    index: () => openIndex(),
     projsettings: () => { if (window.rcProjectSettings) window.rcProjectSettings.open(); },
     // Window › Events: the index's journal, as /open showed it behind its how line
     events: () => { if (window.rcEvents) window.rcEvents.open(); },

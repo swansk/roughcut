@@ -715,17 +715,18 @@ FP_COUNTS = {"index": {"clips": 12, "listened": 3, "looked": 0, "look_need": 12,
 # state → (seed segments, Next's action, the first pass's state patch, running jobs)
 HEADER_STATES = {
     "fresh": ([], {"stage": "index", "sentence": "Index the footage — free on your plan",
-                   "verb": "Index", "screen": "/open", "tool": None, "href": "/open", "kind": "go"},
+                   "verb": "Index", "screen": "/", "tool": None, "href": "/#do=index", "do": "index",
+                   "kind": "go"},
               {"state": "never-run"}, []),
     "mid-index": (SEED["segments"],
                   {"stage": "index", "sentence": "Indexing — heard 3/12 · looked 0/12 (9%); the pass "
-                   "opens on the first clip released", "verb": "Watch", "screen": "/open",
-                   "tool": None, "href": "/open", "kind": "wait"},
+                   "opens on the first clip released", "verb": "Watch", "screen": "/",
+                   "tool": None, "href": "/#do=index", "do": "index", "kind": "wait"},
                   {"state": "never-run"}, [INDEX_JOB]),
     "mid-first-pass": (SEED["segments"],
                        {"stage": "index", "sentence": "Indexing — heard 3/12 · looked 0/12 (9%); "
                         "the pass opens on the first clip released", "verb": "Watch",
-                        "screen": "/open", "tool": None, "href": "/open", "kind": "wait"},
+                        "screen": "/", "tool": None, "href": "/#do=index", "do": "index", "kind": "wait"},
                        {"state": "running", "stage": "index", "counts": FP_COUNTS},
                        [INDEX_JOB, ASK_JOB]),
     "exporting": (SEED["segments"],
@@ -899,7 +900,7 @@ def test_no_link_wears_the_browsers_blue_underline(live_server, project, browser
     pg.wait_for_selector("#tlEmpty .empty", timeout=15000)
     seen += pg.evaluate(UA_LINK_JS)
     pg.evaluate("""(() => { const b = document.querySelector('#projList');
-        b.innerHTML = '<div class="pempty">No footage in this bin yet. <a href="/open">Open a footage folder</a></div>'; })()""")
+        b.innerHTML = '<div class="pempty">No footage in this bin yet. <a href="#">Open a footage folder</a></div>'; })()""")
     seen += pg.evaluate(UA_LINK_JS)
     assert any(s["text"] == "Open a footage folder" for s in seen)
     for s in seen:

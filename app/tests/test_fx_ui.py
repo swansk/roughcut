@@ -1072,12 +1072,12 @@ def test_next_lands_on_the_waiting_effect_not_the_anchored_shot(page, live_serve
     page.keyboard.press("Backspace")
     assert page.evaluate("segs.map(s => s.id)") == cut
     assert page.evaluate("tl.state.anchor") == sid2
-    # from another screen: the href carries the target, and the hash lets go of it
-    page.goto(live_server + "/open")
-    page.wait_for_function(
-        f"(() => {{ const n = window.flowBar && flowBar.state() && flowBar.state().next;"
-        f" return !!n && !!n.target && n.target.fx === '{waiting['id']}'; }})()", timeout=15000)
-    page.locator("#flowNext").click()
+    # arriving by the chip's href (a bookmark, an old screen's link: one screen since wave
+    # 17 FOLDIN): the href carries the target, and the hash lets go of it
+    href = page.evaluate("flowBar.state().next.href")
+    assert href.startswith("/#tool=fx&") and f"fx={waiting['id']}" in href, href
+    page.goto("about:blank")
+    page.goto(live_server + href)
     page.wait_for_selector("#tl .blk", timeout=15000)
     landed()
     assert page.evaluate("location.hash") == "#tool=fx"
