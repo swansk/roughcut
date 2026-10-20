@@ -173,9 +173,10 @@ MUTANTS = {
     # one Accept lands as two undo entries
     "one-accept-is-two-undo-steps": (
         "app/static/actions.js",
-        "    const out = applyOps(idx.map((i) => R.ops[i]), { label });",
-        "    applyOps(idx.slice(0, 1).map((i) => R.ops[i]), { label });\n"
-        "    const out = applyOps(idx.slice(1).map((i) => R.ops[i]), { label });",
+        # (wave 13 AIUX gave the accept its op-summary label, `labelFor`)
+        "    const out = applyOps(idx.map((i) => R.ops[i]), { label: labelFor(idx.map((i) => R.ops[i])) });",
+        "    applyOps(idx.slice(0, 1).map((i) => R.ops[i]), { label: 'AI' });\n"
+        "    const out = applyOps(idx.slice(1).map((i) => R.ops[i]), { label: labelFor(idx.map((i) => R.ops[i])) });",
         ASK, "ask", "one Ctrl+Z did not take back every AI edit"),
     # an AI menu item greyed out that does not say why
     "an-ai-menu-item-greyed-without-a-reason": (
