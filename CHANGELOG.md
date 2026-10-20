@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **The re-run never questions a locked shot the editor slowed** (verdict 13, punch 10): the current edit lists a shot's length in the film, so a locked shot at 50 % read "12.30-27.00 (29.4s)" and the model, told nothing of its speed, put "listed as 29.4 s, but its in and out only span 14.7 s" in Things to check. The re-run's brief now names each retimed locked shot with its number, range, speed, the clip seconds its in and out span and the seconds it runs (`firstpass.speed_brief`, via `plan_note`), and a model check about such a shot that sets two lengths against each other in the speed's ratio is not passed on (`firstpass.drop_speed_checks`, in the re-run's `finish`); any other check stays. test_firstpass: 2 new tests.
 - **Redesign verdict 13: FAIL, 15 of 16 at 8-9, the judge's gate GREEN** (`judge/verdict-13.md` on b12b979): dimension 16 at 7 (K4: the index and the old pages); K2, K3, K4 open. Rubric log: the Lumetri tests' skip above 2x cores, said in the log. Wave 17 grows five lanes from its punch list.
 - **Loop state: Karl is done looking at 8766; merges resume** (judge/LOOP.md).
 - **Loop state: Karl's look and K4; wave 17 launched** (judge/LOOP.md).

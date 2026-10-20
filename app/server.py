@@ -4626,7 +4626,8 @@ def _firstpass_walk(job: str, fp: dict) -> None:
         originate = not segments or (fp["mode"] == "run" and not locked)
         # verdict 4: the ranges the editor rejected in a review — not proposed again
         rejected = fpmod.rejections(edl)
-        note = (fpmod.plan_note(len(locked), fp["mode"], fp["note"], rejected)
+        note = (fpmod.plan_note(len(locked), fp["mode"], fp["note"], rejected,
+                                segments=segments, keep=locked)
                 if not originate else
                 "\n\n".join(x for x in ((fp["note"] or "").strip(),
                                          fpmod.rejected_brief(rejected)) if x))
@@ -4648,6 +4649,9 @@ def _firstpass_walk(job: str, fp: dict) -> None:
                                                          rejected)
             if segments and locked:
                 plan["segments"] = fpmod.enforce_locks(plan["segments"], segments, locked)
+                # verdict 13, punch 10: never "listed as 29.4 s, but its in and out only
+                # span 14.7 s" about a locked shot the editor slowed
+                plan["checks"] = fpmod.drop_speed_checks(plan.get("checks"), segments, locked)
             if left:
                 plan["notes"] = "\n\n".join(x for x in (
                     str(plan.get("notes") or "").strip(),
