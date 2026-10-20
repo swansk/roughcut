@@ -539,3 +539,14 @@ next judge runs, and the next judge rules it honest or lenient.
   real change in the CLI's facts, are unchanged and tested. Lenient only in what counts as "the same answer"; the judge
   should check that no stale read survives a real change. The ruler drops a label the panel's edge would cut (stricter for
   dimension 9).
+- 2026-10-20 (wave 18, lane REDO2, punch 7; logged by the lead): **Ctrl+Z on an AI design request stops a design still
+  being made; its redo asks again.** This replaces wave 17 REDO's "a design that lands after its request's Ctrl+Z is set
+  aside too and comes back with no call" for the common case. A design whose call is running when the Ctrl+Z comes is stopped
+  (POST /api/fx/cancel: the job's `claude -p` is killed through its procscope, no further call starts, nothing is kept); the
+  undo toast and the job say what was stopped. It counts as never made, so Ctrl+Shift+Z asks the designer again ("asks the
+  designer again · free on your plan" on `claude_cli`; the price confirm first on `anthropic_api`). Only a design that landed
+  before its cancel reached the server is still set aside and restored with no call. On the API the call in flight can't be
+  stopped and is billed, and the cancel says so. A redo never ends on a bare "redone: …": a design that had failed before the
+  undo is named ("its design had failed — not asked again"). Cheaper on the plan (the call in flight is killed); on the API a
+  redo after an in-flight undo costs one more design call than setting it aside would have (priced first). The REDO test's
+  flake was the test (it read the folder before the server's crash-safe record-then-folder discard finished). For the judge.

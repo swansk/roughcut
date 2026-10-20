@@ -365,6 +365,154 @@ def test_a_withdrawn_design_is_kept_hidden_and_restores_as_the_same_proposal(stu
     assert client.post("/api/fx/restore", json={"id": fx_id}).status_code == 404
 
 
+# ---------------------------------------------------------------- verdict 14, punch 7
+#
+# The board's Ctrl+Z on an AI design request stops a design still being made (POST
+# /api/fx/cancel, fx.js `stopOne`): the cancel says what it stopped, no further model call
+# starts, nothing is kept — and a cancel that comes after the design landed answers its id
+# so the board sets that one aside instead.
+
+class _Gated:
+    """A scripted backend whose calls each wait for their own release (never a real call)."""
+    name = "gated-scripted"
+
+    def __init__(self, n: int = 3):
+        import threading
+        self.started = [threading.Event() for _ in range(n)]
+        self.release = [threading.Event() for _ in range(n)]
+        self.prompts: list[str] = []
+
+    def complete(self, request):
+        from roughcut import config, inference
+        k = len(self.prompts)
+        self.prompts.append(request.prompt)
+        self.started[k].set()
+        assert self.release[k].wait(20), "the test never let the call answer"
+        model = config.model_for(request.role)
+        return inference.Result(content="{}", input_tokens=4000, output_tokens=300, backend=self.name,
+                                model=model, projected_usd=config.projected_usd(model, 4000, 300),
+                                latency_ms=1, raw="{}")
+
+
+@pytest.fixture
+def gated(stubbed, monkeypatch):
+    """The design as fx.design makes it, in two model calls (the design call, then the
+    placing look, with its strip written to the workdir between them), on `_Gated`;
+    `between` holds it after the first call answered."""
+    import threading
+    from roughcut import inference
+    backend = _Gated()
+    between = threading.Event()
+    between.set()
+
+    def design(note, seg, clip, sidecar, *, reference=None, place=False, proxy=None,
+               workdir=None, segments=None, clips=None, window=None):
+        fx._ask("the vocabulary", f"THE NOTE: {note}")
+        assert between.wait(20)
+        if workdir:
+            Path(workdir).mkdir(parents=True, exist_ok=True)
+            (Path(workdir) / "strip.jpg").write_bytes(b"\xff\xd8\xff\xd9")
+        fx._ask("where are the hits", "the strip", what="the placing look")
+        e = json.loads(json.dumps(HIT))
+        e.update(shot=seg["id"], clip=seg["clip"], note=note, created="2026-10-20T12:00:00",
+                 history=[{"note": note, "at": "2026-10-20T12:00:00"}])
+        return fx.validate_effect(e, segments or [seg], clips)
+
+    monkeypatch.setattr(fx, "design", design)
+    inference.set_backend(backend)
+    yield backend, between
+    for ev in backend.release:
+        ev.set()
+    between.set()
+    inference.set_backend(None)
+
+
+def _ended(job: str, timeout: float = 10.0) -> None:
+    """The job's thread is done (its cancel finished the job at once; the thread winds down)."""
+    import server
+    t0 = time.time()
+    while job in server.FX_DESIGN_SCOPES and time.time() - t0 < timeout:
+        time.sleep(0.02)
+    assert job not in server.FX_DESIGN_SCOPES, "the stopped design's thread never ended"
+
+
+def test_a_design_cancelled_during_its_call_says_so_and_asks_nothing_more(gated, stubbed, client):
+    backend, _ = gated
+    shot = _seed(stubbed, client)
+    import server
+    job = client.post("/api/fx/design", json={"shot": shot, "note": "a thin white border", "place": True}).json()["job"]
+    assert backend.started[0].wait(10)
+    r = client.post("/api/fx/cancel", json={"job": job})
+    assert r.status_code == 200, r.text
+    said = "its design call was stopped, nothing is kept"
+    assert r.json() == {"ok": True, "job": job, "state": "cancelled", "result": None,
+                        "stopped": "the design call", "calls_made": 0, "said": said}
+    snap = client.get(f"/api/job/{job}").json()
+    assert (snap["state"], snap["detail"]) == ("cancelled", f"taken back (Ctrl+Z) — {said}")
+    # the call in flight answers (the API cannot be stopped mid-call): the placing look is
+    # never asked, the design never saved, its strip gone
+    backend.release[0].set()
+    _ended(job)
+    assert len(backend.prompts) == 1, backend.prompts
+    assert client.get(f"/api/job/{job}").json()["state"] == "cancelled"   # not re-finished
+    assert not (server.fx_home().exists() and any(server.fx_home().iterdir()))
+    assert client.get("/api/fx").json()["effects"] == []
+    # a second cancel says how it ended, and stops nothing
+    again = client.post("/api/fx/cancel", json={"job": job}).json()
+    assert (again["state"], again["stopped"]) == ("cancelled", None)
+
+
+def test_a_design_cancelled_between_its_calls_starts_no_other(gated, stubbed, client):
+    backend, between = gated
+    shot = _seed(stubbed, client)
+    import server
+    between.clear()
+    backend.release[0].set()
+    job = client.post("/api/fx/design", json={"shot": shot, "note": "a thin white border", "place": True}).json()["job"]
+    t0 = time.time()
+    while not server.FX[job].get("called") and time.time() - t0 < 10:
+        time.sleep(0.02)
+    r = client.post("/api/fx/cancel", json={"job": job}).json()
+    assert (r["stopped"], r["calls_made"], r["said"]) == (
+        "after the design call", 1, "stopped after its design call, nothing is kept"), r
+    between.set()
+    _ended(job)
+    assert len(backend.prompts) == 1, "a call started after the cancel"
+    assert not list(server.fx_home().glob("fx_*.json")) and client.get("/api/fx").json()["effects"] == []
+
+
+def test_on_the_api_a_cancel_says_the_call_in_flight_still_bills(gated, stubbed, client, monkeypatch):
+    backend, _ = gated
+    monkeypatch.setenv("ROUGHCUT_BACKEND", "anthropic_api")
+    shot = _seed(stubbed, client)
+    import server
+    backend.release[0].set()
+    job = client.post("/api/fx/design", json={"shot": shot, "note": "a thin white border", "place": True}).json()["job"]
+    assert backend.started[1].wait(10)                   # the placing look is in flight
+    r = client.post("/api/fx/cancel", json={"job": job}).json()
+    assert (r["stopped"], r["said"]) == (
+        "the placing look", "its placing look was stopped, but the call in flight still ends and is billed to the"
+        " API key; nothing after it runs, nothing is kept"), r
+    backend.release[1].set()
+    _ended(job)
+    # the strip it wrote between the calls goes with it
+    assert not (server.fx_home().exists() and any(server.fx_home().iterdir()))
+    assert client.get("/api/fx").json()["effects"] == []
+
+
+def test_a_cancel_after_the_design_landed_answers_its_id(gated, stubbed, client):
+    backend, _ = gated
+    for ev in backend.release:
+        ev.set()
+    shot = _seed(stubbed, client)
+    job = client.post("/api/fx/design", json={"shot": shot, "note": "hit markers", "place": True}).json()["job"]
+    fx_id = _wait(client, job)["result"]["id"]
+    r = client.post("/api/fx/cancel", json={"job": job}).json()
+    assert (r["state"], r["result"], r["stopped"]) == ("done", {"id": fx_id}, None), r
+    assert [e["id"] for e in client.get("/api/fx").json()["effects"]] == [fx_id]   # the board sets it aside
+    assert client.post("/api/fx/cancel", json={"job": "nojob"}).status_code == 404
+
+
 def test_a_drawn_reference_places_the_hits_and_is_kept(stubbed, client):
     shot = _seed(stubbed, client)
     png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
