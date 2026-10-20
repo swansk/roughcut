@@ -929,3 +929,29 @@ def test_no_menu_item_chip_place_tour_step_or_link_leaves_the_editor(browser, li
         assert errors == [], errors
     finally:
         pg.close()
+
+
+def test_the_old_pages_answer_with_the_editor(live):
+    """/open and /floor are gone: their routes send the browser to the editor, which keeps
+    any #tool= the old link carried (a redirect without a fragment keeps the request's)."""
+    for path in ("/open", "/floor"):
+        r = httpx.get(live + path, timeout=30)
+        assert r.status_code in (307, 308) and r.headers["location"] == "/", (path, r.status_code, r.headers)
+        assert httpx.get(live + path, timeout=30, follow_redirects=True).url.path == "/"
+    for gone in ("/open.js", "/floor.js"):
+        assert httpx.get(live + gone, timeout=30).status_code == 404, gone
+    static = Path(__file__).resolve().parents[1] / "static"
+    for name in ("open.html", "open.js", "floor.html", "floor.js"):
+        assert not (static / name).exists(), name
+
+
+def test_no_file_the_editor_loads_names_the_old_screens():
+    """A guard on the source, so a later change cannot put a way out back: no static file
+    links or navigates to /open or /floor."""
+    static = Path(__file__).resolve().parents[1] / "static"
+    bad = re.compile(r"""(href=["']/(open|floor)\b|location\.(href|assign|replace)\s*[=(]\s*['"`]/(open|floor)|['"`]/(open|floor)['"`#?])""")
+    hits = [f"{p.name}:{i}: {line.strip()[:100]}"
+            for p in sorted(static.glob("*")) if p.suffix in (".js", ".html", ".css")
+            for i, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1)
+            if bad.search(line)]
+    assert hits == [], hits

@@ -8,7 +8,7 @@ own fixture bin, read-only (it only loads pages):
   * every screen has ONE header row, at most 50 px: the bin · cut switcher (#hdBin) and
     the Next chip (#flow) in it, side by side;
   * exactly one blue button (`.is-next`, placed by /flow.js on Next's target or on the
-    chip) — none while a round of the pass is open, where the chip reads "N left";
+    chip);
   * the board does not scroll — at rest, with a shot selected, with the film tool open,
     and in FX after Next (on the waiting proposal's shot), the three board states the
     M16 end state names — nor while jobs run, when the header is still one row;
@@ -36,7 +36,9 @@ import pytest
 pytest.importorskip("playwright.sync_api", reason="playwright not installed")
 from playwright.sync_api import sync_playwright  # noqa: E402
 
-SCREENS = ("/", "/floor", "/open")
+# The editor is the one screen (wave 17 FOLDIN, Karl's K4: the footage screen /open and the
+# pass /floor were folded into it and removed; their routes answer with the editor).
+SCREENS = ("/",)
 # The board in the states the M16 end state measures: a shot selected (its strip in
 # view), the film tool open, and FX after Next — the waiting proposal's card, landed on.
 BOARD = ("/", "/ shot", "/ film", "/ jobs", "/ fx")
@@ -156,10 +158,12 @@ HEADER_MAX_PX = 50
 # 110, / shot 138 → 139, / film 117 → 118, / fx 143 → 144, / jobs 118 → 119; controls / 57 →
 # 58, / shot 72 → 73, / film 56 → 57, / fx 60 → 61, / jobs 58 → 59. /floor and /open are
 # unchanged.
-WORDS_IN_VIEW = {"/": 110, "/floor": 58, "/open": 59, "/ shot": 139, "/ film": 118, "/ fx": 144,
-                 "/ jobs": 119}
-CONTROLS_IN_VIEW = {"/": 58, "/floor": 8, "/open": 9, "/ shot": 73, "/ film": 57, "/ fx": 61,
-                    "/ jobs": 59}
+# Wave 17, lane FOLDIN (Karl's K4 b, verdict 13 punch 2): /floor (58 · 8) and /open (59 · 9)
+# are gone from the budget with the screens themselves, so the budget measures the editor
+# alone. Nothing on the board's five states changed in view (the File menu's items and
+# Selects' rows are not in view at rest); measured, no headroom.
+WORDS_IN_VIEW = {"/": 110, "/ shot": 139, "/ film": 118, "/ fx": 144, "/ jobs": 119}
+CONTROLS_IN_VIEW = {"/": 58, "/ shot": 73, "/ film": 57, "/ fx": 61, "/ jobs": 59}
 
 # Contracts another lane delivers (M16 stage 1, C1): until that lane is merged the
 # check is an expected failure on that screen. Every stage-1 lane is merged, so this is
@@ -469,10 +473,6 @@ BLUE_ON = {"/ film": ["render"], "/ fx": ["polish"]}
 def test_exactly_one_blue_button(measured, state):
     m = measured[state]
     assert m["next"], f"{state}: the fixture bin always has a next action"
-    if state == "/floor" and re.fullmatch(r"\d+ left", m["chip_text"] or ""):
-        # a round of the pass is open: P / X / U are the choice, nothing is blue
-        assert m["blue"] == [], m["blue"]
-        return
     assert len(m["blue"]) == 1, (state, m["blue"])
     assert m["blue"] == BLUE_ON.get(state, ["flowNext"]), (state, m["blue"], m["next"])
 

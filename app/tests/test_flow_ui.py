@@ -96,14 +96,15 @@ def blue(page) -> list[str]:
         ".is-next", "els => els.map(e => e.id || e.dataset.mark || e.tagName)")
 
 
-def test_no_step_bar_only_the_next_chip_on_all_three_screens(browser, live):
+def test_no_step_bar_only_the_next_chip_and_the_old_screens_are_the_editor(browser, live):
     """M16 decision 2: the seven-step bar comes off every screen; Next stays. `#flow`
-    holds the chip and nothing else, on one line, and it says the same thing on the
-    board and the open screen (the pass says the round, while one is open)."""
+    holds the chip and nothing else, on one line. Since wave 17 (FOLDIN, Karl's K4) the
+    editor is the one screen: /open and /floor answer with it, the same chip."""
     said = {}
     for path in ("/", "/floor", "/open"):
         pg = open_screen(browser, live + path)
         said[path] = chip(pg)
+        assert pg.evaluate("location.pathname") == "/", path
         assert pg.locator("#flow a").count() == 1, path
         assert pg.locator("#flow .fs, #flow [data-stage], #flow .sep").count() == 0, path
         # the older bars are still gone too
@@ -112,8 +113,19 @@ def test_no_step_bar_only_the_next_chip_on_all_three_screens(browser, live):
         h = pg.eval_on_selector("#flow", "el => el.getBoundingClientRect().height")
         assert h <= 26, (path, h)
         pg.close()
-    assert said["/"] == said["/open"], said
+    assert said["/"] == said["/open"] == said["/floor"], said
     assert said["/"].startswith("Next"), said
+
+
+def test_an_old_screens_link_lands_on_the_board_with_its_tool_open(browser, live):
+    """A link or bookmark to an old screen with a tool on it (`/open#tool=out`): the
+    redirect carries no fragment, so the browser keeps the link's own, and the board
+    opens with that tool."""
+    pg = open_screen(browser, live + "/open#tool=out")
+    pg.wait_for_selector("#tl .blk", timeout=15000)
+    assert pg.evaluate("location.pathname") == "/"
+    pg.wait_for_function("window.dock && dock.current() === 'out'", timeout=5000)
+    pg.close()
 
 
 MARKED_JS = """([stage, fx, id]) => {

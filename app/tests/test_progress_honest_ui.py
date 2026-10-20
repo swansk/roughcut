@@ -7,7 +7,7 @@ to 1/12 — the index job carried a fixed 60 s estimate called "measured"; /open
 ran over the job pill, which covered the `?` button.
 
 Here the index is real but its listening never finishes (a stub that waits on a flag),
-so the run sits at heard 0/3. On `/` and `/open` at 1440×900, every % on screen and
+so the run sits at heard 0/3. On `/` at 1440×900 (the one screen since wave 17), every % on screen and
 every bar's width is at most the share the counts prove (`flow.honest_pct`, read after
 the screen so the counts can only have grown), no "… left" is shown under the run's own
 pace (with nothing heard there is no pace, so none at all), and on `/` no two of the
@@ -176,16 +176,15 @@ def test_every_visible_percent_and_eta_is_held_to_the_counts(stuck):
     base = stuck
     with sync_playwright() as pw:
         b = pw.chromium.launch()
-        for path in ("/", "/open"):
+        # the editor alone: /open (its progress line) went with wave 17 FOLDIN; the Index
+        # panel that replaces it is lane INDEXPANEL's, held to the same counts in its tests
+        for path in ("/",):
             pg = b.new_page(viewport={"width": 1440, "height": 900})
             errors: list[str] = []
             pg.on("pageerror", lambda e: errors.append(str(e)))
             pg.goto(base + path)
-            if path == "/":
-                pg.wait_for_selector("#progress .job", timeout=20000)
-                pg.wait_for_selector('[data-testid="firstpass-button"]', timeout=20000)
-            else:
-                pg.wait_for_selector("#progLine", state="visible", timeout=20000)
+            pg.wait_for_selector("#progress .job", timeout=20000)
+            pg.wait_for_selector('[data-testid="firstpass-button"]', timeout=20000)
             for _ in range(4):                           # a few polls' worth
                 pg.wait_for_timeout(1200)
                 seen = pg.evaluate(SEEN_JS)
@@ -194,7 +193,7 @@ def test_every_visible_percent_and_eta_is_held_to_the_counts(stuck):
                 honest = _honest(base)
                 pcts = [float(m) for t in seen["texts"]
                         for m in re.findall(r"(\d+(?:\.\d+)?)\s*%", t)]
-                assert pcts or path == "/open", (path, seen["texts"][:40])
+                assert pcts, (path, seen["texts"][:40])
                 for p in pcts + seen["bars"]:
                     assert p <= honest + 0.5, (path, p, honest, seen)
                 frac = honest / 100.0

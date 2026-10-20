@@ -219,10 +219,13 @@ def test_a_recording_over_thirty_seconds_is_refused_with_413(client, monkeypatch
     assert r.status_code == 413 and "30 s" in r.json()["detail"]
 
 
-def test_the_floor_page_is_served(client):
-    r = client.get("/floor")
-    assert r.status_code == 200 and "floor" in r.text.lower()
+def test_the_floor_page_answers_with_the_editor(client):
+    """The pass is Selects' now (wave 17 FOLDIN, Karl's K4: fold in, then remove): /floor
+    sends the browser to the editor, uncached, and its script is gone."""
+    r = client.get("/floor", follow_redirects=False)
+    assert r.status_code == 307 and r.headers["location"] == "/"
     assert r.headers["cache-control"].startswith("no-store")
+    assert client.get("/floor.js").status_code == 404
 
 
 # ------------------------------------------------- hand-added shots become keeps (I1.3)

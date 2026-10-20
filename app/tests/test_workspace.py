@@ -348,7 +348,7 @@ def test_without_proxies_the_monitors_wait_calmly_and_no_image_is_broken(live_se
 # "Looks like a shipped pro tool" (REDESIGN-GOAL dimension 9, scored 4 in verdict 2): no
 # truncated chrome ("not inde…", "Indexi… 9.", a tab cut to "Exp"), no browser-blue
 # underlined links, no ▶ parked on the picture, a Program picture that fills its panel,
-# and /open cards with the Project panel's posters.
+# and the Project panel's icons with their posters (they were /open's cards' too).
 
 # Two jobs running in the app bar at once, the most it has to hold.
 FAKE_JOBS = [
@@ -1037,10 +1037,12 @@ def test_the_source_monitors_poster_is_the_versioned_one(live_server, project, b
     pg.context.close()
 
 
-def test_open_cards_show_the_project_panels_posters(live_server, project, browser, tmp_path):
-    """Verdict 2: /open still showed blank stripes for thumbnails after 6 min while the
-    Project panel had every poster. On a fresh work dir (no proxies, no posters yet) every
-    /open card has a loaded picture within 10 s, at the Project panel's own URL."""
+def test_the_project_panels_icons_show_their_posters_on_a_fresh_work_dir(live_server, project, browser, tmp_path):
+    """Verdict 2: /open showed blank stripes for thumbnails after 6 min while the Project
+    panel had every poster. /open is gone (wave 17 FOLDIN: its contact sheet is the Project
+    panel's Icon view), and the bar stays on the panel: on a fresh work dir (no proxies,
+    no posters yet) every clip's icon has a loaded picture within 10 s, at its versioned
+    poster URL."""
     import server
     work = tmp_path / "work"
     work.mkdir()
@@ -1052,26 +1054,20 @@ def test_open_cards_show_the_project_panels_posters(live_server, project, browse
         errors = []
         pg.on("pageerror", lambda e: errors.append(str(e)))
         t0 = time.time()
-        pg.goto(live_server + "/open")
-        pg.wait_for_selector("#sessions .card", timeout=10000)
-        pg.wait_for_function("""[...document.querySelectorAll('#sessions .card')].every(c => {
-            const i = c.querySelector('.frame img'); return i && i.complete && i.naturalWidth > 0; })""",
+        pg.goto(live_server)
+        pg.wait_for_selector("#projList [data-clip]", timeout=10000)
+        pg.locator("#projView button[data-view=icon]").click()
+        pg.wait_for_selector("#projList .picon img", timeout=max(1000, int((10 - (time.time() - t0)) * 1000)))
+        pg.wait_for_function("""[...document.querySelectorAll('#projList .picon[data-clip]')].length === 3
+            && [...document.querySelectorAll('#projList .picon[data-clip] img')].every(i =>
+                i.complete && i.naturalWidth > 0 && !i.src.startsWith('data:'))""",
                              timeout=max(1000, int((10 - (time.time() - t0)) * 1000)))
-        cards = pg.evaluate("""() => [...document.querySelectorAll('#sessions .card')].map(c => [c.dataset.clip,
-            (c.querySelector('.frame img') || {}).getAttribute ? c.querySelector('.frame img').getAttribute('src') : null,
-            c.querySelectorAll('.ph').length])""")
-        assert len(cards) == 3, cards
-        for clip, src, ph in cards:
+        icons = pg.evaluate("""() => [...document.querySelectorAll('#projList .picon[data-clip]')].map(c =>
+            [c.dataset.clip, c.querySelector('img').getAttribute('src')])""")
+        assert len(icons) == 3, icons
+        for clip, src in icons:
             # versioned (lead's wave-4 queue): a browser holding a pre-v2 poster drops it
-            assert src == (f"/media/poster/{clip.rsplit('.', 1)[0]}.{server.PICTURE_V}.jpg"
-                           "?t=1.00") and ph == 0, (clip, src, ph)
-        # the same URL the Project panel's icon view asks for
-        board = ctx.new_page()
-        board.goto(live_server)
-        board.wait_for_selector("#projList [data-clip]", timeout=15000)
-        board.locator("#projView button[data-view=icon]").click()
-        icons = board.evaluate("[...document.querySelectorAll('#projList .picon img')].map(i => i.getAttribute('src'))")
-        assert sorted(icons) == sorted(src for _c, src, _p in cards)
+            assert src == f"/media/poster/{clip.rsplit('.', 1)[0]}.{server.PICTURE_V}.jpg?t=1.00", (clip, src)
         assert errors == []
         ctx.close()
     finally:

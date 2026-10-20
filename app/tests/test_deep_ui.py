@@ -280,33 +280,6 @@ def test_look_deeper_from_a_seen_row_is_priced_then_runs_and_shows_the_beats(
         inference.set_backend(None)
 
 
-def test_the_pass_carries_the_machine_line_that_opens_the_strip(bin_state, browser):
-    """I16.3: on the pass, how the machine saw the clip is one line beside the kept range
-    (INTAKE M16 decision 9); a click opens the strip, the band marked, the playhead live."""
-    pg = browser.new_page(viewport={"width": 1280, "height": 900})
-    pg.goto(f"{bin_state}/floor")
-    pg.wait_for_function("window.floor && floor.state.queue.length > 0", timeout=15000)
-    pg.wait_for_function("(document.querySelector('#deepFloor .dv-line') || {}).textContent?.includes('▸')")
-    assert pg.locator("#deepFloor .dv-bar").count() == 0, "closed until asked"
-    clip = pg.evaluate("floor.state.queue[floor.state.i].clip")
-    assert pg.get_attribute("#deepFloor", "data-clip") == clip
-    assert pg.inner_text("#deepFloor .dv-line").startswith("every word heard · a frame every")
-    pg.click("#deepFloor .dv-line")
-    pg.wait_for_selector("#deepFloor .dv-bar")
-    # the playhead rides the strip, the band is marked
-    pg.wait_for_function("!document.querySelector('#deepFloor .dv-headline').hidden")
-    assert pg.is_visible("#deepFloor .dv-markband")
-    # the pass is keys, not buttons: the strip shows, the spending is the board's
-    assert pg.locator("#deepFloor button").count() == 0
-    assert "Look deeper: on the board" == pg.inner_text("#deepFloor .dv-act")
-    if clip == "CLIP_A.MP4":
-        pg.click("#deepFloor .dv-lane[data-lane=deep] i.w")
-        pg.wait_for_selector("#deepFloor .dv-res .dv-beats li.inferred")
-        assert pg.locator("#deepFloor button").count() == 0
-        pg.click("#deepFloor .dv-lane[data-lane=deep] i.w")         # again: closed
-        pg.wait_for_function("!document.querySelector('#deepFloor .dv-res').innerHTML")
-
-
 def test_the_machine_line_is_one_line_that_opens_the_strip_and_closes_on_the_next_call(
         bin_state, browser):
     """INTAKE M16 decision 9 / C4: `deep.line` says how the machine saw a clip in one
@@ -318,7 +291,7 @@ def test_the_machine_line_is_one_line_that_opens_the_strip_and_closes_on_the_nex
         const host = document.createElement('div');
         host.id = 'lineHost';
         document.body.prepend(host);
-        window.__ln = deep.line(host, 'CLIP_A.MP4', { range: [1, 3], compact: true });
+        window.__ln = deep.line(host, 'CLIP_A.MP4', { range: [1, 3], markLook: false });
     }""")
     pg.wait_for_function("document.querySelector('#lineHost .dv-line').textContent.includes('every')")
     assert pg.inner_text("#lineHost .dv-line") == \
@@ -328,7 +301,8 @@ def test_the_machine_line_is_one_line_that_opens_the_strip_and_closes_on_the_nex
     pg.wait_for_selector("#lineHost .dv-more .dv-bar")
     assert pg.inner_text("#lineHost .dv-line").endswith("▾")
     assert pg.is_visible("#lineHost .dv-markband")
-    assert pg.locator("#lineHost button").count() == 0, "compact: nothing spends here"
+    # the host has the range's own priced Look deeper (markLook: false): none here for it
+    assert pg.locator("#lineHost .dv-act button").count() == 0
     pg.evaluate("__ln.head(2.5); deep.head(document.querySelector('#lineHost'), 2.5)")
     pg.wait_for_function("!document.querySelector('#lineHost .dv-headline').hidden")
     pg.click("#lineHost .dv-line")
@@ -341,14 +315,3 @@ def test_the_machine_line_is_one_line_that_opens_the_strip_and_closes_on_the_nex
     assert pg.locator("#lineHost .dv-more").is_hidden()
     assert pg.locator("#lineHost .dv-bar").count() == 0
     assert pg.inner_text("#lineHost .dv-line") == "every word heard · not looked at yet ▸"
-
-
-def test_the_open_screen_cards_carry_no_coverage_strip(bin_state, browser):
-    """INTAKE M16 (C4, I16.2): how the machine saw a clip is one line on the pass and
-    the board; a card on the open screen is its picture, length and name, and how the
-    bin was indexed is the one line above the cards."""
-    pg = browser.new_page(viewport={"width": 1280, "height": 900})
-    pg.goto(f"{bin_state}/open")
-    pg.wait_for_selector('.card[data-clip="CLIP_A.MP4"]')
-    assert pg.locator(".dv-mini").count() == 0
-    assert pg.evaluate("typeof window.deep") == "undefined", "/deep.js is not loaded there"

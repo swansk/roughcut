@@ -1,4 +1,4 @@
-/* How the machine saw a clip, and Look deeper (INTAKE M15). One file, three screens.
+/* How the machine saw a clip, and Look deeper (INTAKE M15), in the editor.
  *
  * Karl, 2026-10-03 (#4): "make it clearer how the videos are indexed by the agent (e.g.
  * showing granularity), and make it easier to run deeper keyframe-based analysis (w/ AI
@@ -18,19 +18,18 @@
  * beats under it with `seen` solid on its frame and `inferred` hatched between the two
  * frames that bracket it, the events, the camera, and the frames it asked for.
  *
- *   deep.strip(host, clip, {mark, onSeek, compact})  → controller {head(t), mark(a, b)}
- *   deep.line(host, clip, {range, onSeek, compact, markLook})  → {head(t), mark(a, b)}
+ *   deep.strip(host, clip, {mark, onSeek})  → controller {head(t), mark(a, b)}
+ *   deep.line(host, clip, {range, onSeek, markLook})  → {head(t), mark(a, b)}
  *       ONE line ("every word heard · a frame every 4 s · 3 close looks ▸"); a click
  *       opens the strip under it, in host; every call renders closed (INTAKE M16
  *       decision 9). `markLook: false` — the host already has the range's priced Look
  *       deeper (the board's shot strip): the opened strip offers one only for a drag.
  *   deep.inspector(host, seg)        the board's inspector, for the selected shot
  *   deep.head(host, t)               the playhead, on a strip or an open line
- *   deep.minis(root)                 the open screen's cards, one request for the bin
  *   deep.rowButton(row, clip, start, end)   a priced button on a seen-tab row
  *
- * Logic stays here; each screen's hook is a line or two (the flow lane is rebuilding the
- * stage bars on all three screens in parallel, so nothing here touches their layout).
+ * Logic stays here; each host's hook is a line or two. (The pass's compact strip and the
+ * footage screen's mini strips went with those screens, wave 17 FOLDIN.)
  */
 (function () {
   'use strict';
@@ -107,12 +106,6 @@
 .dv-ev { margin-top: 4px; }
 .dv-ev span { display: inline-block; margin: 0 6px 2px 0; }
 .dv-cam, .dv-unsure { color: var(--dim, #9a9aa8); margin-top: 3px; }
-.dv-mini { margin-top: 3px; position: relative; height: 12px; background: #0c0c11; border-radius: 2px; overflow: hidden; }
-.dv-mini i { position: absolute; display: block; }
-.dv-mini i.c { top: 0; height: 3px; width: 1px; background: #8a8aa0; }
-.dv-mini i.w { top: 3px; height: 3px; background: #6ea8fe; }
-.dv-mini i.d { top: 6px; height: 3px; background: #f0c860; }
-.dv-mini i.m { top: 9px; height: 3px; min-width: 2px; }
 .dv-line { color: var(--dim, #9a9aa8); font-size: 11px; cursor: pointer; user-select: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .dv-line:hover { color: var(--text, #e8e8ee); }
 `;
@@ -176,14 +169,10 @@
     }
     return deepCache.get(clip);
   }
-  let binCov = null;
-  let binAt = 0;
-
   const live = new Set();             // controllers on screen, to refresh after a run
   function invalidate(clip) {
     covCache.delete(clip);
     deepCache.delete(clip);
-    binCov = null;
     live.forEach((c) => { if (c.clip === clip && c.host.isConnected) c.reload(); });
     live.forEach((c) => { if (!c.host.isConnected) live.delete(c); });
   }
@@ -308,7 +297,7 @@
   /* One deep look, in place: the keyframes as a filmstrip, the beats under them (seen
    * solid on their frame, inferred hatched between the two frames that bracket it),
    * the beats in words, the events, the camera, what it was unsure of. */
-  async function renderResult(host, clip, start, end, { inrow = false, bare = false } = {}) {
+  async function renderResult(host, clip, start, end, { inrow = false } = {}) {
     const d = await deepOf(clip);
     const spans = (d && d.spans) || [];
     const r = spans.find((s) => s.start <= start + 0.25 && end <= s.end + 0.25)
@@ -350,9 +339,7 @@
     }).join('');
     const evs = (r.events || []).map((e) => `<span><i class="kind${['fall', 'crash', 'jump'].includes(e.kind) ? ' hot' : ''}">${esc(e.kind)}</i> ${e.start.toFixed(1)}–${e.end.toFixed(1)} s · ${esc(e.confidence)} · ${esc(e.what)}</span>`).join('');
     const cam = r.camera || {};
-    // `bare`: the pass is keys, not buttons (test_floor_ui) — there a second click on the
-    // deep span closes it instead.
-    host.innerHTML = `<div class="dv-res-head">${esc(head)}${bare ? '' : ' <button type="button" class="dv-x" title="close the deep look">close</button>'}</div>
+    host.innerHTML = `<div class="dv-res-head">${esc(head)} <button type="button" class="dv-x" title="close the deep look">close</button></div>
       <div class="dv-film">${film}</div>
       <div class="dv-beatbar" title="seen beats (solid) sit on their frame; inferred beats (hatched) span the two frames that bracket them">${bar}</div>
       <ol class="dv-beats">${list}</ol>
@@ -452,7 +439,7 @@
           ${lane('heard', heard, 'no speech heard')}
           ${lane('coarse', coarse, 'not looked at')}
           ${lane('close', close, 'no close look')}
-          ${lane('deep', deep, opts.compact ? 'none yet' : 'none yet — drag to choose seconds')}
+          ${lane('deep', deep, 'none yet — drag to choose seconds')}
           ${lane('motion', motion, 'not measured')}
           ${lane('moments', marks, 'nothing claimed')}
           <div class="dv-markband" hidden></div>
@@ -461,7 +448,7 @@
           <div class="dv-tip" hidden></div>
         </div>
       </div>
-      ${opts.compact ? '' : `<div class="dv-legend">${legendLines(cov).map(([k, v]) => `<span><span class="k">${k}</span>${v}</span>`).join('')}</div>`}
+      <div class="dv-legend">${legendLines(cov).map(([k, v]) => `<span><span class="k">${k}</span>${v}</span>`).join('')}</div>
       ${keys.length ? `<div class="dv-keys">${keys.map((s) => `<span><i class="st-${s}"></i>${STATUS_WORD[s]}</span>`).join('')}</div>` : ''}
       <div class="dv-act"></div>
       <div class="dv-res"></div>`;
@@ -470,10 +457,9 @@
     paintMark(ctl);
     if (ctl.headT != null) ctl.head(ctl.headT);
     setSelection(ctl, ctl.sel || ctl.markRange, !ctl.sel);
-    // A deep look already read inside the range on show shows itself — except in the
-    // compact strip under the pass's tape, where it would take the picture's height.
+    // A deep look already read inside the range on show shows itself.
     const r = ctl.sel || ctl.markRange;
-    const hit = !opts.compact && r && L.deep.spans.find((s) => s.end > r[0] && s.start < r[1]);
+    const hit = r && L.deep.spans.find((s) => s.end > r[0] && s.start < r[1]);
     if (hit) renderResult(host.querySelector('.dv-res'), cov.clip, hit.start, hit.end);
   }
 
@@ -503,18 +489,10 @@
     if (act.dataset.key === key) return;
     act.dataset.key = key;
     act.innerHTML = '';
-    // The pass does not spend: there the strip shows, and Look deeper is the board's
-    // (a shot's priced button) — four words say where, nothing to click.
-    if (ctl.opts.compact) {
-      act.innerHTML = '<span class="dv-info">Look deeper: on the board</span>';
-      return;
-    }
     // the shot's own range is priced on the host's row (decision 9: one visible priced
     // button on the shot) — a second one here, for the same seconds, said it twice
     if (!range || range[1] - range[0] < 0.2 || (fromMark && ctl.opts.markLook === false)) {
-      if (!ctl.opts.compact) {
-        act.innerHTML = '<span class="dv-info">drag across the strip to choose seconds to look deeper at</span>';
-      }
+      act.innerHTML = '<span class="dv-info">drag across the strip to choose seconds to look deeper at</span>';
       return;
     }
     const lbl = document.createElement('span');
@@ -540,11 +518,7 @@
       if (w) {
         const s = ctl.cov.layers.deep.spans[Number(w.dataset.span)];
         const res = ctl.host.querySelector('.dv-res');
-        if (s && ctl.opts.compact && res.innerHTML && Number(res.dataset.start) === s.start) {
-          res.innerHTML = '';                       // a second click closes it
-        } else if (s) {
-          renderResult(res, ctl.clip, s.start, s.end, { bare: !!ctl.opts.compact });
-        }
+        if (s) renderResult(res, ctl.clip, s.start, s.end);
         return;
       }
       drag = { x: e.clientX, t0: tAt(e.clientX), moved: false };
@@ -556,7 +530,6 @@
       showTip(ctl, tip, t, e.clientX);
       if (!drag) return;
       if (!drag.moved && Math.abs(e.clientX - drag.x) < 4) return;
-      if (ctl.opts.compact) return;          // the pass seeks; it does not spend
       drag.moved = true;
       let a = Math.min(drag.t0, t), b = Math.max(drag.t0, t);
       const max = ctl.cov.layers.deep.max_span_s || 20;
@@ -695,7 +668,7 @@
       if (more.hidden) {
         more.hidden = false;
         strip(more, clip, { mark: tok.range, markLabel: opts.markLabel || 'this range',
-          onSeek: opts.onSeek, compact: !!opts.compact, markLook: opts.markLook });
+          onSeek: opts.onSeek, markLook: opts.markLook });
         if (tok.t != null) more._deep.head(tok.t);
       } else {
         more.hidden = true;
@@ -712,41 +685,6 @@
     if (!host) return;
     if (host._deep) host._deep.head(t);
     else if (host._line) host._line.head(t);
-  }
-
-  /* The open screen: a mini strip per card, from one request for the whole bin. */
-  async function minis(root) {
-    injectCss();
-    const cards = [...(root || document).querySelectorAll('.card[data-clip]')];
-    if (!cards.length) return;
-    if (!binCov || Date.now() - binAt > 15000) {
-      binAt = Date.now();
-      binCov = fetch('/api/coverage').then((r) => (r.ok ? r.json() : null)).catch(() => null);
-    }
-    const d = await binCov;
-    if (!d) return;
-    cards.forEach((card) => {
-      const c = d.clips[card.dataset.clip];
-      if (!c) return;
-      let el = card.querySelector('.dv-mini');
-      if (!el) {
-        el = document.createElement('div');
-        el.className = 'dv-mini';
-        card.appendChild(el);
-      }
-      const dur = c.duration || 1;
-      const iv = c.coarse.interval_s;
-      el.title = [
-        iv ? `coarse: a frame every ${iv} s (${c.coarse.frames.length})` : 'coarse: not looked at',
-        c.close.length ? `close: ${c.close.length} window${c.close.length === 1 ? '' : 's'} at 1 s` : 'close: none',
-        c.deep.length ? `deep: ${c.deep.length} span${c.deep.length === 1 ? '' : 's'}` : 'deep: none',
-        `${c.moments.length} claim${c.moments.length === 1 ? '' : 's'}`,
-      ].join(' · ');
-      el.innerHTML = c.coarse.frames.map((t) => `<i class="c" style="left:${pct(t, dur)}"></i>`).join('')
-        + c.close.map(([a, b]) => `<i class="w" style="left:${pct(a, dur)};width:${pct(b - a, dur)}"></i>`).join('')
-        + c.deep.map(([a, b]) => `<i class="d" style="left:${pct(a, dur)};width:${pct(b - a, dur)}"></i>`).join('')
-        + c.moments.map((m) => `<i class="m st-${esc(m.status || 'unseen')}" style="left:${pct(m.start, dur)};width:${pct(Math.max(0, m.end - m.start), dur)}"></i>`).join('');
-    });
   }
 
   /* A seen-tab row: a small priced button; the result opens under the row. The tab is
@@ -788,5 +726,5 @@
     if (openRows.has(key)) setTimeout(() => show(...openRows.get(key)), 0);
   }
 
-  window.deep = { strip, line, inspector, head, minis, rowButton, invalidate, modelName };
+  window.deep = { strip, line, inspector, head, rowButton, invalidate, modelName };
 })();

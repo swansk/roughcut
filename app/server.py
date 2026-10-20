@@ -67,8 +67,8 @@ from pathlib import Path
 from typing import Callable
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, Response,
-                               StreamingResponse)
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, RedirectResponse,
+                               Response, StreamingResponse)
 import uvicorn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -3289,37 +3289,14 @@ async def api_dictate(request: Request) -> JSONResponse:
     return JSONResponse(result)
 
 
-@app.get("/floor", response_class=HTMLResponse)
-def floor_page() -> HTMLResponse:
-    return HTMLResponse((HERE / "static" / "floor.html").read_text(encoding="utf-8"),
-                        headers=NO_STORE)
-
-
-@app.get("/open", response_class=HTMLResponse)
-def open_page() -> HTMLResponse:
-    """The open screen (INTAKE M5): the folder as a contact sheet, and the index."""
-    p = HERE / "static" / "open.html"
-    if not p.exists():
-        raise HTTPException(404, "the open screen is not built yet — see docs/INTAKE.md M5")
-    return HTMLResponse(p.read_text(encoding="utf-8"), headers=NO_STORE)
-
-
-@app.get("/open.js")
-def open_js() -> Response:
-    p = HERE / "static" / "open.js"
-    if not p.exists():
-        raise HTTPException(404, "the open screen's script is not built yet")
-    return Response(p.read_text(encoding="utf-8"),
-                    media_type="application/javascript", headers=NO_STORE)
-
-
-@app.get("/floor.js")
-def floor_js() -> Response:
-    p = HERE / "static" / "floor.js"
-    if not p.exists():
-        raise HTTPException(404, "the floor's script is not built yet")
-    return Response(p.read_text(encoding="utf-8"),
-                    media_type="application/javascript", headers=NO_STORE)
+# The footage screen (/open) and the pass (/floor) are gone (Karl's K4, wave 17 FOLDIN:
+# "fold in, then remove"): what they held is in the editor (the Index panel, Selects'
+# verdicts, File › Project Settings…). An old link or bookmark answers with the editor;
+# the redirect carries no fragment, so the browser keeps the request's own (`#tool=…`).
+@app.get("/floor")
+@app.get("/open")
+def old_screens() -> RedirectResponse:
+    return RedirectResponse("/", status_code=307, headers=NO_STORE)
 
 
 # ---------------------------------------------------------------- junk (HANDOFF item 5)
