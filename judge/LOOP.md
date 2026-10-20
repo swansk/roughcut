@@ -49,6 +49,16 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-20 ~13:00 (box clock): **wave 18: four lanes merged**, each green on the merged tree (its listed tests at nice
+  19): UNDO5 `f24ad9d` (Selects verdicts on the board's Ctrl+Z), INDEX2 `2cd2be0` (tour / first-pass / AI menu point at the
+  Index panel; Run's AI card; 592 px; heard = the pass's count), POLISH12 `32cdb23` (the ruler's edge label; late answers
+  during an import; Next drops an answered proposal at once), REDO2 `7bcdb83` (a design undone in flight is stopped, its
+  redo designs it; the REDO flake was the test). Rubric-log entries for all four written. **FRAME59 (`0b39a4d`) held**:
+  commit 1 parks on the timecode's frame (29.97 in 59.94 steps 2:2) but adds tests that need commit 2; commit 2 gives
+  59.94 sources 59.94 proxies (PROXY_V v5: fstep 10/10, parked = export 48/48) and doubles the frames the 4K 59.94 perf
+  fixtures play (test_latency_under_load 2/6 vs 4/5 at load 10-12). It merges after PLAY9, then an interleaved perf A/B
+  at gate load decides it; PLAY9 told (its frame bar per proxy cadence). Every bin re-proxies once after v5 (Karl's 8766
+  copy too).
 - 2026-10-20 ~10:30 (box clock): **VERDICT 14 FAIL on `799d8b8`** (15 of 16 at 8-9; 6 at 7; the judge's gate GREEN in
   3377 s with 3 flaky under its load; perf both runs). K4 (a) + (b) delivered as far as it can test. Blockers: K2-K4
   (Karl's), dimension 6 (0.5x judders 8/8 plays; 59.94 clips step a new picture on 5/10 frames), **section S: the
