@@ -4,7 +4,8 @@ Scopes (redesign wave 11, lane LUMETRI; verdict 8 punch 4, REDESIGN-GOAL dimensi
 In real Chromium on flat colour clips (GREY, RED, BLUE), the punch's done criteria:
 
   * a curve point dragged and a wheel pushed each move `grade.probe()` within 150 ms of
-    the gesture (from the input that lands the change to the frame that shows it: `arm`),
+    the gesture (from the first input that changes the control to the frame that shows it:
+    `arm`), and on the first or second animation frame after that input (`shown_by_frame`),
     and the export of the cut the board saved moves by the same amount (each channel
     within 3 % of full scale of the preview's move);
   * every drag is one undo entry;
@@ -176,13 +177,20 @@ def wait_saved(page) -> None:
 
 
 def arm(page, value: str, moved: float = 3.0) -> None:
-    """Time a gesture from the input event in which its change lands to the frame that shows
-    it. The clock starts at the timeStamp (when the browser took the input) of the latest
-    pointermove, button down, whose handling changed the control's value (`value`, a JS
-    expression read in a listener on window, after the board's own handler); it stops at the
-    start of the first animation frame whose picture (`grade.probe()`) has moved more than
-    `moved` code values on any channel from the probe taken now — read on the clock BEFORE
-    that frame's probe, whose own draw and read-back are the test's, not the board's.
+    """Time a gesture from the input event in which its first change lands to the frame that
+    shows it. The clock starts at the timeStamp (when the browser took the input) of the FIRST
+    pointermove since the base probe, button down, whose handling changed the control's value
+    (`value`, a JS expression read in a listener on window, after the board's own handler); it
+    stops at the start of the first animation frame whose picture (`grade.probe()`) has moved
+    more than `moved` code values on any channel from the probe taken now — read on the clock
+    BEFORE that frame's probe, whose own draw and read-back are the test's, not the board's.
+    It also counts the animation frames from that first change to the one that shows it
+    (`frames`: 1 is the next frame), and how many changes had landed by then (`at`).
+
+    Verdict 13, punch 7: the clock started at the LATEST value-changing input before the frame
+    that showed the change, so a board slower than the stream of inputs read as fast as the
+    last input: a preview drawn 3 frames late (the mutant in `shown_by_frame`) read 30-107 ms
+    on it, 53-117 on this one, and the drags themselves 6-13 ms on this one (frame 1).
 
     Verdict 12, punch 9 (flaked at load 8-12: 152-323 ms against 150). The clock started at
     the drag's first move and stopped after the stopping frame's probe. Both clocks on the
@@ -199,13 +207,16 @@ def arm(page, value: str, moved: float = 3.0) -> None:
     page.evaluate("""([moved, value]) => {
       const val = new Function('return JSON.stringify(' + value + ')');
       const P = window.__lm = { t0: null, t1: null, base: grade.probe(), draws: grade.draws, p: null,
-                                v: val(), last: null, changes: 0, started: null };
+                                v: val(), first: null, last: null, changes: 0, frames: 0, at: null,
+                                started: null };
       const crossed = (p) => !!p && p.some((v, i) => Math.abs(v - P.base[i]) > moved);
       const loop = () => {
         const now = performance.now();
+        P.frames += 1;                     // animation frames since the first change, this one
         const p = grade.probe();
-        if (P.last != null && crossed(p)) {
-          P.t0 = P.last; P.t1 = now; P.p = p; P.drew = grade.draws - P.draws; return;
+        if (crossed(p)) {
+          P.t0 = P.first; P.t1 = now; P.p = p; P.at = P.changes; P.drew = grade.draws - P.draws;
+          return;
         }
         if (now - P.started < 3000) requestAnimationFrame(loop);
       };
@@ -214,7 +225,9 @@ def arm(page, value: str, moved: float = 3.0) -> None:
         const v = val();
         if (v === P.v) return;
         P.v = v; P.last = e.timeStamp; P.changes += 1;
-        if (P.started == null) { P.started = performance.now(); requestAnimationFrame(loop); }
+        if (P.first == null) {
+          P.first = e.timeStamp; P.started = performance.now(); requestAnimationFrame(loop);
+        }
       };
       window.addEventListener('pointermove', landed);
       P.stop = () => window.removeEventListener('pointermove', landed);
@@ -241,6 +254,29 @@ def frames_flow(page, n: int = 5, gap_ms: float = 50, within_ms: float = 5000) -
 def armed_ms(page) -> float:
     page.wait_for_function("window.__lm.t1 != null", timeout=4000)
     return page.evaluate("(() => { window.__lm.stop(); return Math.max(0, window.__lm.t1 - window.__lm.t0); })()")
+
+
+FIRST_FRAMES = 2                # the next animation frame, and one of slack
+
+
+def armed_frames(page) -> int:
+    """The animation frame, counted from the first change (1 = the next one), that showed it
+    (`arm`); read after `armed_ms`."""
+    return page.evaluate("window.__lm.frames")
+
+
+def shown_by_frame(page, what: str) -> None:
+    """The picture shows the first change by the 2nd animation frame after it (Effect Controls
+    draws a change on the next one: effects.js `drawSoon`; grade.js `draw()`). Verdict 13,
+    punch 7: a mutant with the preview 3 frames late (effects.adjust, which the grade draws the
+    Program from and probe() reads, answering for the live shot with the controls as they were
+    3 frames earlier, the Program redrawn when the late change reaches it) showed the curve's
+    first change on frame 4 in 5 runs of 5 and read 53-117 ms, inside the 150 ms bar; this bar
+    catches it (the same drag unmutated: frame 1, 5 of 5). A count of frames, asserted at any
+    load: a slow box makes each frame longer, not the board's next frame later."""
+    frames = armed_frames(page)
+    assert 1 <= frames <= FIRST_FRAMES, (what, f"shown on animation frame {frames} after the first change"
+                                         f" (the next is 1; at most {FIRST_FRAMES})")
 
 
 def within_limit(ms, what: str) -> None:
@@ -310,6 +346,7 @@ def test_a_curve_point_dragged_moves_the_program_and_the_export_alike(page, proj
     x = b["x"] + 0.5 * b["width"]
     drag(page, x, b["y"] + 0.5 * b["height"], x, b["y"] + (1 - 0.72) * b["height"])
     ms = armed_ms(page)
+    shown_by_frame(page, "a curve point dragged")
     within_limit(ms, "a curve point dragged")
     assert page.evaluate("window.__lm.drew") >= 0
     pts = page.evaluate("effects.curve('master')")
@@ -381,6 +418,7 @@ def test_a_wheel_push_moves_the_program_and_the_export_alike(page, proj, live_se
     # grey 2-3 code values, under the threshold)
     drag(page, cx, cy, cx - 0.06 * b["width"], cy - 0.3 * b["height"], steps=2)
     ms = armed_ms(page)
+    shown_by_frame(page, "a wheel pushed")
     within_limit(ms, "a wheel pushed")
     cb, cr, li = page.evaluate("effects.wheel('midtones')")
     assert cr == pytest.approx(0.6, abs=0.05) and cb == pytest.approx(-0.12, abs=0.05) and li == 0
