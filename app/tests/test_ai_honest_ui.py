@@ -319,9 +319,17 @@ def _marks(edl: dict) -> tuple:
 
 
 def _on_disk() -> list[dict]:
-    """Every effect record in the bin's fx folder, listed or not (a withdrawn one is not)."""
+    """Every effect record in the bin's fx folder, listed or not (a withdrawn one is not).
+    A record the server deletes between the listing and the read is not there (verdict 14's
+    gate: this read raced a discard, as the check after it did)."""
     import server
-    return [json.loads(f.read_text(encoding="utf-8")) for f in sorted(server.fx_home().glob("fx_*.json"))]
+    out = []
+    for f in sorted(server.fx_home().glob("fx_*.json")):
+        try:
+            out.append(json.loads(f.read_text(encoding="utf-8")))
+        except FileNotFoundError:
+            continue
+    return out
 
 
 # ---------------------------------------------------------------- punch 5
@@ -515,8 +523,11 @@ def test_a_redo_brings_back_the_same_design_with_no_model_call(browser, live_ser
         b.undo()
         _until(p, lambda: b.effects() == [], what="the design to be set aside")
         assert p.evaluate("tl.mark('a new edit')") is True
-        _until(p, lambda: _on_disk() == [], what="the set-aside design to go for good")
-        assert not (server.fx_home() / fx_id).exists()
+        # gone for good: the record, then its files' folder (POST /api/fx/discard unlinks the
+        # one and then removes the other — verdict 14's gate caught this test reading between
+        # the two, so it waits for both)
+        _until(p, lambda: _on_disk() == [] and not (server.fx_home() / fx_id).exists(),
+               what="the set-aside design and its files to go for good")
         b.redo()                                      # nothing to redo: nothing comes back
         p.wait_for_timeout(800)
         assert b.effects() == [] and MODEL.calls == calls
