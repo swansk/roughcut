@@ -1,20 +1,30 @@
-"""A clip parked and stepped in a 59.94 sequence shows the frame its timecode names (wave 18
-FRAME59, verdict 14 punch 2; REDESIGN-GOAL dimension 6).
+"""59.94 clips show every frame when parked and trimmed (wave 18 FRAME59, verdict 14 punch
+2; REDESIGN-GOAL dimension 6).
 
-Judge 14 frame-stepped the 59.94 Killington sequence: a 29.97 clip in it (CLIP_07, whose in
-is half way into a source frame) held its frames 1, 2 and 3 steps rather than 2:2. The
-playhead sits anywhere in a frame (a seek to a time, a click on the ruler, every step after it
-keeps that phase), the park went that far into the frame, and 1.0 s into a 59.94 shot is 0.94
-of a frame in, so the buffer was parked microseconds from the next source frame's start, where
-the decoder's pick goes either way. Now the monitor parks on the start of the sequence frame
-the playhead's timecode names (app.js `seqFrameAt`, in the cue and the rest still).
+Judge 14 frame-stepped the 59.94 Killington sequence: on a 59.94 clip the Program's picture
+changed on 5 of 10 one-frame steps, strictly alternating, because the monitor played a 29.97
+proxy of it (build_proxy halved every rate over 30.5 since verdict 4), which has no frame at
+every other step; so half the frames parked on or trimmed to (the inspector's still is cut
+from the proxy too) were not the export's, which reads the original. And a 29.97 clip in the
+same sequence (CLIP_07, whose in is half way into a source frame) held its frames 1, 2 and 3
+steps rather than 2:2: the playhead sits anywhere in a frame (a seek to a time, a click on
+the ruler, every step after it keeps that phase), the park went that far into the frame, and
+1.0 s into a 59.94 shot is 0.94 of a frame in, so the buffer was parked microseconds from the
+next source frame's start, where the decoder's pick goes either way.
+
+Now a source's proxy keeps its own rate up to PROXY_MAX_FPS (60.5: 59.94 and 60 are kept,
+119.88 is halved to 59.94; PROXY_V v5), and the monitor parks on the start of the sequence
+frame the playhead's timecode names (app.js `seqFrameAt`, in the cue and the rest still).
 
 The fixture is test_parked_frame's (PLAY8's measure): lossless clips with a keyframe every 8
 frames, every frame its own grey (16 + 7·(N mod 32)), so a picture's luma says which source
 frame it is; proxied by the server's own `ensure_proxies`; the export rendered by assemble.py
-(the CPU path). Asserted: a 29.97 clip whose in is half way into a frame, stepped 24 times in a
-59.94 sequence from 1.0 s into the shot, holds every source frame exactly 2 steps, each the
-export's.
+(the CPU path). Asserted: a 59.94 proxy has every source frame; parked on each of 48 frames
+of a 59.94 sequence (16 shots of a 59.94 clip, shot k's in at its frame k, 3 frames each), the
+Program's <video> and its rest still are the export's frame 48/48; 10 one-frame steps from a
+playhead between frames show 10 new pictures, each the export's; and a 29.97 clip whose in is
+half way into a frame, stepped 24 times in a 59.94 sequence from the same phase, holds every
+source frame exactly 2 steps, each the export's.
 """
 
 from __future__ import annotations
@@ -241,6 +251,78 @@ def _steps(pg, start: float, n: int) -> list[tuple[float, int]]:
         at = pg.evaluate(SETTLED, before)
         out.append((at["playhead"], round(pg.evaluate(MEAN, None) / STEP) % 32))
     return out
+
+
+def test_a_59_94_proxy_keeps_every_frame(live):
+    """The monitor's proxy of a 59.94 source is 59.94 with all of its frames (a 29.97 one has
+    no frame at every other step); a 29.97 source's is 29.97, as before."""
+    import server
+    pdir = server.STATE["proxy_dir"]
+    assert pdir.name == server.PROXY_V == "v5"
+    def probe(path: Path) -> dict:
+        return json.loads(subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_packets", "-show_entries",
+             "stream=r_frame_rate,avg_frame_rate,nb_read_packets", "-of", "json", str(path)],
+            capture_output=True, text=True, check=True).stdout)["streams"][0]
+
+    for stem, rate in CLIPS.items():
+        st, src = probe(pdir / f"{stem}.mp4"), probe(server.STATE["footage"] / f"{stem}.MP4")
+        assert st["r_frame_rate"] == rate and st["avg_frame_rate"] == rate, (stem, st)
+        assert st["nb_read_packets"] == src["nb_read_packets"], (stem, st, src)
+        assert server.proxy_rate(server.STATE["footage"] / f"{stem}.MP4") is None
+
+
+def test_the_parked_frame_at_59_94_is_the_exports(live, proj):
+    """PLAY8's measure at 59.94, asserted: parked on each of the 48 frames of 16 three-frame
+    shots of a 59.94 clip (shot k's in at its frame k), the Program's <video> and its rest
+    still show the export's frame. Before (a 29.97 proxy): 24/48."""
+    segs = _shots60()
+    _configure(proj, segs)
+    export = _export(proj["root"], proj["footage"], "s60", segs)
+    assert export == [(k + j) % 32 for k in range(16) for j in range(3)], export
+    R = _rate(R60)
+    with sync_playwright() as pw:
+        b, pg, errors = _page(pw, live, 16)
+        times = [(k, j, pg.evaluate(f"tl.filmStart('s{k}')") + j / float(R))
+                 for k in range(16) for j in range(3)]
+        rest = {}
+        for k, j, t in times:                    # the rest still, while no buffer is live yet
+            src = pg.evaluate(REST, t)
+            rest[(k, j)] = round(pg.evaluate(MEAN, src) / STEP) % 32
+        shown = {}
+        for k, j, t in times:
+            at = pg.evaluate(PARK, t)
+            assert at["index"] == k, (k, j, at)
+            shown[(k, j)] = round(pg.evaluate(MEAN, None) / STEP) % 32
+        b.close()
+    assert not errors, errors
+    bad_v = [(k, j, shown[(k, j)], export[3 * k + j]) for k, j, _ in times if shown[(k, j)] != export[3 * k + j]]
+    bad_p = [(k, j, rest[(k, j)], export[3 * k + j]) for k, j, _ in times if rest[(k, j)] != export[3 * k + j]]
+    print(f"\n59.94: parked <video> {48 - len(bad_v)}/48 the export's frame; rest still "
+          f"{48 - len(bad_p)}/48; wrong (shot, frame, shown, export): {bad_v} {bad_p}")
+    assert bad_v == [], bad_v
+    assert bad_p == [], bad_p
+
+
+def test_ten_frame_steps_on_a_59_94_clip_show_ten_frames(live, proj):
+    """judge 14's fstep.py: parked 1.0 s into a 59.94 shot (0.94 of a frame past a frame's
+    start, as a seek to a time leaves it) and stepped one frame ten times, the picture is a
+    new frame every time, and each is the export's frame for the frame the timecode names."""
+    segs = _one("N60.MP4", 7, 150)                           # in on its odd frame 7
+    _configure(proj, segs)
+    export = _export(proj["root"], proj["footage"], "step60", segs)
+    assert export[:4] == [7, 8, 9, 10], export[:8]
+    with sync_playwright() as pw:
+        b, pg, errors = _page(pw, live, 1)
+        rows = _steps(pg, 1.0, 10)
+        b.close()
+    assert not errors, errors
+    want = [export[round(t * float(SEQ))] for t, _ in rows]
+    shown = [f for _, f in rows]
+    print(f"\n59.94 in 59.94, 10 steps from 1.0 s: shown {shown}, export {want}")
+    changed = sum(1 for a, c in zip([None] + shown, shown) if a != c)
+    assert changed == 10, (shown, want)
+    assert shown == want, (shown, want)
 
 
 def test_a_29_97_clip_in_a_59_94_sequence_holds_2_2(live, proj):

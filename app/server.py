@@ -662,14 +662,25 @@ PROXY_GOP_S = 0.5
 # scaled and encoded on the card (NVDEC → scale_cuda → NVENC, the range proxy's encoder
 # settings) instead of a 4K/5.3K decode and x264 on the CPU — the same profile (1280
 # wide, the rate rule, the orient rule, a keyframe every PROXY_GOP_S), another encoder.
-PROXY_V = "v4"
-PROXY_MAX_FPS = 30.5
+# v5 (wave 18 FRAME59, verdict 14 punch 2): PROXY_MAX_FPS 30.5 -> 60.5, so a 59.94 (or 60)
+# source is proxied at its own rate. At 29.97 the proxy had no frame at every other step
+# of a 59.94 clip: frame-stepped, the Program changed picture on 5 of 10 steps, and half the
+# frames parked on or trimmed to (the inspector's still is cut from the proxy) were the
+# frame before the export's (judge 14; test_parked_frame: 24/48). Premiere's proxies keep
+# the clip's rate. Measured on Killington's CLIP_01 (203.8 s of 4K HEVC 59.94, foxtrot's
+# RTX 3080): the encode is decode-bound, 33 s either way; 340 MB against 204. The cost is
+# the monitor's, while a 59.94 shot plays: twice the frames decoded, and the grade draws
+# what is presented (graded, 5 s at load 7-10, headless Chromium: 48-51 frames a second
+# shown against 29.5-30, the canvas 42-49 against 29-30, the browser +0.3-0.4 of a core).
+# A source over 60.5 (119.88, 120) is still a whole fraction of its rate: 59.94, 60.
+PROXY_V = "v5"
+PROXY_MAX_FPS = 60.5
 
 
 def proxy_rate(src: Path) -> str | None:
     """The proxy's frame rate for `src` as an ffmpeg rational, or None to keep the
     source's: the source's own divided by the smallest whole number that brings it to
-    PROXY_MAX_FPS or under (59.94 → 29.97, 50 → 25, 119.88 → 29.97)."""
+    PROXY_MAX_FPS or under (59.94 and 50 keep theirs; 119.88 → 59.94, 240 → 60)."""
     from fractions import Fraction
     fps = (media_facts(src) or {}).get("fps") or 0.0
     if fps <= PROXY_MAX_FPS:

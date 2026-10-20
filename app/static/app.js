@@ -3224,14 +3224,15 @@ function frameShownAt(v, t) {
   return v._pf.mt + Math.floor((at - v._pf.mt) / dur + 1e-6) * dur;
 }
 /* A buffer's frame period: seen (trackFrames), else its clip's proxy's (server.py proxy_rate:
- * the source's rate over the smallest whole number that brings it to 30.5 or under). */
+ * the source's rate over the smallest whole number that brings it to 60.5 or under: a 59.94
+ * clip's proxy is 59.94 since v5, wave 18 FRAME59). */
 function frameDur(v) {
   if (v._pfDur && v._pfDurSrc === v.dataset.src) return v._pfDur;
   return frameDurOf(segs.find((s) => proxyOf(s) === v.dataset.src));
 }
 function frameDurOf(seg) {
   const f = seg ? clipRate(seg.clip) : 0;
-  return f > 0 ? Math.max(1, Math.ceil(f / 30.5)) / f : 1 / 30;
+  return f > 0 ? Math.max(1, Math.ceil(f / 60.5)) / f : 1 / 30;
 }
 
 /* The shot ended: stop, or hand over to the buffer that is holding the next one. */

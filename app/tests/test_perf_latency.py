@@ -531,11 +531,13 @@ def measure_keys(page) -> list[float]:
     return out
 
 
-def test_proxy_of_a_59_94_source_is_29_97(live_server):
-    """The monitor's proxy plays at half a 59.94 source's rate, with a keyframe every
-    half second; the clip itself (what the export, the frame grid and the Project panel
-    read) stays 59.94. The proxy folder carries PROXY_V, so an older proxy (v1 at the
-    source rate, v2 with 1 s keyframes) is rebuilt rather than served."""
+def test_proxy_of_a_59_94_source_keeps_its_rate(live_server):
+    """The monitor's proxy of a 59.94 source is 59.94 (wave 18 FRAME59, verdict 14 punch 2:
+    at half the rate every other frame stepped to, parked on or trimmed to was not there, and
+    the monitor showed the frame before the export's), with a keyframe every half second; the
+    clip itself (what the export, the frame grid and the Project panel read) is 59.94 too.
+    The proxy folder carries PROXY_V, so an older proxy (v1 at the source rate with x264's
+    250-frame keyframes, v2-v4 at 29.97) is rebuilt rather than served."""
     import httpx
     import server
 
@@ -547,8 +549,8 @@ def test_proxy_of_a_59_94_source_is_29_97(live_server):
              "stream=r_frame_rate,avg_frame_rate", "-of", "json", str(pdir / f"{stem}.mp4")],
             capture_output=True, text=True, check=True)
         st = json.loads(r.stdout)["streams"][0]
-        assert st["r_frame_rate"] == "30000/1001", st
-        assert st["avg_frame_rate"] == "30000/1001", st
+        assert st["r_frame_rate"] == FPS, st
+        assert st["avg_frame_rate"] == FPS, st
         # a keyframe every half second at most (verdict 6 punch 2: a park or a cue decodes
         # from the keyframe before its frame; the 4K source's own GOP is 1 s)
         r = subprocess.run(
@@ -558,7 +560,7 @@ def test_proxy_of_a_59_94_source_is_29_97(live_server):
         keys = [float(x.strip(",")) for x in r.stdout.split() if x.strip(",")]
         assert len(keys) >= CLIP_S / 0.5, keys
         assert max(b - a for a, b in zip(keys, keys[1:])) <= 0.5 + 0.02, keys
-    assert server.proxy_rate(server.STATE["footage"] / "P60_A.MP4") == "30000/1001"
+    assert server.proxy_rate(server.STATE["footage"] / "P60_A.MP4") is None    # the source's
     body = httpx.get(f"{live_server}/api/clips", timeout=30).json()
     rows = body.get("clips", body) if isinstance(body, dict) else body
     row = next(c for c in rows if c.get("clip") == "P60_A.MP4")

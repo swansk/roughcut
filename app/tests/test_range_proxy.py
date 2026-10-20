@@ -12,7 +12,8 @@ The fixture is a 1280×720 HEVC clip at 59.94 (MPEG-4 part 2 without libx265), s
 through a preview, with:
   * a 1-pixel grid in one quadrant: sharp at 1280, gone in the 640×360 preview, so the
     test can tell a range frame from a preview frame;
-  * a white bar that moves 8 px a source frame: a frame one off reads wrong;
+  * a white bar that moves 16 px a source frame: a frame one off reads wrong (8 px until
+    wave 18, when a 59.94 proxy was 29.97 and its neighbours two source frames apart);
   * four different quadrants and a copy flagged −180° (Karl's GoPro flag), so a turn, a
     flip or a mirror reads wrong.
 Every frame is compared against the whole-clip proxy `build_proxy` makes (the frame the
@@ -39,7 +40,7 @@ from conftest import _sidecar
 
 SECONDS = 8.0
 RATE = "60000/1001"
-OUT_RATE = 30000 / 1001
+OUT_RATE = 60000 / 1001       # the proxy's: the source's own since PROXY_V v5 (wave 18 FRAME59)
 # FLAT: shots at [1.0, 1.8] and [6.012, 7.0]; ROT180: one at [3.009, 4.0] (padded starts
 # between two source frames, so a range whose frames were not put back at their own times
 # reads a frame off); CLIP_X is in the bin and not in the cut.
@@ -68,7 +69,7 @@ def _make_base(dest: Path) -> None:
         f"color=c=0x14E614:s=640x360:r={RATE}:d={SECONDS}[bl];"
         f"color=c=white:s=40x280:r={RATE}:d={SECONDS}[bar];"
         "[bg][tl]overlay=0:0[a];[a][tr]overlay=640:0[b];[b][bl]overlay=0:360[c];"
-        "[c][bar]overlay=x='640+mod(n*8\\,560)':y=400,format=yuv420p[v]")
+        "[c][bar]overlay=x='640+mod(n*16\\,560)':y=400,format=yuv420p[v]")
     vc = (["-c:v", "libx265", "-preset", "ultrafast", "-x265-params", "log-level=error:crf=16"]
           if _x265() else ["-c:v", "mpeg4", "-q:v", "2"])
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-filter_complex", graph,
@@ -213,7 +214,7 @@ def test_cut_ranges_follow_the_cut_and_merge_with_their_pads(board):
 
 @pytest.mark.parametrize("path", ["gpu", "cpu"])
 def test_a_range_proxy_has_the_proxy_profile(board, monkeypatch, path):
-    """1280 wide, the proxy's 59.94 → 29.97 rate, upright with no matrix left on it, a
+    """1280 wide, the proxy's rate (a 59.94 source's own), upright with no matrix left on it, a
     keyframe at least every second, the clip's whole length, its sound."""
     server = board["server"]
     if path == "gpu" and not _gpu():
@@ -226,7 +227,7 @@ def test_a_range_proxy_has_the_proxy_profile(board, monkeypatch, path):
     p = _probe(rec["path"])
     st = p["streams"][0]
     assert (st["width"], st["height"]) == (1280, 720)
-    assert st["r_frame_rate"] == "30000/1001"
+    assert st["r_frame_rate"] == "60000/1001"
     assert not any("rotation" in sd for sd in st.get("side_data_list") or [])
     assert abs(float(p["format"]["duration"]) - SECONDS) < 0.2
     keys = _keyframes(rec["path"])
@@ -277,14 +278,14 @@ def test_seeks_inside_a_shot_land_on_the_proxys_frame_and_are_sharp(
 
 def test_the_whole_clip_proxy_frame_grid_matches_frame_for_frame(board, rbin):
     """Every frame of the range proxy is on the proxy's grid: frame n of one is frame n of
-    the other, across a range's edges (the 59.94 → 29.97 phase included)."""
+    the other, across a range's edges."""
     server = board["server"]
     rec = _build(server, "FLAT")
     ref = rbin["refs"] / "FLAT.mp4"
-    for n in (0, 29, 30, 31, 60, 83, 84, 85, 100, 149, 150, 151, 152, 200, 238):
+    for n in (0, 59, 60, 61, 120, 167, 168, 169, 200, 299, 300, 301, 302, 400, 476):
         d = _dist(_gray(rec["path"], n=n), _gray(ref, n=n))
-        # the bar moves 16 px a frame (~2 levels of this distance); a frame off by one
-        # source frame (half a proxy frame) reads ~1.3
+        # the bar moves 16 px a source frame (~2 levels of this distance): a frame off by
+        # one reads ~2
         assert d < 0.8, f"frame {n}: diff {d:.2f}"
 
 
@@ -502,7 +503,7 @@ def test_chromium_plays_the_shot_from_its_range_proxy_and_seeks_land(rbin, tmp_p
             def dist(a: np.ndarray, b: np.ndarray) -> float:
                 return float(np.abs(a - b).mean())
 
-            for k, sharp in ((105, True), (95, True), (12, False), (225, False)):
+            for k, sharp in ((210, True), (190, True), (24, False), (450, False)):
                 (got, s), (want, s_ref) = frame("v", k), frame("r", k)
                 d0 = dist(got, want)
                 for j in (-1, 1):
@@ -510,9 +511,11 @@ def test_chromium_plays_the_shot_from_its_range_proxy_and_seeks_land(rbin, tmp_p
                     assert other > d0 + 2, f"frame {k}: Chromium shows frame {k + j}?"
                 assert d0 < 4, f"frame {k}: diff {d0:.1f}"
                 assert (s > 0.7 * s_ref) if sharp else (s < 0.5 * s_ref), (k, s, s_ref)
-            # upright: the picture is the original's autorotated, as ffmpeg shows it
-            assert dist(frame("v", 105)[0], _small(_gray(
-                rbin["footage"] / "ROT180.MP4", t=105.25 / OUT_RATE))) < 12
+            # upright: the picture is the original's autorotated, as ffmpeg shows it (11.7
+            # with the bar at 8 px a frame, 12.8 at 16 since wave 18: the faster bar's edges
+            # cost the encodes more; the picture turned, the stored one, reads ~84)
+            assert dist(frame("v", 210)[0], _small(_gray(
+                rbin["footage"] / "ROT180.MP4", t=210.25 / OUT_RATE))) < 16
             browser.close()
     finally:
         srv.should_exit = True
