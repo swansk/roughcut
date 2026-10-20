@@ -171,7 +171,10 @@
   // 365 → 342; nothing with two badges up); if that is not enough the AI prompt goes to its
   // own row under the header (aiprompt.js `rcAI.drop`), whole at its least in any Timeline
   // of SEL_TLW.
-  const SELECTS_W = 592, SEL_TLW = 460, INDEX_W = 440;   // INDEX_W: the Index tab's (wave 17 INDEXPANEL)
+  // The Index tab (wave 17 INDEXPANEL) opens as wide as Selects (verdict 14, punch 8: at 440
+  // px, 438 measured at 1440 and 1920, its foot wrapped Stop onto a second row, its summary
+  // took two lines and 7 rows showed with a clip's detail open), taken the same way.
+  const SELECTS_W = 592, SEL_TLW = 460, INDEX_W = SELECTS_W;
   const SPLIT = 4;
   // The Assistant's full-height column (a waiting proposal's `ptall`, app.js; an AI review's
   // `aitall`, actions.js) takes its width from the Source monitor, the Program keeping its
@@ -222,16 +225,15 @@
     let room = a.W - 2 * SPLIT - insp;
     let proj = Math.round(clamp(frac.proj * a.W, MIN.proj, Math.min(a.W * 0.42, room - MIN.tlw)));
     const head = tlHeadNeed();
-    if (selectsOpen() && proj < SELECTS_W && room - SELECTS_W >= SEL_TLW) {
-      // Selects' width: the Timeline left keeps its header whole, Effect Controls at its
-      // default giving down to its tabs whole for it; else the prompt takes its own row
-      const short = head - (room - SELECTS_W);
+    const wide = selectsOpen() ? SELECTS_W : indexOpen() ? INDEX_W : 0;
+    if (wide && proj < wide && room - wide >= SEL_TLW) {
+      // Selects' (or the Index's) width: the Timeline left keeps its header whole, Effect
+      // Controls at its default giving down to its tabs whole for it; else the prompt takes
+      // its own row
+      const short = head - (room - wide);
       const give = frac.insp === DEFAULTS.insp ? insp - Math.max(MIN.insp, tabsNeed('#pInspector')) : 0;
       if (short > 0 && short <= give) { insp -= short; room += short; }
-      proj = SELECTS_W;
-    }
-    else if (indexOpen() && proj < INDEX_W && room - INDEX_W >= Math.max(SEL_TLW, head)) {
-      proj = INDEX_W;                       // the Index panel's width, taken the same way (wave 17)
+      proj = wide;
     }
     px = { proj, insp, src, top, prog: a.W - SPLIT - src, tl: a.H - SPLIT - top, tlw: room - proj };
     root.setProperty('--c-proj', `${proj}px`);
@@ -247,8 +249,8 @@
   function saveLayout() { store.set(LAYOUT_KEY, { ...frac, v: LAYOUT_V }); }
   const selectsOpen = () => isOpen('bin');
   // The Index panel (wave 17, K4; indexpanel.js) is the Project group's other wide tab: its
-  // stage columns and its re-run bar whole want INDEX_W, taken from the Timeline the way
-  // Selects takes its width, under the same guard for the Timeline's header row.
+  // stage columns, its one-line summary and its re-run bar on one row want INDEX_W (Selects'
+  // own), taken from the Timeline exactly as Selects takes it.
   const indexOpen = () => isOpen('index');
 
   /* A panel group's width for its tab strip whole: its borders, its header's padding and

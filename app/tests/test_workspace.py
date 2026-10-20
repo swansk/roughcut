@@ -1271,3 +1271,124 @@ def test_overwrite_or_insert_past_the_end_leaves_a_gap(live_server, project, bro
     pg.wait_for_function(f"segs.length === {n}", timeout=5000)
     assert pg.errors == []
     pg.context.close()
+
+
+# ---------------------------------------------------------------- the Index panel's size
+
+def _index_12(route):
+    """/api/index/clips as a 12-clip bin's would read mid-run (Killington's size, the judge's
+    worst words): every clip heard, looked at (two re-tuned to 2 s), three close looks, two
+    stages running — built from the server's own answer on the fixture, so its shape is the
+    server's."""
+    resp = route.fetch()
+    rep = resp.json()
+    base = rep["rows"][0]
+    now = time.time()
+    rows = []
+    for i in range(12):
+        r = json.loads(json.dumps(base))
+        r["clip"], r["stem"] = f"CLIP_{i + 1:02d}.MP4", f"CLIP_{i + 1:02d}"
+        tuned = i in (3, 7)
+        r["interval_s"], r["tuned"], r["duration"] = (2.0 if tuned else 4.0), tuned, 180.0 + i
+        st = r["stages"]
+        st["asr"].update(state="done", file=True, at=now - 600)
+        st["look"].update(state="done", file=True, at=now - 500, interval_s=2.0 if tuned else 4.0,
+                          sheets=6 if tuned else 3, frames=90 if tuned else 45, cost_usd=0.27)
+        st["close"].update(state="done" if i < 3 else "running" if i in (4, 5) else "not run",
+                           file=i < 3, at=now - 400 if i < 3 else None, windows=3 if i < 3 else None,
+                           cost_usd=0.22 if i < 3 else 0.0, elapsed_s=12.0 if i in (4, 5) else None,
+                           pct=40 if i in (4, 5) else None)
+        st["telemetry"].update(state="skipped", error="no telemetry stream in the file")
+        st["proxy"].update(state="done", file=True, at=now - 550)
+        r["words"], r["telemetry_peaks"] = 225, None
+        rows.append(r)
+    rep.update(rows=rows, running=True, job="fake-ix", stopping=False, journal=True,
+               summary={"clips": 12, "heard": 12, "looked": 12, "close": 3, "telemetry": 0,
+                        "no_telemetry": 12, "previews": 12, "looked_at": {"4": 10, "2": 2},
+                        "cost_usd": 4.2, "running": 2, "queued": 0, "held": 0, "failed": 0})
+    route.fulfill(response=resp, body=json.dumps(rep), content_type="application/json")
+
+
+INDEX_SIZE_JS = """() => {
+  const sec = document.querySelector('#projBody > section[data-tool=index]');
+  const list = sec.querySelector('.ix-list'), head = list.querySelector('thead');
+  const lr = list.getBoundingClientRect(), hb = head.getBoundingClientRect().bottom;
+  const rows = [...list.querySelectorAll('tbody tr[data-clip]')];
+  const seen = rows.filter((tr) => { const r = tr.getBoundingClientRect();
+    return r.top >= hb - 0.5 && r.bottom <= lr.bottom + 0.5; }).length;
+  const rowH = rows.length ? rows[0].getBoundingClientRect().height : 0;
+  const foot = sec.querySelector('.ix-foot');
+  const kids = [...foot.children].filter((k) => k.getClientRects().length && !k.classList.contains('grow'));
+  // rows: a child that starts below the bottom of one before it is on a new row
+  const rects = kids.map((k) => k.getBoundingClientRect()).sort((a, b) => a.top - b.top);
+  let footRows = rects.length ? 1 : 0, low = rects.length ? rects[0].bottom : 0;
+  for (const r of rects.slice(1)) { if (r.top >= low - 2) { footRows += 1; } low = Math.max(low, r.bottom); }
+  const sum = sec.querySelector('.ix-sum');
+  const lh = parseFloat(getComputedStyle(sum).lineHeight);
+  const pad = parseFloat(getComputedStyle(sum).paddingTop) + parseFloat(getComputedStyle(sum).paddingBottom);
+  // every cell, the detail's lines and the foot's words on one line, none cut
+  const wrapped = [...sec.querySelectorAll('th, td, .ix-dl, .ix-dh, .ix-foot > *')]
+    .filter((el) => el.getClientRects().length)
+    .filter((el) => { const cs = getComputedStyle(el); const l = parseFloat(cs.lineHeight) || 18;
+      const p = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+      return el.getBoundingClientRect().height > l + p + Math.max(4, l * 0.5); })
+    .map((el) => el.className + ':' + el.textContent.slice(0, 30));
+  const cut = [...sec.querySelectorAll('.ix-sum, .ix-foot > span, .ix-dl .v, .ix-dh, th')]
+    .filter((el) => el.getClientRects().length && el.scrollWidth > el.clientWidth + 1)
+    .map((el) => el.className + ':' + el.textContent.slice(0, 40));
+  return {panel: document.querySelector('#pProject').getBoundingClientRect().width,
+          section: sec.clientWidth, list_h: lr.height, row_h: rowH,
+          capacity: Math.floor((lr.bottom - hb) / (rowH || 1)), seen,
+          detail_h: sec.querySelector('.ix-detail').getBoundingClientRect().height,
+          detail_open: !sec.querySelector('.ix-detail').hidden,
+          foot_h: foot.getBoundingClientRect().height, foot_rows: footRows,
+          foot_scroll: foot.scrollWidth - foot.clientWidth,
+          sum_lines: Math.round((sum.getBoundingClientRect().height - pad) / lh), sum_text: sum.textContent,
+          wrapped, cut, tl: document.querySelector('#pTimeline').getBoundingClientRect().width,
+          page_scroll: document.documentElement.scrollWidth - innerWidth};
+}"""
+
+
+@pytest.mark.parametrize("size", VIEWPORTS, ids=lambda s: f"{s[0]}x{s[1]}")
+def test_the_index_panel_opens_at_a_working_size(live_server, project, browser, size):
+    """Verdict 14, punch 8: the Index panel was 438 px at 1440 and 1920; its foot wrapped
+    Stop onto a second row, its summary took two lines, and 7 rows showed with a clip's
+    detail open. It opens as wide as Selects (dock.js INDEX_W): >= 560 px, >= 10 rows in
+    view with a clip's detail open, the foot one row, the summary one line, no cell, line
+    or word wrapped or cut — on a 12-clip bin mid-run (two clips selected at different
+    look intervals: the foot's widest words, "What isn't done", "each clip's own", Stop)."""
+    ctx = browser.new_context(viewport={"width": size[0], "height": size[1]})
+    pg = ctx.new_page()
+    errors = []
+    pg.on("pageerror", lambda e: errors.append(str(e)))
+    pg.route("**/api/index/clips", _index_12)
+    Path(project["edl"]).write_text(json.dumps(SEED, indent=1), encoding="utf-8")
+    pg.goto(live_server)
+    pg.wait_for_selector("#tl .blk", timeout=15000)
+    pg.wait_for_function("window.rcIndex && window.dock", timeout=15000)
+    tl0 = box(pg, "#pTimeline")["w"]
+    pg.evaluate("rcIndex.open()")
+    pg.wait_for_function("document.querySelectorAll('[data-testid=index-row]').length === 12",
+                         timeout=15000)
+    pg.locator('[data-testid=index-row][data-clip="CLIP_03.MP4"]').click()
+    pg.locator('[data-testid=index-row][data-clip="CLIP_04.MP4"]').click(modifiers=["Control"])
+    pg.locator('[data-testid="index-what"]').select_option("missing")
+    pg.wait_for_function("rcIndex.state().selection.length === 2", timeout=5000)
+    pg.wait_for_timeout(400)
+    m = pg.evaluate(INDEX_SIZE_JS)
+    print(f"\nindex panel {size}: {json.dumps({k: v for k, v in m.items() if k != 'sum_text'})}"
+          f"\n  summary: {m['sum_text']}")
+    assert m["panel"] >= 560, m
+    assert m["detail_open"] and m["seen"] >= 10, m
+    assert m["foot_rows"] == 1 and m["foot_scroll"] <= 0, m
+    assert m["sum_lines"] == 1 and "looked 12 (10 at 4 s, 2 at 2 s)" in m["sum_text"], m
+    assert m["wrapped"] == [] and m["cut"] == [], m
+    assert m["page_scroll"] <= 0 and m["tl"] >= 460, m
+    assert pg.locator('[data-testid="index-stop"]').is_visible()
+    # the Project tab gives the width back
+    pg.locator(".ws-tab[data-tool=project]").click()
+    pg.wait_for_timeout(300)
+    assert box(pg, "#pTimeline")["w"] == pytest.approx(tl0, abs=1)
+    assert errors == []
+    pg.unroute_all(behavior="ignoreErrors")
+    ctx.close()

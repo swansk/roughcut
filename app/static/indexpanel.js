@@ -456,6 +456,7 @@
     $('.ix-sum', sec).textContent = IX.err || summaryWords() || 'reading the index…';
     const s = (rep && rep.summary) || {};
     $('.ix-sum', sec).title = rep ? [
+      summaryWords(),
       `telemetry ${s.telemetry || 0}${s.no_telemetry ? ` (${s.no_telemetry} without a sensor stream)` : ''} · previews ${s.previews || 0}`,
       free() ? `~${dollars(s.cost_usd)} if using the API · free on your plan` : `spent ${dollars(s.cost_usd)}`,
       rep.journal ? `journal: ${rep.path}` : 'no journal yet: the files on disk',

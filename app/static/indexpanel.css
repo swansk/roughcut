@@ -3,11 +3,15 @@
  * line for the bin, a list with a heading row that stays and 21 px rows (the Name pinned
  * when the columns scroll sideways), the selected clip's detail, and a foot bar with the
  * re-run: what, the look interval, the price, Run / Stop. */
-#projBody > section[data-tool=index] { display: flex; flex-direction: column; height: 100%; padding: 0; }
+#projBody > section[data-tool=index] { display: flex; flex-direction: column; height: 100%; padding: 0;
+                                       container: ixpanel / inline-size; }
 #projBody > section[data-tool=index][hidden] { display: none; }
 
+/* the bin's one line (verdict 14, punch 8: it took two at 438 px); its words whole in its
+   hover, should a panel dragged narrow have no room for them */
 .ix-sum { flex: none; padding: 4px 8px; font-size: 11px; line-height: 15px; color: var(--text);
-          border-bottom: 1px solid #0f0f10; font-variant-numeric: tabular-nums; }
+          border-bottom: 1px solid #0f0f10; font-variant-numeric: tabular-nums;
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .ix-list { flex: 1 1 auto; min-height: 60px; overflow: auto; outline: none; position: relative;
            scrollbar-width: thin; scrollbar-color: #45454b transparent; user-select: none;
@@ -61,20 +65,38 @@ table.ixt tr.empty td { padding: 8px; height: auto; }
 .ix-dh { display: flex; gap: 8px; align-items: baseline; margin-bottom: 2px; white-space: nowrap; }
 .ix-dh b { font-weight: 600; }
 .ix-dh span { color: var(--dim); }
-.ix-dl { display: flex; gap: 8px; line-height: 17px; white-space: nowrap; }
+.ix-dl { display: flex; gap: 8px; line-height: 17px; white-space: nowrap; min-width: 0; }
 .ix-dl .k { flex: none; width: 74px; color: var(--dim); }
 .ix-dl .v { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .ix-dl .bad, .ix-detail .bad { color: var(--bad); }
+/* As wide as Selects (dock.js INDEX_W), the short properties pair up — Heard beside
+   Telemetry, Close looks beside Preview, the look's long line whole across — so a clip's
+   detail takes four lines, not six, and ten rows of the list stay in view above it at
+   1440 (verdict 14, punch 8: seven showed) */
+@container ixpanel (min-width: 520px) {
+  .ix-detail { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); column-gap: 14px; }
+  .ix-detail .ix-dh, .ix-detail .hint { grid-column: 1 / -1; }
+  .ix-dl .k { width: 64px; }
+  .ix-dl[data-stage=asr] { grid-row: 2; grid-column: 1; }
+  .ix-dl[data-stage=telemetry] { grid-row: 2; grid-column: 2; }
+  .ix-dl[data-stage=look] { grid-row: 3; grid-column: 1 / -1; }
+  .ix-dl[data-stage=close] { grid-row: 4; grid-column: 1; }
+  .ix-dl[data-stage=proxy] { grid-row: 4; grid-column: 2; }
+}
 
-/* the foot: Premiere's bottom bar, the re-run on it */
-.ix-foot { flex: none; min-height: 28px; display: flex; flex-wrap: wrap; align-items: center; gap: 3px 4px;
+/* the foot: Premiere's bottom bar, the re-run on it — one row (verdict 14, punch 8: at 438
+   px Stop wrapped under it): the scope and the price give way first, cut with … (whole in
+   their hovers); only a panel dragged narrower than the bar wraps it */
+.ix-foot { flex: none; min-height: 28px; display: flex; flex-wrap: nowrap; align-items: center; gap: 3px 4px;
            padding: 2px 4px; border-top: 1px solid #0f0f10; background: var(--head); white-space: nowrap; }
+@container ixpanel (max-width: 439px) { .ix-foot { flex-wrap: wrap; } }
 .ix-foot select { padding: 1px 4px; font-size: 11px; height: 22px; }
 .ix-foot select[hidden] { display: none; }
 .ix-foot .ix-scope { flex: 0 1 auto; min-width: 28px; max-width: 90px; overflow: hidden;
                      text-overflow: ellipsis; color: var(--text); font-size: 11px; padding: 0 3px; }
-.ix-foot select, .ix-foot .ix-price, .ix-foot button { flex: none; }
-.ix-foot .ix-price { color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+.ix-foot select, .ix-foot button { flex: none; }
+.ix-foot .ix-price { flex: 0 1 auto; min-width: 24px; overflow: hidden; text-overflow: ellipsis;
+                     color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
 .ix-foot button { padding: 1px 9px; line-height: 18px; }
 .ix-foot .ix-run { background: #2b4f78; border-color: #3a6698; color: #fff; }
 .ix-foot .ix-run:hover { background: #335c8b; }
