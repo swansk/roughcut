@@ -499,3 +499,12 @@ next judge runs, and the next judge rules it honest or lenient.
   or moves, or when the backend / settings / bin changed, and never to the suite's TestClient (so API tests always read
   fresh state; `test_import_snap` tests late answers on a real loop). The new `waiting` cause names a request whose time
   went to a worker thread or a subprocess.
+
+- 2026-10-20 (wave 17, lane FOLDIN; logged by the lead): **the screens budget loses `/floor` and `/open`, because the screens
+  are gone** (Karl's K4 (b): `/open` and `/floor` now answer with the editor; every feature they had is in it, per the lane's
+  audit `~/roughcut-loop/lane-foldin/AUDIT.md`). The five board states are unchanged and exact (`/` 110·58 … `/ fx` 144·61).
+  Neither more nor less lenient for the board; the two removed limits (58·8, 59·9) no longer have a page to measure. Also
+  new in the editor from the fold-in, each one a place for something the old pages had: File › Project Settings… (index
+  order, workers, budget cap), Window › Events (the index journal), the pass's verdicts on Selects rows, junk in the
+  Project panel's Status, and a hold-to-speak mic in the AI prompt (shown only while the prompt has focus, only where the
+  recogniser is installed).

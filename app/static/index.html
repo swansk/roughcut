@@ -19,8 +19,8 @@
       <button type="button" data-cmd="import" data-testid="menu-import">Import… <span class="k">Ctrl+I</span></button>
       <button type="button" data-cmd="mediabrowser" data-testid="menu-media-browser">Import from Media Browser…</button>
       <hr><button type="button" data-cmd="open">Open bin or cut… <span class="k">O</span></button>
-      <button type="button" data-cmd="footage">Footage and index…</button>
-      <button type="button" data-cmd="pass">Review the pass…</button>
+      <button type="button" data-cmd="index" data-testid="menu-file-index">Index…</button>
+      <button type="button" data-cmd="projsettings" data-testid="menu-project-settings">Project Settings…</button>
       <hr><button type="button" data-cmd="export">Export… <span class="k">Export panel</span></button>
     </div></div>
     <div class="menu" data-menu="edit"><button type="button" class="mtop">Edit</button><div class="mdrop" role="menu">
@@ -72,6 +72,7 @@
       <button type="button" data-cmd="w:ask">Assistant</button>
       <button type="button" data-cmd="w:out">Export</button>
       <button type="button" data-cmd="w:index" data-testid="menu-index">Index</button>
+      <button type="button" data-cmd="events" data-testid="menu-events">Events</button>
       <hr><button type="button" data-cmd="reset">Reset workspace layout</button>
     </div></div>
     <div class="menu" data-menu="help"><button type="button" class="mtop">Help</button><div class="mdrop" role="menu">
@@ -401,6 +402,13 @@
 <link rel="stylesheet" href="/modules/export.css">
 <script src="/modules/firstpass.js"></script>
 <script src="/modules/export.js"></script>
+<!-- wave 17 (K4 b): what the old footage and pass screens held, folded in: the pass's
+     verdicts in Selects, File › Project Settings…, the voice in the AI prompt, and
+     Window › Events (the index's journal) -->
+<script src="/modules/passreview.js"></script>
+<script src="/modules/projsettings.js"></script>
+<script src="/modules/voice.js"></script>
+<script src="/modules/events.js"></script>
 <link rel="stylesheet" href="/modules/meters.css">
 <script src="/modules/meters.js"></script>
 <link rel="stylesheet" href="/modules/effects.css">

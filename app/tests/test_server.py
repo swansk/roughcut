@@ -1938,8 +1938,10 @@ def test_a_signed_out_cli_is_known_without_a_call(client, monkeypatch):
 
 
 def test_every_screen_carries_the_cli_banner(client):
+    # one screen since wave 17 FOLDIN: /floor and /open answer with the editor (followed)
     for path in ("/", "/floor", "/open"):
-        assert '<script src="/cli.js"></script>' in client.get(path).text, path
+        r = client.get(path)
+        assert r.url.path == "/" and '<script src="/cli.js"></script>' in r.text, path
     js = client.get("/cli.js")
     assert js.status_code == 200 and "Check again" in js.text
 

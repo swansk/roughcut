@@ -7,13 +7,15 @@
  * the cuts of the bin you are on. A cut is a copy of the whole project file; saving one
  * under a name is how you try something without losing what you had.
  *
- * It is also the way between the three screens (INTAKE M16 decision 2): with the step
- * bar gone, its first rows are the places — the footage (/open), the pass (/floor) and
- * the cut (/) — with the project's facts that used to sit behind the board's Project ▾,
- * and a bin that has never been indexed opens on /open, where indexing starts.
+ * Its first rows are the places (INTAKE M16 decision 2), with the project's facts that
+ * used to sit behind the board's Project ▾: the footage, the pass and the cut. Since
+ * wave 17 (Karl's K4: fold in, then remove) they are all in the editor, so a row opens a
+ * panel, never another page: the footage is the Index panel (lane INDEXPANEL's, through
+ * dock.js's rcOpenIndex), the pass is Selects, the cut is where you are. A bin that has
+ * never been indexed opens with the Index panel up, where indexing starts.
  *
- * Shared by /open, /floor and / as a classic script loaded before each page's own, so
- * it owns nothing of theirs. It mounts on `#hdBin`, appends its panel to the body,
+ * A classic script loaded before the editor's own, so it owns nothing of the page's.
+ * It mounts on `#hdBin`, appends its panel to the body,
  * and talks to the page through two optional hooks: `window.roughcutFlush()` — write
  * anything unsaved before the server re-points itself (the board autosaves on a
  * timer) — and `window.roughcutReopen()` — reload the page's state in place; a page
@@ -25,8 +27,6 @@
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
   const clock = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
-  const HERE = location.pathname.startsWith('/open') ? '/open'
-    : location.pathname.startsWith('/floor') ? '/floor' : '/';
   const isTyping = (el) => !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA'
     || el.isContentEditable);
 
@@ -213,9 +213,10 @@
     const ps = stage('pass');
     const c = (ps && ps.counts) || {};
     const bits = [];
+    // the picks Selects lists, and how many still wait for a keep or a reject there
     if (S.released != null) {
-      bits.push(!S.released ? 'nothing to watch yet'
-        : S.unwatched ? `${S.unwatched} not watched` : 'all watched');
+      bits.push(!S.released ? 'no picks yet'
+        : S.unwatched ? `${S.unwatched} undecided` : 'all decided');
     }
     if (c.keeps) bits.push(`${c.keeps} kept`);
     if (c.heroes) bits.push(plural(c.heroes, 'hero').replace(/heros$/, 'heroes'));
@@ -231,11 +232,12 @@
 
   const money = (x) => `$${Number(x || 0).toFixed(2)}`;
 
-  function placeRow(href, name, facts, title) {
-    const here = href === HERE;
-    return `<a class="prow place${here ? ' current' : ''}" href="${href}" data-place="${href}"`
+  // A place is a panel of the editor (wave 17): a button, never a link to another page.
+  function placeRow(key, name, facts, title) {
+    const here = key === 'cut';
+    return `<button type="button" class="prow place${here ? ' current' : ''}" data-place="${key}"`
       + `${here ? ' aria-current="page"' : ''} title="${esc(title || '')}">`
-      + `<b>${esc(name)}</b><span class="n tnum">${esc(facts)}</span></a>`;
+      + `<b>${esc(name)}</b><span class="n tnum">${esc(facts)}</span></button>`;
   }
 
   function renderPlaces() {
@@ -243,12 +245,13 @@
     if (!pl) return;
     const st = S.status || {};
     const ix = stage('index'), ps = stage('pass'), ct = stage('cut');
-    pl.innerHTML = placeRow('/open', 'The footage', footageFacts(),
-                            [ix && ix.summary, st.footage].filter(Boolean).join('\n'))
-      + placeRow('/floor', 'The pass', passFacts(), ps ? ps.summary : '')
-      + placeRow('/', 'The cut', cutFacts(), [ct && ct.summary, st.edl].filter(Boolean).join('\n'));
-    // The one money number (M16 decision 7: spend per project, one number) — the same
-    // one /open's how line says, here so it can be read from the board and the pass too.
+    pl.innerHTML = placeRow('footage', 'The footage', footageFacts(),
+                            [ix && ix.summary, st.footage, 'opens the Index panel'].filter(Boolean).join('\n'))
+      + placeRow('pass', 'The pass', passFacts(), [ps && ps.summary, 'opens Selects: keep or reject its picks']
+        .filter(Boolean).join('\n'))
+      + placeRow('cut', 'The cut', cutFacts(), [ct && ct.summary, st.edl].filter(Boolean).join('\n'));
+    // The one money number (M16 decision 7: spend per project, one number), here so it
+    // can be read beside the bins (File › Project Settings… sets its cap).
     const be = st.backend;
     const sp = $('#placeSpent');
     if (sp) {
@@ -309,7 +312,7 @@
     const el = document.createElement('div');
     el.id = 'picker';
     el.setAttribute('role', 'dialog');
-    el.setAttribute('aria-label', 'go to the footage, the pass or the cut; switch bins or cuts');
+    el.setAttribute('aria-label', 'the footage, the pass or the cut; switch bins or cuts');
     el.hidden = true;
     el.innerHTML = `
       <div id="placeList"></div>
@@ -346,9 +349,9 @@
     getJSON('/api/flow').then((f) => { S.flow = f; render(); }).catch(() => {});
     getJSON('/api/status').then((st) => { S.status = st; render(); }).catch(() => {});
     getJSON('/api/picks').then((pk) => {
-      const released = (pk.picks || []).filter((p) => p.released);
-      S.released = released.length;
-      S.unwatched = released.filter((p) => !p.verdict).length;
+      const listed = pk.firstpass_picked ? (pk.picks || []) : [];
+      S.released = listed.length;
+      S.unwatched = listed.filter((p) => !p.verdict).length;
       render();
     }).catch(() => {});
   }
@@ -417,18 +420,19 @@
         S.cuts = { bin: r.name, current: { name: r.cut }, cuts: [] };
         paintName();
       }
-      const dest = opts.land ? await landing() : null;
-      if (dest && dest !== HERE) {
-        try { sessionStorage.setItem('rc.toast', after(r)); } catch (e) { /* private mode */ }
-        location.href = dest;
-        return;
-      }
+      // a bin nothing of which was heard or looked at opens with the Index panel up
+      // (`#do=index`, flow.js's honourHash), in the editor: never another page
+      const land = opts.land ? await landing() : null;
       if (typeof window.roughcutReopen === 'function') {
         say(after(r));
         await window.roughcutReopen();
         await refresh();
+        if (land && typeof window.rcOpenIndex === 'function') window.rcOpenIndex();
       } else {
         try { sessionStorage.setItem('rc.toast', after(r)); } catch (e) { /* private mode */ }
+        if (land) {
+          try { history.replaceState(null, '', `${location.pathname}${location.search}#do=${land}`); } catch (e) { /* fine */ }
+        }
         location.reload();
       }
     } catch (e) {
@@ -439,14 +443,14 @@
     }
   }
 
-  /* Where a bin just opened belongs: /open when nothing of it has been heard or looked
-   * at yet — that is where indexing starts — else the screen Karl is on. */
+  /* What a bin just opened lands on: the Index panel ('index') when nothing of it has
+   * been heard or looked at yet — that is where indexing starts — else nothing. */
   async function landing() {
     try {
       const f = await getJSON('/api/flow');
       const ix = (f.stages || []).find((x) => x.key === 'index');
       const c = (ix && ix.counts) || {};
-      return !c.listened && !c.looked ? '/open' : null;
+      return !c.listened && !c.looked ? 'index' : null;
     } catch (e) {
       return null;
     }
@@ -460,11 +464,15 @@
                   + (r.cut && !r.edl_created ? ` · ${r.cut}` : ''), { land: true });
   }
 
-  /* A place row: write what is unsaved, then go. */
-  async function goPlace(href) {
-    if (href === HERE) return close();
-    try { if (typeof window.roughcutFlush === 'function') await window.roughcutFlush(); } catch (e) { /* go anyway */ }
-    location.href = href;
+  /* A place row (`footage`, `pass` or `cut`): its panel, in the editor (wave 17: the
+   * footage is the Index panel, the pass is Selects, the cut is here). */
+  function goPlace(place) {
+    close();
+    if (place === 'footage') {
+      if (typeof window.rcOpenIndex === 'function') window.rcOpenIndex();
+    } else if (place === 'pass') {
+      if (window.dock && typeof window.dock.open === 'function') window.dock.open('bin');
+    }
   }
 
   function openCut(path) {
@@ -531,7 +539,7 @@
   function wirePanel(el) {
     $('#placeList', el).addEventListener('click', (e) => {
       const row = e.target.closest('.place');
-      if (!row || e.metaKey || e.ctrlKey || e.shiftKey) return;   // a new tab: the browser's
+      if (!row) return;
       e.preventDefault();
       goPlace(row.dataset.place);
     });

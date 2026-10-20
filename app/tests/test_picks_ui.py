@@ -10,7 +10,8 @@ Now, once a first pass has made its picks:
     it, a double-click opens it in Source with its In and Out set.
   * The timeline draws an amber marker wherever a pick overlaps a shot in the cut, the
     why on hover.
-  * /floor stays, one link away from Selects, as the optional detail view.
+  * the pass's own review is these rows (wave 17 FOLDIN: /floor was folded in and
+    removed): test_foldin_ui.py keeps and rejects them.
 
 The "first pass" is mocked: its record (what `_firstpass_walk` saves) and its proposal,
 put up through the first pass's own hook (`rcShowProposal`) and accepted. No model is
@@ -257,10 +258,10 @@ def test_after_the_first_pass_selects_lists_its_5_picks_and_comma_inserts_row_2(
             assert cells[5] == p["why"], cells
             assert rows.nth(i).locator(".who.pass").inner_text() == p["kind"] == "speech"
             assert "the first pass's pick · speech" in rows.nth(i).get_attribute("title")
-        # /floor is one link away, as the optional detail view
+        # the pass's verdicts are on these rows now: said in the hint, no link off the editor
         hint = pg.locator("#libHint")
-        assert "5 picks from the first pass · none kept yet" in hint.inner_text()
-        assert hint.locator("a[href='/floor']").count() == 1
+        assert "5 picks from the first pass · none kept yet · ✓ keep, ✗ reject" in hint.inner_text()
+        assert hint.locator("a[href]").count() == 0
         # the markers: one wherever a pick overlaps a shot of the cut, the why on hover
         assert pg.locator("#tl .tl-pick").count() == _overlapping(picks, _ranges(pg)) == 2
         titles = [m["title"] for m in pg.evaluate("tlLanes.picks()")]
@@ -350,7 +351,7 @@ def test_keeps_and_picks_both_show_and_are_told_apart(browser, live, bin5):
         # heroes first: the kept hero heads the list with its ★
         first = pg.locator("#library tr.keep").first
         assert "yours" in first.get_attribute("class") and "★" in first.locator(".w").inner_text()
-        assert "kept by you on the pass" in first.get_attribute("title")
+        assert "kept by you" in first.get_attribute("title")
         assert "4 picks from the first pass · 2 kept by you" in pg.locator("#libHint").inner_text()
         # the markers: the uncovered picks and the keeps over the cut, told apart on hover
         visible = [p for p in picks if not (p["clip"] == "CLIP_B.MP4" and p["start"] == 0.0)]
@@ -427,15 +428,16 @@ def test_selects_reads_like_a_bin_at_1440(browser, live, bin5):
         assert LONG_WHY in long["title"], "the whole reason is in the hover"
         # the kind chip is in the name
         assert pg.locator("#library tr.keep.pick td.name .who.pass").count() == 5
-        # the routes out of the panel are its buttons: no browser blue, no accent, no underline
+        # the panel's own routes are its buttons: no browser blue, no accent, no underline
+        # (and "review on the pass" is gone: the pass's review is these rows, wave 17)
         links = pg.evaluate(LINKS_JS)
         texts = {x["text"] for x in links}
-        assert "review on the pass" in texts and any(t.startswith("more found") for t in texts), links
+        assert "review on the pass" not in texts and any(t.startswith("more found") for t in texts), links
         for x in links:
             assert x["color"] not in LINK_COLOURS, x
             assert "underline" not in x["line"], x
         for x in links:
-            if x["text"] == "review on the pass" or x["text"].startswith("more found"):
+            if x["text"].startswith("more found"):
                 assert x["bg"] not in ("rgba(0, 0, 0, 0)", "transparent"), x   # a button's face
                 assert x["border"].startswith("solid"), x
         _shot(pg, "05-selects-at-1440")

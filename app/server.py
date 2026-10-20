@@ -67,8 +67,8 @@ from pathlib import Path
 from typing import Callable
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, Response,
-                               StreamingResponse)
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse, RedirectResponse,
+                               Response, StreamingResponse)
 import uvicorn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -3256,6 +3256,13 @@ async def api_selects_put(request: Request) -> JSONResponse:
 DICTATE_MAX_BYTES = 6 * 1024 * 1024        # ~30 s of webm/opus with room to spare
 
 
+@app.get("/api/dictate")
+def api_dictate_available() -> JSONResponse:
+    """Whether the recogniser is installed: the AI prompt's mic shows only then (wave 17
+    FOLDIN, voice.js). Cheap on purpose — the board asks it on every load."""
+    return JSONResponse({"available": dictate.available()})
+
+
 @app.post("/api/dictate")
 async def api_dictate(request: Request) -> JSONResponse:
     """A spoken note in, its text out. The body is the recording itself (webm/opus or
@@ -3282,37 +3289,14 @@ async def api_dictate(request: Request) -> JSONResponse:
     return JSONResponse(result)
 
 
-@app.get("/floor", response_class=HTMLResponse)
-def floor_page() -> HTMLResponse:
-    return HTMLResponse((HERE / "static" / "floor.html").read_text(encoding="utf-8"),
-                        headers=NO_STORE)
-
-
-@app.get("/open", response_class=HTMLResponse)
-def open_page() -> HTMLResponse:
-    """The open screen (INTAKE M5): the folder as a contact sheet, and the index."""
-    p = HERE / "static" / "open.html"
-    if not p.exists():
-        raise HTTPException(404, "the open screen is not built yet — see docs/INTAKE.md M5")
-    return HTMLResponse(p.read_text(encoding="utf-8"), headers=NO_STORE)
-
-
-@app.get("/open.js")
-def open_js() -> Response:
-    p = HERE / "static" / "open.js"
-    if not p.exists():
-        raise HTTPException(404, "the open screen's script is not built yet")
-    return Response(p.read_text(encoding="utf-8"),
-                    media_type="application/javascript", headers=NO_STORE)
-
-
-@app.get("/floor.js")
-def floor_js() -> Response:
-    p = HERE / "static" / "floor.js"
-    if not p.exists():
-        raise HTTPException(404, "the floor's script is not built yet")
-    return Response(p.read_text(encoding="utf-8"),
-                    media_type="application/javascript", headers=NO_STORE)
+# The footage screen (/open) and the pass (/floor) are gone (Karl's K4, wave 17 FOLDIN:
+# "fold in, then remove"): what they held is in the editor (the Index panel, Selects'
+# verdicts, File › Project Settings…). An old link or bookmark answers with the editor;
+# the redirect carries no fragment, so the browser keeps the request's own (`#tool=…`).
+@app.get("/floor")
+@app.get("/open")
+def old_screens() -> RedirectResponse:
+    return RedirectResponse("/", status_code=307, headers=NO_STORE)
 
 
 # ---------------------------------------------------------------- junk (HANDOFF item 5)
@@ -6011,13 +5995,30 @@ def budget_cap() -> float | None:
     return saved_cap()
 
 
+def index_order(saved: dict | None = None) -> str:
+    """The order the index works through the bin in (`journal.ORDERS`): the one File ›
+    Project Settings… saved (wave 17 FOLDIN: the footage screen's toggle), else the
+    journal's, else "priority"."""
+    o = (load_settings() if saved is None else saved).get("order")
+    if o in journal.ORDERS:
+        return o
+    if journal_path().exists():
+        try:
+            return load_journal().order
+        except Exception:  # noqa: BLE001 — an unreadable journal says nothing about the order
+            pass
+    return "priority"
+
+
 def settings_payload() -> dict:
     saved = load_settings()
     return {
         "budget_usd": budget_cap(),
         "spent_usd": project_spent(),
         "workers": {**journal.DEFAULT_WORKERS, **(saved.get("workers") or {})},
-        "defaults": {"budget_usd": None, "workers": dict(journal.DEFAULT_WORKERS)},
+        "order": index_order(saved),
+        "defaults": {"budget_usd": None, "workers": dict(journal.DEFAULT_WORKERS),
+                     "order": "priority"},
         "source": {"budget_usd": ("env" if os.environ.get("ROUGHCUT_BUDGET_USD")
                                   else "settings" if saved_cap(saved) is not None
                                   else "default")},
@@ -6032,8 +6033,10 @@ def api_settings() -> JSONResponse:
 @app.put("/api/settings")
 async def api_settings_put(request: Request) -> JSONResponse:
     """Validated like everything else that changes how money is spent: a cap must be
-    positive (null is no cap), a worker count 1–8 on a stage the journal knows. Workers
-    apply at the next index run; the cap applies at the next priced stage or call."""
+    positive (null is no cap), a worker count 1–8 on a stage the journal knows, the order
+    one of the journal's. Workers and the order apply at the next index run (the order is
+    written to an existing journal at once when no run holds it); the cap applies at the
+    next priced stage or call."""
     body = await request.json()
     if not isinstance(body, dict):
         raise HTTPException(400, "expected an object")
@@ -6077,6 +6080,18 @@ async def api_settings_put(request: Request) -> JSONResponse:
                                          f"{WORKER_RANGE[0]} and {WORKER_RANGE[1]}")
             clean[stage] = n
         saved["workers"] = clean
+    if "order" in body:
+        if body["order"] not in journal.ORDERS:
+            raise HTTPException(400, f"order must be one of {list(journal.ORDERS)}")
+        saved["order"] = body["order"]
+        # the journal says the order too (GET /api/index, the Index panel): set it now
+        # unless a run holds the journal (that run's next walk reads the setting)
+        if journal_path().exists() and not any(
+                x["state"] not in progress.TERMINAL for x in INDEXES.values()):
+            j = load_journal()
+            if j.order != body["order"]:
+                j.set_order(body["order"])
+                j.save()
     save_settings(saved)
     return JSONResponse(settings_payload())
 
@@ -6493,6 +6508,14 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
     gone = [c for c in j.clips if c not in present]
     if gone:
         j.remove_missing(gone)
+    # a run that names no order takes Project Settings' (wave 17 FOLDIN); one that names
+    # its own makes it the setting, so the dialog and the journal never disagree
+    saved = load_settings()
+    if order in journal.ORDERS:
+        if saved.get("order") not in (None, order):
+            save_settings({**saved, "order": order})
+    else:
+        order = saved.get("order")
     if order in journal.ORDERS:
         j.set_order(order)
     restore_close_looks()
@@ -12063,6 +12086,12 @@ def module_static(name: str) -> Response:
         raise HTTPException(404, f"{name} is not built yet")
     media = "text/css" if name.endswith(".css") else "application/javascript"
     return Response(p.read_text(encoding="utf-8"), media_type=media, headers=NO_STORE)
+
+
+# Wave 17 FOLDIN (K4 b): what the old footage and pass screens held, folded into the
+# editor as its own modules: the pass's verdicts in Selects, File › Project Settings…,
+# hold-to-speak in the AI prompt, and Window › Events (the index's journal).
+MODULE_FILES |= {"passreview.js", "projsettings.js", "voice.js", "events.js"}
 
 
 # ---------------------------------------------------------------- audio peaks (wave 3 TLAUDIO)

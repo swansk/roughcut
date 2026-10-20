@@ -3628,9 +3628,9 @@ function renderLibrary() {
   paintAudit();
   if (keepsTab()) { renderKept(lib); return; }
   $('#libHint').textContent = '';
+  // more of the footage is looked at from the Index panel (wave 17 FOLDIN: never /open)
   lib.innerHTML = rows.length ? '' : `<div class="hint">${libTab === 'seen'
-    ? `nothing left that was seen — <a href="/open" style="color:var(--accent)">look at more of
-       the footage →</a>`
+    ? 'nothing left that was seen — <button type="button" class="ghost" data-rc-index>look at more of the footage…</button>'
     : 'nothing left to add'}</div>`;
   rows.slice(0, 40).forEach((r) => {
     // The line people read is what is said or seen, not the ranking score that put it here.
@@ -3814,6 +3814,13 @@ function picksUsable() {
     && !keeps.some((k) => k.clip === p.clip && overlapRatio([k.start, k.end], [p.start, p.end]) >= 0.5));
 }
 
+/* The picks rejected in Selects (or on the pass before it), for the "rejected" chip,
+ * where Restore brings one back (wave 17 FOLDIN: the pass's ⌘Z, in a bin). */
+function picksRejected() {
+  if (!passPicks || !P) return [];
+  return passPicks.filter((p) => P.clips[p.clip] && p.verdict === 'reject');
+}
+
 function heroesWaiting() {
   return keepsUsable().filter((s) => s.hero && shotOf(s) < 0);
 }
@@ -3842,14 +3849,20 @@ function keepKinds(s) {
   return kinds;
 }
 
+/* The chips that list across the tabs: a take's cluster and the rejected picks are shown
+ * whether or not a take is in the cut (wave 17 FOLDIN, the pass's compare and restore). */
+const chipAcrossTabs = () => !!binChip && (binChip === 'rejected' || binChip.startsWith('take:'));
+
 function keepMatches(s, text) {
   // Confirmed junk is out of the default view; the junk chip shows only junk.
   const jstate = junkState(s.clip);
   if (binChip === 'junk') { if (jstate !== 'confirmed' && jstate !== 'proposed') return false; }
   else if (jstate === 'confirmed') return false;
   if (binChip === 'hero' && !s.hero) return false;
+  if (binChip === 'later' && !(s.pick && s.verdict === 'later')) return false;
+  if (binChip && binChip.startsWith('take:') && !(s.take && s.take.id === binChip.slice(5))) return false;
   // the tab: 'out' shows only what is not in the cut
-  if (libTab === 'out' && !s.missing && P.clips[s.clip] && shotOf(s) >= 0) return false;
+  if (libTab === 'out' && !chipAcrossTabs() && !s.missing && P.clips[s.clip] && shotOf(s) >= 0) return false;
   if (binChip && binChip.startsWith('tag:') && !(s.tags || []).includes(binChip.slice(4))) return false;
   if (binChip && binChip.startsWith('kind:') && !keepKinds(s).includes(binChip.slice(5))) return false;
   if (text) {
@@ -3876,10 +3889,17 @@ function paintBinFilter(keeps) {
     .forEach(([k, n]) => chips.push([`kind:${k}`, `${k} ${n}`, '']));
   const nJunk = junkRows().filter((r) => r.state === 'proposed' || r.state === 'confirmed').length;
   if (nJunk) chips.push(['junk', `junk ${nJunk}`, 'junk']);
+  // the pass's verdicts, in Selects (wave 17 FOLDIN): what waits for later, what was
+  // rejected (Restore is there), and the takes being compared
+  const nLater = keeps.filter((s) => s.pick && s.verdict === 'later').length;
+  if (nLater) chips.push(['later', `later ${nLater}`, '']);
+  const nRej = picksRejected().length;
+  if (nRej) chips.push(['rejected', `rejected ${nRej}`, '']);
+  if (binChip && binChip.startsWith('take:')) chips.push([binChip, `takes of ${binChip.slice(5)}`, '']);
   el.innerHTML = chips.map(([k, label, cls]) =>
     `<span class="chip ${cls}${binChip === k ? ' on' : ''}" data-chip="${escapeHtml(k)}"
            title="${binChip === k ? 'click to clear the filter' : 'show only these'}">${escapeHtml(label)}</span>`).join('');
-  el.hidden = !keeps.length && !nJunk;
+  el.hidden = !keeps.length && !nJunk && !nRej;
 }
 
 function selectKeep(s, row) {
@@ -4047,13 +4067,17 @@ function openPickInSource(s) {
 function keepRow(s, cols) {
   cols = cols || selCols(($('#library') || {}).clientWidth || 300);
   const d = document.createElement('tr');
+  const rejected = !!s.pick && s.verdict === 'reject';
   d.className = 'keep row' + (s.pick ? ' pick' : s.whole ? '' : ' yours')
+    + (rejected ? ' rejected' : s.pick && s.verdict === 'later' ? ' later' : '')
     + (s.missing ? ' missing' : '') + (binSel === keepKey(s) ? ' sel' : '');
   d._keep = s;                  // the lanes read the keep off its row, whatever the filter shows
   d.tabIndex = 0;
   const known = !s.missing && !!P.clips[s.clip];
   const at = known && !s.whole ? shotOf(s) : -1;   // a whole clip can be added again
-  const use = s.missing
+  const use = rejected
+    ? '<button class="use restore" title="rejected — restore it to the list, undecided">restore</button>'
+    : s.missing
     ? '<span class="gone" title="footage missing — cannot be added until the clip is back">footage missing</span>'
     : !known
       ? '<span class="gone" title="clip not analysed — cannot be added">not analysed</span>'
@@ -4062,17 +4086,27 @@ function keepRow(s, cols) {
         : '<button class="use add" title="add it at the playhead · enter · , · or drag it onto the timeline">+ add</button>';
   // the row's hover is the whole of what its one line cuts short: the name, the reason
   d.title = `${stem(s.clip)} ${fmt(s.start)}–${fmt(s.end)}${s.why ? `\n${s.why}` : ''}\n${keepLabel(s)}`
-    + (s.pick ? `\nthe first pass's pick · ${s.kind || 'moment'}` : s.whole ? '' : '\nkept by you on the pass')
-    + '\ndouble-click: open in the Source monitor with its In and Out';
+    + (s.pick ? `\nthe first pass's pick · ${s.kind || 'moment'}${s.verdict === 'later' ? ' · marked later' : rejected ? ' · rejected' : ''}`
+      : s.whole ? '' : '\nkept by you')
+    + '\ndouble-click: open in the Source monitor with its In and Out'
+    + (s.whole ? '' : s.pick ? '\nright-click: keep, hero, reject, later, a note, its takes'
+      : '\nright-click: hero, a note, remove');
   // who it is from: the pass's kind on a pick, "yours" on a keep (a whole clip is neither)
   const who = s.pick ? `<span class="who pass" title="the first pass found this — ${escapeHtml(s.kind || 'a moment')}">${escapeHtml(s.kind || 'pick')}</span>`
-    : s.whole ? '' : '<span class="who yours" title="you kept this on the pass">yours</span>';
+      + (s.verdict === 'later' ? '<span class="who later" title="marked later: right-click › Undecided takes it off">later</span>' : '')
+    : s.whole ? '' : '<span class="who yours" title="you kept this">yours</span>';
+  // the pass's two verdicts on a pick's row, under the pointer or on the selected row
+  // (passreview.js; the rest are on its right-click menu)
+  const pv = s.pick && !rejected
+    ? '<span class="pv"><button type="button" data-pv="pick" title="Keep it (the pass\'s P): its preview, snapped to the sentences">✓</button>'
+      + '<button type="button" data-pv="reject" title="Reject it (the pass\'s X): the rejected chip restores it">✗</button></span>'
+    : '';
   // The name is one line, as in a Premiere bin (verdict 5, punch 7): the kind chip and
   // the quote, ellipsized; no thumbnail (the list view's, not the icon view's).
   const cell = (k) => {
     if (k === 'name') {
       return `<td class="name"><span class="n">${who}<span class="w${s.note ? ' note' : ''}">${
-        s.hero ? '<span class="hero">★</span> ' : ''}${escapeHtml(keepLabel(s))}</span></span></td>`;
+        s.hero ? '<span class="hero">★</span> ' : ''}${escapeHtml(keepLabel(s))}</span>${pv}</span></td>`;
     }
     if (k === 'clip') return `<td>${escapeHtml(stem(s.clip))}</td>`;
     if (k === 'in') return `<td class="tc">${keepTc(s.start, s.clip)}</td>`;
@@ -4083,14 +4117,14 @@ function keepRow(s, cols) {
   };
   d.innerHTML = cols.map((c) => cell(c.k)).join('');
   d.addEventListener('click', (e) => {
-    if (e.target.closest('a.use, button.use, .chip, .junkq')) return;
+    if (e.target.closest('a.use, button.use, .chip, .junkq, .pv')) return;
     selectKeep(s, d);
     // Premiere's rule: `,` inserts from the panel in use — the row just chosen, not a
     // clip the Source monitor was showing before (a double-click puts it there instead)
     if (window.rcSource && window.rcSource.clip) { window.rcSource.clip = null; window.rcSource.auto = false; }
   });
   d.addEventListener('dblclick', (e) => {
-    if (e.target.closest('a.use, button.use, .chip, .junkq')) return;
+    if (e.target.closest('a.use, button.use, .chip, .junkq, .pv')) return;
     selectKeep(s, d);
     openPickInSource(s);
   });
@@ -4149,6 +4183,10 @@ function addKeep(s) {
 function renderKept(lib) {
   // the editor's keeps and the first pass's picks, one list (verdict 4, punch 1)
   const picked = picksUsable();
+  const rejected = picksRejected();
+  // a chip whose rows are gone (the last rejected one restored) lets go
+  if ((binChip === 'rejected' && !rejected.length)
+      || (binChip === 'later' && !picked.some((p) => p.verdict === 'later'))) binChip = null;
   const every = binOrder(((bin && bin.selects) || []).concat(picked));
   const isOut = (s) => s.missing || !P.clips[s.clip] || shotOf(s) < 0;
   const nOut = every.filter((s) => isOut(s) && junkState(s.clip) !== 'confirmed').length;
@@ -4157,7 +4195,8 @@ function renderKept(lib) {
   if (tabOut) tabOut.textContent = `not in the cut · ${nOut}`;
   if (tabAll) tabAll.textContent = `all ${nAll}`;
   if (window.dock) dock.badge('bin', nOut);          // the rail says what is left to use
-  const all = libTab === 'out' ? every.filter(isOut) : every;
+  const all = binChip === 'rejected' ? binOrder(rejected)
+    : libTab === 'out' && !chipAcrossTabs() ? every.filter(isOut) : every;
   const q = $('#findQ');
   const text = (q ? q.value : '').trim().toLowerCase();
   const keeps = all.filter((s) => keepMatches(s, text));
@@ -4172,15 +4211,17 @@ function renderKept(lib) {
   // same nothing twice
   $('#libHint').textContent = binChip === 'junk'
     ? 'Junk — proposed by a measurement, yours to confirm. Confirmed clips are out of the Ask, Find and this grid, and the index skips their look.'
-    : !all.length || !keeps.length || keeps.length === all.length ? ''
-      : `${keeps.length} of ${all.length} ${picked.length ? 'match' : 'keeps match'}`;
-  // where the rows come from, and the pass's own view of them one click away (optional)
-  if (binChip !== 'junk' && picked.length) {
+    : binChip === 'rejected' ? 'Rejected — restore one to put it back on the list, undecided.'
+      : binChip && binChip.startsWith('take:') ? 'The takes of one moment — keep the one that landed: right-click › Keep this take, reject the others.'
+        : !all.length || !keeps.length || keeps.length === all.length ? ''
+          : `${keeps.length} of ${all.length} ${picked.length ? 'match' : 'keeps match'}`;
+  // where the rows come from, and how the pass's verdicts are given here (wave 17
+  // FOLDIN: the pass was a separate screen; its review is these rows now)
+  if (binChip !== 'junk' && binChip !== 'rejected' && picked.length) {
     const nKeeps = every.length - picked.length;
     const said = $('#libHint').textContent;
-    $('#libHint').innerHTML = `${said ? `${escapeHtml(said)} · ` : ''}${picked.length} pick${picked.length === 1 ? '' : 's'} from the first pass`
-      + ` · ${nKeeps ? `${nKeeps} kept by you` : 'none kept yet'}`
-      + '<a class="floorbtn" href="/floor" title="the pass: each pick played, with keep / reject — optional">review on the pass</a>';
+    $('#libHint').textContent = `${said ? `${said} · ` : ''}${picked.length} pick${picked.length === 1 ? '' : 's'} from the first pass`
+      + ` · ${nKeeps ? `${nKeeps} kept by you` : 'none kept yet'} · ✓ keep, ✗ reject, right-click for more`;
   }
   lib.innerHTML = '';
   // one list: the junk rows first, then the keeps in the bin's order or the column's
@@ -4213,6 +4254,37 @@ function renderKept(lib) {
   list(keeps);
 }
 
+/* What passreview.js (the pass's verdicts, in Selects: wave 17 FOLDIN) reads and asks
+ * of the list: the picks, a clip's transcript, the rows shown and the filter in words
+ * (a batch reject's `why`), and a chip or tab to show (Show its takes). */
+function selFilterWords() {
+  const q = $('#findQ');
+  const text = (q ? q.value : '').trim();
+  const chip = !binChip ? '' : binChip.startsWith('tag:') || binChip.startsWith('kind:')
+    ? binChip.slice(binChip.indexOf(':') + 1) : binChip.startsWith('take:') ? `takes of ${binChip.slice(5)}` : binChip;
+  return [chip, text ? `"${text}"` : ''].filter(Boolean).join(' · ');
+}
+window.rcSelects = {
+  picks: () => passPicks || [],
+  clip: (c) => (P && P.clips && P.clips[c]) || null,
+  shown: () => [...document.querySelectorAll('#library tr.keep')].map((r) => r._keep).filter(Boolean),
+  filtered: () => (keepsTab() && binChip !== 'junk' && binChip !== 'rejected' ? selFilterWords() : ''),
+  select: (s, row) => selectKeep(s, row),
+  show({ chip = null, tab = null } = {}) {
+    if (tab) libTab = tab;
+    else if (!keepsTab()) libTab = 'out';
+    binChip = chip;
+    if (window.dock) dock.open('bin');
+    // the chips live under "more found ▸": unfolded, so the one just set is seen
+    const more = $('#more');
+    if (chip && more && more.hidden) {
+      more.hidden = false;
+      $('#moreFound').textContent = 'more found ▾';
+    }
+    renderLibrary();
+  },
+};
+
 /* Nothing kept yet: the bin is the footage (ROUGHCUT-GOAL.md dimension 2 — the pass and
  * the index make a cut better, never possible). One card per clip, the whole clip, the
  * same row and the same + add / drag as a keep, so a trim after is the only step left. */
@@ -4225,7 +4297,7 @@ function footageRows(lib, text) {
   const tabOut = $('#binTabs .tab[data-tab=out]');
   if (tabOut) tabOut.textContent = `footage · ${clips.length}`;
   lib.innerHTML = `<div class="hint">nothing kept yet — the footage, whole clips; the first
-    pass lists its picks here <a class="floorbtn" href="/floor">keep moments on the pass</a></div>`;
+    pass lists its picks here, to keep or reject</div>`;
   if (clips.length) {
     const body = selTable(lib);
     sortKeeps(clips.map(([c, v]) => ({ clip: c, start: 0, end: v.duration || 0, why: 'whole clip', whole: true })))
@@ -4361,7 +4433,7 @@ function paintBinLine() {
        `${sm.heroes} hero${sm.heroes === 1 ? '' : 'es'}`,
        `${clock(sm.strung_out_s || 0)} if strung out`]
     : ['nothing kept yet'];
-  el.innerHTML = `bin · ${counts.join(' · ')} · <a href="/floor">the pass →</a>`;
+  el.textContent = `bin · ${counts.join(' · ')}`;
 }
 
 async function fetchBin() {

@@ -60,11 +60,14 @@ def test_the_stages_are_seven_in_the_order_a_film_is_made():
         "footage", "index", "brief", "pass", "cut", "polish", "render"]
     for s in out["stages"]:
         assert s["state"] in flow.STATES, s
-        assert s["summary"] and s["screen"] in ("/open", "/floor", "/"), s
-    # the board's stages open the right dock tool
+        # one screen (wave 17 FOLDIN, Karl's K4: /open and /floor folded in and removed)
+        assert s["summary"] and s["screen"] == "/", s
+        assert s["href"] == "/" or s["href"].startswith("/#"), s
+    # every stage opens its panel in the editor: a dock tool, or the Index panel's command
     st = by_key(out)
     assert st["cut"]["href"] == "/#tool=ask" and st["render"]["href"] == "/#tool=out"
-    assert st["pass"]["href"] == "/floor" and st["index"]["href"] == "/open"
+    assert st["pass"]["href"] == "/#tool=bin" and st["index"]["href"] == "/#do=index"
+    assert st["footage"]["href"] == "/#tool=project" and st["brief"]["href"] == "/#tool=ask"
 
 
 def test_a_fresh_bin_builds_previews_and_offers_the_index():
@@ -78,7 +81,9 @@ def test_a_fresh_bin_builds_previews_and_offers_the_index():
     assert st["cut"]["state"] == "waiting" and st["cut"]["waiting_on"] == "index"
     assert st["polish"]["state"] == "waiting" and st["render"]["state"] == "waiting"
     nxt = out["next"]
-    assert nxt["stage"] == "index" and nxt["screen"] == "/open"
+    assert nxt["stage"] == "index" and nxt["screen"] == "/"
+    # the Index panel, opened in place (dock.js rcOpenIndex → lane INDEXPANEL's rcIndex)
+    assert nxt["do"] == "index" and nxt["href"] == "/#do=index", nxt
     price = "~$3.10" if config.charges_money() else "free on your plan"
     assert nxt["sentence"] == f"Index the footage — {price}" and nxt["usd"] == 3.1
     assert "click" not in nxt, "a priced action navigates to its button; it never presses it"
@@ -106,7 +111,28 @@ def test_an_empty_bin_names_import_as_next():
     assert "Drop clips" not in words and "folder" not in nxt["sentence"]
     # a command nobody runs is no command: the action keeps its plain href
     a = flow.action("footage", "x", "y", do="format-the-disk")
-    assert "do" not in a and a["href"] == "/open"
+    assert "do" not in a and a["href"] == "/#tool=project"
+
+
+def test_nothing_the_flow_says_leaves_the_editor():
+    """Verdict 13 punch 2 / K4 b: the Next chip went to /open and /floor. Every stage and
+    every action the flow can name, in every state these tests build, lands in `/`."""
+    states = [fresh(), fresh(0), indexed(), with_cut(indexed())]
+    running = copy.deepcopy(fresh())
+    running["jobs"] = {"index": {"pct": 10.0, "detail": "CLIP_01 · asr"}}
+    running["pass"] = {"on_pass": 3, "passed": 0, "keeps": 0, "heroes": 0}
+    states.append(running)
+    for f in states:
+        out = flow.compute(f)
+        for s in out["stages"]:
+            acts = [s.get("action"), (s.get("needs") or {}).get("action")]
+            for x in [s] + [a for a in acts if a]:
+                assert x["screen"] == "/" and (x["href"] == "/" or x["href"].startswith("/#")), x
+        nxt = out["next"]
+        assert nxt["screen"] == "/" and nxt["href"].startswith("/#"), nxt
+    for stage in flow.STAGES:
+        a = flow.action(stage, "x", "y")
+        assert a["screen"] == "/" and a["href"].startswith("/#"), a
 
 
 def test_an_indexed_bin_with_no_cut_says_make_the_first_cut():

@@ -15,12 +15,15 @@
  * One blue button per screen (M16 decision 3): `.is-next` is the only primary style,
  * and this puts it on exactly one element — the first visible element marked
  * `data-next-for` with Next's stage (and, when Next names an effect, the one whose
- * `data-fx` is that effect), else on the chip itself. While a round of the pass is
- * open nothing is blue: the chip reads "N left" and never takes Karl off the pass.
+ * `data-fx` is that effect), else on the chip itself.
  *
- * Self-contained styles, like /cli.js, because the three pages do not share a
- * stylesheet. It repaints only when the answer changes (no flicker under a hovered
- * chip) and keeps one height, so a poll never moves the page.
+ * One page (Karl's K4, wave 17 FOLDIN): the footage screen (/open) and the pass (/floor)
+ * were folded into the editor and removed, so the chip never leaves `/`: every target is
+ * a dock tool (`#tool=`) or a page command (`#do=`): Import, and the Index panel
+ * (lane INDEXPANEL's window.rcIndex, opened through dock.js's rcOpenIndex).
+ *
+ * Self-contained styles, like /cli.js. It repaints only when the answer changes (no
+ * flicker under a hovered chip) and keeps one height, so a poll never moves the page.
  *
  * One first action, nothing clipped (verdict 3, punch 8). On the board the first pass
  * (firstpass.js, the header's "Run first pass") starts by indexing the footage, so Next
@@ -35,8 +38,8 @@
 (function () {
   'use strict';
   const POLL_MS = 5000, FAST_MS = 1500;
-  const HERE = location.pathname.startsWith('/open') ? '/open'
-    : location.pathname.startsWith('/floor') ? '/floor' : '/';
+  // the one screen: every stage's `screen` is the editor's (roughcut/flow.py SCREENS)
+  const HERE = '/';
   let timer = null, shown = '', last = null;
 
   const css = `
@@ -58,9 +61,7 @@
   #flow .fnext.compact .fico { display: block; }
   #flow .fnext.cli { border-color: #e0b050; background: #3a2c0c; }
   #flow .fnext.cli b { color: #ffd27a; }
-  #flow .fnext.wait, #flow .fnext.round { color: #9a9aa8; }
-  #flow .fnext.round { cursor: default; font-variant-numeric: tabular-nums; }
-  #flow .fnext.round:hover { border-color: #3a3a48; }
+  #flow .fnext.wait { color: #9a9aa8; }
   /* The one blue thing on a screen (INTAKE M16 decision 3). */
   .is-next { background: #6ea8fe !important; color: #0b0b0f !important;
     border-color: #6ea8fe !important; font-weight: 600; }
@@ -89,28 +90,6 @@
     el.setAttribute('role', 'navigation');
     el.setAttribute('aria-label', 'what to do next');
     return el;
-  }
-
-  /* The pass mid-round (INTAKE M16 C3): how many of this round's moments are still
-   * undecided, or null when no round is open (or this is not the pass). The pass may
-   * say it itself (`window.passRound()`); otherwise its own state is read — the round's
-   * frozen queue, while the pass (not the closing card) is on screen. */
-  function roundLeft() {
-    if (HERE !== '/floor') return null;
-    try {
-      if (typeof window.passRound === 'function') {
-        const n = Number(window.passRound());
-        return n > 0 ? n : null;
-      }
-      // the pass's state object, a top-level const of /floor.js (a classic script)
-      // eslint-disable-next-line no-undef
-      const P = typeof F === 'object' ? F : null;
-      if (P && Array.isArray(P.queue) && P.mode === 'pass') {
-        const n = P.queue.filter((p) => !p.verdict).length;
-        return n > 0 ? n : null;
-      }
-    } catch (err) { /* the pass is still loading */ }
-    return null;
   }
 
   /* ---- the board's first pass (firstpass.js): its state, and what it covers */
@@ -156,7 +135,7 @@
   function fit() {
     const el = document.getElementById('flow');
     const a = document.getElementById('flowNext');
-    if (!el || !a || a.classList.contains('round')) return;
+    if (!el || !a) return;
     const set = (on) => {
       a.classList.toggle('compact', on);
       el.classList.toggle('compact', on);
@@ -169,17 +148,12 @@
     const el = mount();
     if (!el || !f) return;
     last = f;
-    const left = roundLeft();
-    const yielded = !left && passCovers(f);
-    const key = JSON.stringify([f.next, left, yielded]);
+    const yielded = passCovers(f);
+    const key = JSON.stringify([f.next, yielded]);
     if (key !== shown) {                   // nothing changed: leave a hovered chip be
       shown = key;
       const n = f.next;
-      if (left) {
-        el.innerHTML = `<a class="fnext round" id="flowNext" href="/floor" data-next="pass"` +
-          ` title="${left} still to decide in this round — P pick · X reject · U later">` +
-          `<span>${left} left</span></a>`;
-      } else if (n && !yielded) {
+      if (n && !yielded) {
         const cls = n.kind === 'cli' ? 'cli' : n.kind === 'wait' ? 'wait' : '';
         const word = n.kind === 'wait' ? 'Now' : 'Next';
         el.innerHTML = `<a class="fnext ${cls}" id="flowNext" href="${esc(n.href)}"` +
@@ -216,11 +190,11 @@
   }
 
   /* One blue button (INTAKE M16 decision 3): `.is-next` on Next's target when it is on
-   * this screen, else on the chip; on nothing while a round of the pass is open. */
+   * this screen, else on the chip. */
   function mark() {
     const n = last && last.next;
     let pick = null;
-    if (n && !roundLeft()) {
+    if (n) {
       // yielded to the first pass: its button is the one action (nothing while it runs)
       if (passCovers(last)) pick = fpState() === 'running' ? null : fpButton();
       else pick = target(n) || document.getElementById('flowNext');
@@ -234,26 +208,24 @@
   }
 
   // The screen changes under the chip — a tool opens, a card arrives, a verdict lands
-  // on the pass — so the blue is placed again (at most every 150 ms) when it does.
+  // in Selects — so the blue is placed again (at most every 150 ms) when it does.
   let soonT = 0;
   function soon() {
     if (soonT) return;
     soonT = setTimeout(() => { soonT = 0; if (last) paint(last); }, 150);
   }
 
-  /* On this screen already: open the tool instead of reloading the page — and land on
-   * the action's target (its shot and card) there and then. */
+  /* Open the tool instead of following the link — and land on the action's target (its
+   * shot and card) there and then. Every screen is this one (flow.py SCREENS), so the
+   * chip never navigates. */
   function go(screen, tool, href, e, target) {
-    if (screen === HERE) {
-      if (e) e.preventDefault();
-      if (tool && window.dock) {
-        window.dock.open(tool);
-        try { history.replaceState(null, '', `#tool=${tool}`); } catch (err) { /* fine */ }
-        if (target) land(tool, target);
-      }
-      return;
+    if (e) e.preventDefault();
+    if (tool && window.dock) {
+      window.dock.open(tool);
+      try { history.replaceState(null, '', `#tool=${tool}`); } catch (err) { /* fine */ }
+      if (target) land(tool, target);
     }
-    if (!e) location.href = href;
+    void screen; void href;
   }
 
   /* Next lands on its target (INTAKE M16 I16.0a). `/#tool=fx&shot=<id>&fx=<id>`: the
@@ -310,12 +282,17 @@
     tryIt();
   }
 
-  /* A free page command Next names (`do`, flow.py DO): Import's dialog where this page
-   * has it (the board, window.rcImport). False where it has not: the chip's href goes
-   * to the board, `/#do=import`, which runs it on arrival (honourHash). */
+  /* A free page command Next names (`do`, flow.py DO): Import's dialog (window.rcImport)
+   * and the Index panel (dock.js's rcOpenIndex, which opens lane INDEXPANEL's rcIndex or
+   * says it is not in yet). False while the page has not drawn it: `#do=` on the hash runs
+   * it on arrival (honourHash), which retries for a few seconds. */
   function runDo(cmd) {
     if (cmd === 'import' && window.rcImport && typeof window.rcImport.open === 'function') {
       window.rcImport.open();
+      return true;
+    }
+    if (cmd === 'index' && typeof window.rcOpenIndex === 'function') {
+      window.rcOpenIndex();
       return true;
     }
     return false;
@@ -325,11 +302,6 @@
     const a = e.target.closest('#flow a');
     if (!a || !last) return;
     if (a.id !== 'flowNext') return;
-    if (a.classList.contains('round')) {
-      // Mid-round the chip is the round's count, not a way off the pass.
-      e.preventDefault();
-      return;
-    }
     const n = last.next;
     if (!n) return;
     if (n.kind === 'cli') {
@@ -343,9 +315,13 @@
       }
       return;
     }
-    // A page command (Import): run here when this page has it, never a navigation
-    if (n.do && runDo(n.do)) {
+    // A page command (Import, the Index panel): run here, never a navigation
+    if (n.do) {
       e.preventDefault();
+      if (!runDo(n.do)) {
+        try { history.replaceState(null, '', `#do=${n.do}`); } catch (err) { /* fine */ }
+        honourHash();
+      }
       return;
     }
     // Free, on this screen: open its tool and press its button (a quick look of the
@@ -419,14 +395,6 @@
     });
     // the row's room changes with the window: whole or icon, again
     window.addEventListener('resize', soon);
-    // the pass decides a moment without always touching the DOM the chip can see; it
-    // says so itself after every repaint (`roughcut:pass`, /floor.js), which is also
-    // when the closing card's "Back to the cut" appears, so "N left" and the blue
-    // follow at once; the second's re-read stays as the safety net
-    if (HERE === '/floor') {
-      document.addEventListener('roughcut:pass', () => { if (last) paint(last); });
-      setInterval(soon, 1000);
-    }
     poll();
   }
 
@@ -434,7 +402,7 @@
   // marked `data-next-for` and cannot wait the observer's 150 ms (tests, mostly).
   // `yielded()`: Next's action is the first pass's, so the chip gave its slot to it.
   window.flowBar = { poll, state: () => last, here: HERE, land,
-                     yielded: () => !!(last && !roundLeft() && passCovers(last)),
+                     yielded: () => !!(last && passCovers(last)),
                      mark: () => { if (last) paint(last); } };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();

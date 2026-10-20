@@ -345,10 +345,35 @@
     if (p) focusPanel(p);
   }
 
+  /* The Index panel (lane INDEXPANEL's `window.rcIndex`): what the index ran on each clip,
+   * re-run and re-tuned in place. Every former way to the footage screen (/open) opens it
+   * now: File › Index…, the Next chip, the switcher's footage row, the seen tab's "look at
+   * more" (wave 17 FOLDIN: nothing leaves the editor). Without its script, its tab; without
+   * that either, a toast. */
+  function openIndex(clips) {
+    if (window.rcIndex && typeof window.rcIndex.open === 'function') return window.rcIndex.open(clips);
+    if ($('.ws-tab[data-tool="index"]')) return open('index');
+    if (typeof window.toast === 'function') {
+      window.toast('The Index panel did not load: reload the page (the header\'s first pass indexes the footage)', 4000);
+    }
+    return null;
+  }
+  window.rcOpenIndex = openIndex;
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest && e.target.closest('[data-rc-index]');
+    if (!b) return;
+    e.preventDefault();
+    openIndex();
+  });
+
   const COMMANDS = {
     open: () => { const b = $('#hdBin'); if (b) b.click(); },
-    footage: () => { location.href = '/open'; },
-    pass: () => { location.href = '/floor'; },
+    // File › Index… (was "Footage and index…", which went to /open); the pass's review is
+    // Selects now, so "Review the pass…" is gone (wave 17 FOLDIN)
+    index: () => openIndex(),
+    projsettings: () => { if (window.rcProjectSettings) window.rcProjectSettings.open(); },
+    // Window › Events: the index's journal, as /open showed it behind its how line
+    events: () => { if (window.rcEvents) window.rcEvents.open(); },
     export: () => open('out'),
     undo: () => { const b = $('#undo'); if (b) b.click(); },
     redo: () => { const b = $('#redo'); if (b) b.click(); },
@@ -782,6 +807,9 @@
     // verdict 8: the Program sat black on a clip the bin called "indexed"
     if (c.media === 'building') return ['building', 'wait', 'preview building: the monitors show its poster until it plays; it can be cut now'];
     if (c.media === 'queued') return ['queued', 'wait', 'preview queued: made in the background; it can be cut now'];
+    // junk, as the footage screen's card badge said it (wave 17 FOLDIN): answered in Selects
+    if (c.junk === 'proposed') return ['junk?', 'warn', 'junk? proposed by a measurement (black, one flat field, or a blip with no words): Confirm or Keep it in Selects'];
+    if (c.junk === 'confirmed') return ['junk', '', 'junk: out of the Ask, Find and Selects; the index skips its look'];
     if (c.analysed && c.looked) return ['indexed', 'ok', 'indexed: its sound heard and its pictures read'];
     if (c.analysed) return ['heard', 'part', 'heard: its sound is transcribed, its pictures not read yet'];
     if (c.looked) return ['looked', 'part', 'looked: its pictures are read, its sound not heard yet'];

@@ -96,14 +96,15 @@ def blue(page) -> list[str]:
         ".is-next", "els => els.map(e => e.id || e.dataset.mark || e.tagName)")
 
 
-def test_no_step_bar_only_the_next_chip_on_all_three_screens(browser, live):
+def test_no_step_bar_only_the_next_chip_and_the_old_screens_are_the_editor(browser, live):
     """M16 decision 2: the seven-step bar comes off every screen; Next stays. `#flow`
-    holds the chip and nothing else, on one line, and it says the same thing on the
-    board and the open screen (the pass says the round, while one is open)."""
+    holds the chip and nothing else, on one line. Since wave 17 (FOLDIN, Karl's K4) the
+    editor is the one screen: /open and /floor answer with it, the same chip."""
     said = {}
     for path in ("/", "/floor", "/open"):
         pg = open_screen(browser, live + path)
         said[path] = chip(pg)
+        assert pg.evaluate("location.pathname") == "/", path
         assert pg.locator("#flow a").count() == 1, path
         assert pg.locator("#flow .fs, #flow [data-stage], #flow .sep").count() == 0, path
         # the older bars are still gone too
@@ -112,22 +113,17 @@ def test_no_step_bar_only_the_next_chip_on_all_three_screens(browser, live):
         h = pg.eval_on_selector("#flow", "el => el.getBoundingClientRect().height")
         assert h <= 26, (path, h)
         pg.close()
-    assert said["/"] == said["/open"], said
+    assert said["/"] == said["/open"] == said["/floor"], said
     assert said["/"].startswith("Next"), said
 
 
-def test_next_from_another_screen_lands_on_the_board_with_its_tool_open(browser, live):
-    """No render of this cut exists, so Next is the film's quick look: from /open the
-    chip goes to the board with the film tool ('out') open."""
-    pg = open_screen(browser, live + "/open")
-    chip(pg)
-    nxt = pg.evaluate("flowBar.state().next")
-    if nxt["stage"] != "render":
-        pytest.skip(f"another test left this bin's next at {nxt['stage']}")
-    assert nxt["href"] == "/#tool=out"
-    pg.locator("#flowNext").click()
-    pg.wait_for_url("**/#tool=out", timeout=10000)
+def test_an_old_screens_link_lands_on_the_board_with_its_tool_open(browser, live):
+    """A link or bookmark to an old screen with a tool on it (`/open#tool=out`): the
+    redirect carries no fragment, so the browser keeps the link's own, and the board
+    opens with that tool."""
+    pg = open_screen(browser, live + "/open#tool=out")
     pg.wait_for_selector("#tl .blk", timeout=15000)
+    assert pg.evaluate("location.pathname") == "/"
     pg.wait_for_function("window.dock && dock.current() === 'out'", timeout=5000)
     pg.close()
 
@@ -210,7 +206,7 @@ def test_when_next_names_an_effect_only_its_card_is_blue(browser, live):
                      "href": "/#tool=fx&shot=s2&fx=fx_b", "target": {"shot": "s2", "fx": "fx_b"}}}
     pg.route("**/api/flow", lambda r: r.fulfill(status=200, content_type="application/json",
                                                  body=json.dumps(fake)))
-    pg.goto(live + "/open")
+    pg.goto(live + "/")
     chip(pg)
     pg.evaluate(MARKED_JS, ["polish", "fx_a", "cardA"])
     pg.evaluate(MARKED_JS, ["polish", "fx_b", "cardB"])
@@ -236,8 +232,8 @@ def _empty_bin_flow(route):
 def test_next_on_an_empty_bin_opens_import_in_place(browser, live):
     """Wave 12 (TEACH + IMPORT; REDESIGN-GOAL dimension 16: "no footage → Import"): on an
     empty bin the chip reads "Next Import footage (Ctrl+I)" and a click opens File ›
-    Import's dialog on the board (window.rcImport), no navigation; from /open the chip
-    goes to the board, which opens Import on arrival and takes `#do=import` off the URL."""
+    Import's dialog on the board (window.rcImport), no navigation; `/#do=import` (the
+    chip's href) opens Import on arrival and takes `#do=import` off the URL."""
     pg = browser.new_page(viewport={"width": 1440, "height": 900})
     errors = []
     pg.on("pageerror", lambda e: errors.append(str(e)))
@@ -256,46 +252,11 @@ def test_next_on_an_empty_bin_opens_import_in_place(browser, live):
     assert pg.locator("[data-testid=import-dialog]").is_visible()
     pg.keyboard.press("Escape")
     pg.wait_for_function("!rcImport.state().open", timeout=3000)
-    # from the footage screen: to the board, Import open there, the hash taken off
-    pg.goto(live + "/open")
-    pg.wait_for_function("window.flowBar && flowBar.state() && flowBar.state().next", timeout=15000)
-    pg.wait_for_selector("#flowNext", timeout=5000)
-    with pg.expect_navigation(timeout=15000):
-        pg.locator("#flowNext").click()
+    # the chip's href, arrived at: Import open, the hash taken off
+    pg.goto(live + "/#do=import")
     pg.wait_for_function("window.rcImport && rcImport.state().open", timeout=10000)
     assert not pg.url.endswith("#do=import"), pg.url
     assert errors == [], errors
-    pg.close()
-
-
-def test_mid_round_the_pass_says_how_many_are_left_and_nothing_is_blue(browser, live):
-    """M16 C3: while a round of the pass has undecided moments, the chip on /floor is
-    the round ("N left"), plain — the choice is P / X / U — and a click on it does not
-    take Karl off the pass."""
-    pg = open_screen(browser, live + "/floor")
-    pg.wait_for_function("typeof F === 'object' && F.queue.length > 0 && F.mode === 'pass'",
-                         timeout=15000)
-    n = pg.evaluate("F.queue.filter((p) => !p.verdict).length")
-    assert n > 0
-    pg.wait_for_function(
-        "(n) => (document.querySelector('#flowNext') || {}).innerText === n + ' left'",
-        arg=n, timeout=5000)
-    assert blue(pg) == []
-    pg.evaluate("window.__stay = 1")
-    pg.locator("#flowNext").click()
-    pg.wait_for_timeout(300)
-    assert pg.evaluate("window.__stay") == 1 and pg.url.endswith("/floor")
-    # one decided (in the page's state only — nothing is written): the count follows
-    pg.evaluate("F.queue.find((p) => !p.verdict).verdict = 'later'")
-    if n > 1:
-        pg.wait_for_function(
-            "(n) => document.querySelector('#flowNext').innerText === n + ' left'",
-            arg=n - 1, timeout=3000)
-    # the round over (the closing card): Next is Next again, and one thing is blue
-    pg.evaluate("F.queue.forEach((p) => { p.verdict = p.verdict || 'later'; }); F.mode = 'card'")
-    pg.wait_for_function("document.querySelector('#flowNext').innerText.startsWith('Next')",
-                         timeout=3000)
-    pg.wait_for_function("document.querySelectorAll('.is-next').length === 1", timeout=3000)
     pg.close()
 
 
@@ -308,7 +269,7 @@ def test_the_cli_banner_is_one_line_above_the_one_row_header(browser, live):
                                "why": "signed out, so nothing priced can run — " * 6,
                                "detail": "Not logged in"})
     try:
-        pg = open_screen(browser, live + "/open")
+        pg = open_screen(browser, live + "/")
         chip(pg)
         pg.evaluate("window.cliFix.poll()")
         pg.wait_for_selector("#cliFix:not([hidden])", timeout=5000)
@@ -348,7 +309,7 @@ def test_the_banner_says_what_is_wrong_when_there_is_no_command_for_it(browser, 
     monkeypatch.setattr(server.shutil, "which", lambda name: "/usr/bin/claude")
     server.BACKEND.update(state="failed", detail="claude-test: timed out after 120 s", fix=None)
     try:
-        pg = open_screen(browser, live + "/floor")
+        pg = open_screen(browser, live + "/")
         pg.evaluate("window.cliFix.poll()")
         pg.wait_for_selector("#cliFix:not([hidden])", timeout=5000)
         assert "timed out after 120 s" in pg.locator("#cliFix .why").inner_text()
@@ -362,9 +323,11 @@ def test_the_banner_says_what_is_wrong_when_there_is_no_command_for_it(browser, 
 
 # ---------------------------------------------------------------- the menu's places
 #
-# M16 decision 2 / C6: with the step bar gone, the bin · cut menu is the way between
-# the screens — the footage, the pass and the cut, each with the facts the board's
-# Project ▾ used to hold — and a bin never indexed opens where indexing starts.
+# M16 decision 2 / C6: with the step bar gone, the bin · cut menu carries the places —
+# the footage, the pass and the cut, each with the facts the board's Project ▾ used to
+# hold. Since wave 17 (FOLDIN, Karl's K4) each is a panel of the editor, never a page:
+# the footage is the Index panel, the pass is Selects; a bin never indexed opens with the
+# Index panel up.
 
 def places(page) -> list[dict]:
     page.wait_for_selector("#picker:not([hidden])", timeout=3000)
@@ -373,7 +336,7 @@ def places(page) -> list[dict]:
         " && !document.querySelector('#placeList').textContent.includes('undefined')"
         " && switcher.state.released != null && switcher.state.status", timeout=10000)
     return page.evaluate("""() => Array.from(document.querySelectorAll('#placeList .place')).map(a => ({
-        href: a.getAttribute('href'), name: a.querySelector('b').textContent,
+        tag: a.tagName, place: a.dataset.place, href: a.getAttribute('href'), name: a.querySelector('b').textContent,
         facts: a.querySelector('.n').textContent, title: a.title,
         here: a.getAttribute('aria-current') === 'page'}))""")
 
@@ -391,18 +354,21 @@ def menu_closes(page) -> None:
 
 
 def test_the_menu_is_the_way_to_the_footage_and_the_pass_with_the_projects_facts(browser, live, project):
-    pg = open_screen(browser, live + "/")
+    pg = browser.new_page(viewport={"width": 1440, "height": 900})
+    pg.goto(live + "/")
     pg.wait_for_selector("#tl .blk", timeout=15000)
     chip(pg)
     pg.locator("#hdBin").click()
     rows = places(pg)
-    assert [(r["href"], r["name"]) for r in rows] == [
-        ("/open", "The footage"), ("/floor", "The pass"), ("/", "The cut")]
+    # panels, not pages: buttons, no href
+    assert [(r["tag"], r["place"], r["href"], r["name"]) for r in rows] == [
+        ("BUTTON", "footage", None, "The footage"), ("BUTTON", "pass", None, "The pass"),
+        ("BUTTON", "cut", None, "The cut")]
     assert [r["here"] for r in rows] == [False, False, True]
     foot, pas, cut = rows
     assert foot["facts"].startswith("3 clips · "), foot
-    assert str(project["footage"]) in foot["title"]
-    assert re.fullmatch(r"(\d+ not watched|all watched|nothing to watch yet)( · .*)?", pas["facts"]), pas
+    assert str(project["footage"]) in foot["title"] and "Index panel" in foot["title"]
+    assert re.fullmatch(r"(\d+ undecided|all decided|no picks yet)( · .*)?", pas["facts"]), pas
     assert cut["facts"] == "2 shots · 0:04", cut
     assert str(project["edl"]) in cut["title"]
     # the one money number (decision 7), readable from the board and the pass too
@@ -434,45 +400,45 @@ def test_the_menu_is_the_way_to_the_footage_and_the_pass_with_the_projects_facts
     menu_closes(pg)
     pg.locator("#hdBin").click()
     places(pg)
-    # a row goes there
+    # a row opens its panel, in place: the pass is Selects, the footage the Index panel
+    pg.evaluate("window.__stay = 1")
     pg.locator("#placeList .place", has_text="The pass").click()
-    pg.wait_for_url("**/floor", timeout=10000)
-    pg.locator("#hdBin").click()
-    rows = places(pg)
-    assert [r["here"] for r in rows] == [False, True, False]
-    menu_closes(pg)                                # the pass has no [hidden] rule either
+    pg.wait_for_function("dock.current() === 'bin'", timeout=5000)
+    assert pg.locator("#picker").is_hidden()
     pg.locator("#hdBin").click()
     places(pg)
     pg.locator("#placeList .place", has_text="The footage").click()
-    pg.wait_for_url("**/open", timeout=10000)
-    # the same word for the same bin: its words heard, no index run — "partly indexed"
-    # on the menu's footage row and on /open's headline (which said "not indexed yet")
-    pg.wait_for_function("document.querySelector('#headline').textContent.includes('indexed')",
-                         timeout=10000)
+    pg.wait_for_function("dock.current() === 'index'", timeout=5000)     # lane INDEXPANEL's panel
+    assert pg.evaluate("window.__stay") == 1 and pg.evaluate("location.pathname") == "/"
+    # its words heard, no index run: "partly indexed", the switcher's word for the bin
     assert foot["facts"] == "3 clips · partly indexed", foot
-    assert pg.locator("#headline").inner_text() == "3 clips · 0:18 · partly indexed"
     pg.close()
 
 
-def test_a_bin_never_indexed_opens_on_the_footage_screen(browser, live, project):
-    """Switching to a bin nothing has been heard or looked at in lands on /open, where
-    indexing starts — not on an empty board."""
+def test_a_bin_never_indexed_opens_with_the_index_panel_up(browser, live, project):
+    """Switching to a bin nothing has been heard or looked at in opens the editor with
+    the Index panel up, where indexing starts (`#do=index` on the reload, taken off once
+    run) — it used to land on /open."""
     import server
 
     folder = project["footage"].parent / "nav-unindexed"
     folder.mkdir(exist_ok=True)
     if not (folder / "GX01.MP4").exists():
         _make_clip(folder / "GX01.MP4")
-    pg = open_screen(browser, live + "/")
+    pg = browser.new_page(viewport={"width": 1440, "height": 900})
+    pg.goto(live + "/")
     pg.wait_for_selector("#tl .blk", timeout=15000)
+    pg.evaluate("dock.open('project')")
     try:
         pg.locator("#hdBin").click()
         pg.wait_for_selector("#pickerList .prow", timeout=5000)
-        pg.locator("#pickerList .prow", has_text="nav-unindexed").click()
-        pg.wait_for_url("**/open", timeout=15000)
+        with pg.expect_navigation(timeout=15000):
+            pg.locator("#pickerList .prow", has_text="nav-unindexed").click()
         pg.wait_for_function(
             "document.querySelector('#hdBin b') && document.querySelector('#hdBin b').textContent === 'nav-unindexed'",
             timeout=10000)
+        pg.wait_for_function("window.dock && dock.current() === 'index'", timeout=10000)
+        assert pg.evaluate("location.pathname") == "/" and "#do=" not in pg.url, pg.url
     finally:
         pg.close()
         server.configure(project["edl"], project["footage"], project["sidecars"],

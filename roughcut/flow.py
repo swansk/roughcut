@@ -22,8 +22,9 @@ Each stage has one `state`:
     needs-you  it is waiting on the editor's word (`needs` says what and the action)
     optional   it never blocks anything — the brief, the pass before a first cut, polish
 
-a one-line `summary` in the editor's words, the `screen` where it is done (and the
-board's dock `tool`), and the `counts` the summary rests on — the machine's evidence
+a one-line `summary` in the editor's words, the `screen` where it is done (always the
+editor, `/`, since wave 17 folded the footage and pass screens into it) and the board's
+dock `tool` (or the page command, `do`, that opens its panel), and the `counts` the summary rests on — the machine's evidence
 rather than an assertion (Karl's rule). Then **one** `next`: the single recommended
 action, and `blockers`: the thing in the way of every priced stage (a signed-out CLI),
 with the server's own fix (`server.backend_fix`) — never re-derived here.
@@ -48,11 +49,15 @@ STAGES = ("footage", "index", "brief", "pass", "cut", "polish", "render")
 NAMES = {"footage": "Footage", "index": "Index", "brief": "Brief", "pass": "Pass",
          "cut": "Cut", "polish": "Polish", "render": "Render"}
 
-# Where each stage is done. The board's stages also name the dock tool, so a click on
-# the bar (or the Next chip) lands with the right panel open: `/#tool=ask`.
+# Where each stage is done: always the editor (Karl's K4, wave 17 FOLDIN: the footage
+# screen /open and the pass /floor were folded into it and removed, so nothing Next says
+# leaves `/`). Each stage names the dock tool its work is in, so a click on the Next chip
+# lands with the right panel open (`/#tool=ask`): the footage in the Project panel, the
+# brief (the story) in the Assistant, the pass's picks in Selects (`bin`). The index is
+# the Index panel, a page command (`STAGE_DO`) rather than a dock tool: `/#do=index`.
 SCREENS: dict[str, tuple[str, str | None]] = {
-    "footage": ("/open", None), "index": ("/open", None), "brief": ("/open", None),
-    "pass": ("/floor", None), "cut": ("/", "ask"), "polish": ("/", "fx"),
+    "footage": ("/", "project"), "index": ("/", None), "brief": ("/", "ask"),
+    "pass": ("/", "bin"), "cut": ("/", "ask"), "polish": ("/", "fx"),
     "render": ("/", "out"),
 }
 
@@ -123,7 +128,8 @@ def _stage(key: str, state: str, summary: str, *, counts: dict | None = None,
            recommended: bool = False) -> dict:
     screen, tool = SCREENS[key]
     out = {"key": key, "name": NAMES[key], "state": state, "summary": summary,
-           "screen": screen, "tool": tool, "href": href(screen, tool),
+           "screen": screen, "tool": tool,
+           "href": f"{screen}#do={STAGE_DO[key]}" if key in STAGE_DO else href(screen, tool),
            "counts": counts or {}}
     if progress is not None:
         out["progress"] = round(max(0.0, min(1.0, float(progress))), 3)
@@ -149,8 +155,13 @@ def href(screen: str, tool: str | None, target: dict | None = None) -> str:
 
 
 # The page commands an action may name (`do`): what /flow.js runs where the page has
-# it, instead of navigating — Import's dialog (window.rcImport, the board's).
-DO = ("import",)
+# it, instead of navigating — Import's dialog (window.rcImport, the board's) and the
+# Index panel (window.rcIndex, wave 17: where /open's index controls went).
+DO = ("import", "index")
+
+# The stages whose place is a page command, not a dock tool: an action of the stage
+# with no tool or click of its own runs it (`#do=index` opens the Index panel).
+STAGE_DO = {"index": "index"}
 
 
 def action(stage: str, sentence: str, verb: str, *, tool: str | None = None,
@@ -169,7 +180,7 @@ def action(stage: str, sentence: str, verb: str, *, tool: str | None = None,
     scr = screen or scr
     t = tool if tool is not None else default_tool
     tgt = {k: str(v) for k, v in (target or {}).items() if k in TARGET_KEYS and v}
-    cmd = do if do in DO else None
+    cmd = do if do in DO else (STAGE_DO.get(stage) if t is None and not click else None)
     out = {"stage": stage, "sentence": sentence, "verb": verb, "screen": scr,
            "tool": t, "href": f"{scr}#do={cmd}" if cmd else href(scr, t, tgt), "kind": kind}
     if cmd:
