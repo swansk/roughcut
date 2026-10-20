@@ -49,6 +49,17 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-19 ~20:10 (box clock): **wave 16 fully merged** (AIHONEST `f508f77`, MARKERS `a14c1fe`, INOUT `d363ccd`, SRVBUDGET2
+  `1f426e8`, VFXPLAY `fdf8ed8`, LAYOUT2 `270651b` + lead marker-dialog focus fix, FRAMEACC `7b53414`, PERF7 `3b37b53`).
+  **Lead full gate on `3b37b53`: RED on 2 broken** = the journey tool's one-accept mutant (stale target text: fixed next
+  commit) and test_vfx_playback (one 83 ms hold on Blur 12 at 1920, ~3 runs in 10 by VFXPLAY's own count: a real flake);
+  every other check GREEN, perf passed BOTH runs (load 6.4: live 50.1 / rVFC 33.4, canvas frame/worker 50.1/50.6 (1440),
+  50.1/49.7 (1920); load 9.9: 50.0/55.3 at 1920), journey 24 steps 52 s, slowest loop hold 15 ms, boot 0.66 s. Judge 13
+  launched with the vfx flake known (deviation as before). Queued for wave 17: the Program monitor's parked frame vs the
+  export (FRAMEACC: shotAt rounds clipT to 0.01 s, no cue tolerance, 59.94 plays a 29.97 proxy, the rest still at 0.01 s);
+  every cut shows the next shot 1-3 frames late (PERF7); blur at 1920's single holds; slow-motion shots at 15 fps on
+  29.97 proxies; the export's gblur blurs chroma twice as wide; fx.py sprite setpts truncation; a film with a bed is
+  ~0.07 s shorter in sound than picture; an AI insert / razor's new shot reads "cut by hand".
 - 2026-10-19 ~15:30 (box clock): **VERDICT 12 FAIL on `992ca33`** (1:9 2:9 3:9 4:9 5:8 6:7 7:8 8:9 9:8 10:8 11:9 12:9 13:9
   14:9 15:8 16:9; the judge's gate GREEN, both perf runs passed, journey slowest loop hold 20 ms). Blockers: dimension 6
   at 7 (Sharpen plays at 5-7 fps: an SVG filter in effects.js `vfxLook`); K2 + K3 (Karl's). Verified PERF5's pb11 claim:
