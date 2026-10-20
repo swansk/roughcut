@@ -21,10 +21,10 @@ The fixture is FRAMEACC's: lossless clips with a keyframe every 8 frames, every 
 own grey (16 + 7·(N mod 32)), so a picture's luma says which source frame it is. Sixteen
 shots of one clip, shot k's in at its frame k (to 4 places), 3 film frames each, rendered
 by assemble.py (the export, CPU path) and parked on in the Program at every one of their
-48 frames. 29.97 and 23.976 are asserted 48/48. A 59.94 clip plays a 29.97 proxy in the
-monitor (build_proxy halves a rate over 30), so its odd frames do not exist there: that
-rate is printed, not asserted (the parked frame is the proxy frame at or before the time,
-which is the export's frame or the one before it).
+48 frames. 29.97 and 23.976 are asserted 48/48. 59.94 is asserted 48/48 in
+test_parked_frame_5994 (wave 18 FRAME59: its proxy was 29.97 until PROXY_V v5, so its odd
+frames did not exist in the monitor, 24/48); here it is printed, and held to the export's
+frame or the one before it.
 """
 
 from __future__ import annotations
@@ -244,7 +244,7 @@ def test_the_parked_program_frame_is_the_exports(live, proj, rate):
           f"(shot, frame, shown, export): {bad_v}")
     print(f"{rate}: rest still {48 - len(bad_p)}/48 the export's frame, wrong: {bad_p}")
     if rate not in ASSERTED:
-        # a 29.97 proxy: the frame at or before the time, so the export's or the one before
+        # asserted 48/48 in test_parked_frame_5994; here no worse than the frame before
         assert all(export[3 * k + j] - v in (0, 1) and export[3 * k + j] - p in (0, 1)
                    for k, j, i, v, p, c, s in rows), rows
         return

@@ -1404,6 +1404,23 @@ function whenParked(v, fn) {
 const PARK_TOL_S = 0.001;
 const parkAt = (t) => Math.max(0, t) + PARK_TOL_S;
 const parkedOn = (v, want) => v.currentTime >= want - 0.0005 && v.currentTime - want <= 0.002;
+/* (wave 18 FRAME59, verdict 14 punch 2) The clip time of the sequence frame of `seg` nearest
+ * clip time `clipT`: the frame the playhead's timecode names (tl.tc rounds), counted on the
+ * shot's own frames (its in is frame 0, at its speed), its last frame at most. The playhead
+ * sits anywhere (a click on the ruler, a seek to a time, every frame step after it keeps that
+ * phase), and the park went that far into the frame: a seek 1.0 s into a 59.94 shot is 0.94
+ * of a frame in, so with PARK_TOL_S the buffer was parked within microseconds of the next
+ * sequence frame's start, which for a 29.97 clip on a half frame (CLIP_07) is a source frame's
+ * start, and the decoder's pick flipped either way: holds of 1, 2 and 3 steps, not 2:2 (judge
+ * 14). Parked on the frame's own start, it is PARK_TOL_S past it, as the export's read. */
+function seqFrameAt(seg, clipT) {
+  const seq = window.tl && typeof tl.gridRate === 'function' ? tl.gridRate() : 0;
+  if (!seg || !(seq > 0) || !Number.isFinite(clipT)) return clipT;
+  const sp = speedOf(seg) || 1;
+  const last = Math.max(0, Math.ceil(((seg.out - seg.in) / sp) * seq - 1e-6) - 1);
+  const n = Math.max(0, Math.min(last, Math.round(((clipT - seg.in) / sp) * seq)));
+  return seg.in + (n / seq) * sp;
+}
 function arm(v, seg, at = seg.in) {
   const src = proxyOf(seg);
   const want = parkAt(at);
@@ -2067,8 +2084,9 @@ function cueAt(i, clipT) {
   player.idx = i;
   sel = i;
   // (wave 17 PLAY8) on the shot's clock (shotBase): the export's frame for the sequence frame
-  // under the playhead, and a play from here changes frame where the export does
-  arm(v, seg, at - (seg.in - shotBase(seg)));
+  // under the playhead, and a play from here changes frame where the export does; (wave 18
+  // FRAME59) parked on that frame's start (seqFrameAt), wherever in it the playhead is
+  arm(v, seg, seqFrameAt(seg, at) - (seg.in - shotBase(seg)));
   freshen(v);
   paint();
   showWhenReady(g, (b) => b.readyState >= 2 && !b.seeking, () => {
@@ -3247,14 +3265,15 @@ function frameShownAt(v, t) {
   return v._pf.mt + Math.floor((at - v._pf.mt) / dur + 1e-6) * dur;
 }
 /* A buffer's frame period: seen (trackFrames), else its clip's proxy's (server.py proxy_rate:
- * the source's rate over the smallest whole number that brings it to 30.5 or under). */
+ * the source's rate over the smallest whole number that brings it to 60.5 or under: a 59.94
+ * clip's proxy is 59.94 since v5, wave 18 FRAME59). */
 function frameDur(v) {
   if (v._pfDur && v._pfDurSrc === v.dataset.src) return v._pfDur;
   return frameDurOf(segs.find((s) => proxyOf(s) === v.dataset.src));
 }
 function frameDurOf(seg) {
   const f = seg ? clipRate(seg.clip) : 0;
-  return f > 0 ? Math.max(1, Math.ceil(f / 30.5)) / f : 1 / 30;
+  return f > 0 ? Math.max(1, Math.ceil(f / 60.5)) / f : 1 / 30;
 }
 
 /* The shot ended: stop, or hand over to the buffer that is holding the next one. */
@@ -3537,8 +3556,9 @@ function paintRestStill() {
   const sep = base.includes('?') ? '&' : '?';
   // the playhead's exact clip time to 4 places (posterT): the server cuts the frame at or
   // before it + 1 ms, the export's and the parked buffer's (wave 17 PLAY8; at 0.01 s, cut
-  // with the first frame from that time on, it was the frame after as often as not)
-  const t = posterT(at.clipT);
+  // with the first frame from that time on, it was the frame after as often as not); (wave 18
+  // FRAME59) the start of the sequence frame the playhead is on, as the parked buffer's
+  const t = posterT(seqFrameAt(seg, at.clipT));
   const src = `${base}${sep}t=${t}`;
   img.hidden = false;
   if (img.getAttribute('src') === src || img._want === src) return;

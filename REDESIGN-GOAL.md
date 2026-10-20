@@ -550,3 +550,26 @@ next judge runs, and the next judge rules it honest or lenient.
   undo is named ("its design had failed — not asked again"). Cheaper on the plan (the call in flight is killed); on the API a
   redo after an in-flight undo costs one more design call than setting it aside would have (priced first). The REDO test's
   flake was the test (it read the folder before the server's crash-safe record-then-folder discard finished). For the judge.
+- 2026-10-20 (wave 18, lane PLAY9, punch 4; logged by the lead): **test_tx_playback's canvas bar moves from the page clock
+  to the frame clock and the worker's clock, stated in frames.** Was: the graded canvas's longest gap <= 67 ms, read with
+  performance.now() inside rAF, through a dissolve and across a plain graded cut (a single dropped frame read 53-78 ms, so it
+  passed about half the time). Now: on the rAF timestamp AND on grade.drawLog, per the proxy's own cadence c (2 display frames
+  at 29.97, 1 at 59.94) and the canvas's drawing step s (2 for a 59.94 proxy at 1x under the new 30.5 fps draw cap).
+  **Plain cut, stricter:** every s-th source frame drawn, including the outgoing shot's last and the incoming's in-frame, no
+  gap over s·c + 1 display frames (a frame lost at the cut with no hold, invisible to any time bar, now fails). **Dissolve,
+  stricter clock, looser on one drop:** no gap over 2·s·c display frames, so one dropped frame always passes where the page
+  clock failed it about half the time (the dissolve's two decoders themselves skip frames under the test's burners; skipped
+  frames are recorded). The judge should rule on the dissolve half.
+- 2026-10-20 (wave 18, lane PLAY9, punch 3): **a new half-speed test** (test_cut_frames, a 0.5x shot of a 4K 29.97 grain
+  proxy, graded at 1440 and 1920 and ungraded at 1440): every source frame drawn, no hold on the worker's clock; on the frame
+  clock 0 holds at load <= cores and 1 per play above (the page's late animation frames mis-credit draws). Slowed shots play
+  through the canvas on their own clock (up to ~33 ms behind the buffer's picture and sound). While playing, the canvas draws
+  at most 30.5 frames a second (Playback Resolution in time): a 59.94 proxy at 1x shows every other frame, as its 29.97 proxy
+  did; paused, stepped and at 0.5x every frame.
+- 2026-10-20 (wave 18, lane FRAME59, punch 2): **a 59.94 source's proxy is 59.94 (PROXY_V v5).** New bar,
+  test_parked_frame_5994: the parked frame and the rest still equal the export's frame 48/48 at 59.94; 10 one-frame steps from
+  a playhead between frames show 10 new frames, each the export's; a 29.97 clip in a 59.94 sequence holds exactly 2:2; the
+  monitor parks on the frame its timecode names. Changed: test_perf_latency's proxy test asserts 60000/1001 (was 30000/1001),
+  a keyframe every <= 0.5 s; test_range_proxy's fixture bar moves 16 px per source frame and its upright bound goes 12 -> 16
+  (12.8 measured; a turned picture reads ~84). Stricter in effect (the 4K 59.94 fixtures play twice the frames under the same
+  bars, under PLAY9's 30.5 fps draw cap while playing). Every bin re-proxies once.
