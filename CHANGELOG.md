@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **test_poster_time no longer flakes in the full suite (redesign wave 17, lane TESTS2; verdict 13 punch 4).** `test_a_clip_still_being_probed_gets_the_poster_it_will_keep` read `6.0 is None` in 2 of the last 3 gates: the `client` fixture's `configure()` starts probing every clip on CLIP_FACTS' pool and returns, and with the proxies already built (any earlier test in the session) its real probe of CLIP_B was still running when the test emptied the caches, and wrote CLIP_B's facts back, so the "still probing" row had its length. Alone, `ensure_proxies` builds three proxies first and the probes were long done. The test now waits for every probe already started before it resets. Reproduced 2 of 2 by running the file twice in one session (`--keep-duplicates`; 3 of 3 probes in flight at the reset); 4 of 4 after. A test fix: the app's probe writes correct facts for the bin it was started for.
 - **Redesign verdict 13: FAIL, 15 of 16 at 8-9, the judge's gate GREEN** (`judge/verdict-13.md` on b12b979): dimension 16 at 7 (K4: the index and the old pages); K2, K3, K4 open. Rubric log: the Lumetri tests' skip above 2x cores, said in the log. Wave 17 grows five lanes from its punch list.
 - **Loop state: Karl is done looking at 8766; merges resume** (judge/LOOP.md).
 - **Loop state: Karl's look and K4; wave 17 launched** (judge/LOOP.md).

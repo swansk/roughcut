@@ -38,6 +38,18 @@ def test_a_clip_still_being_probed_gets_the_poster_it_will_keep(client, project,
     """/api/clips answering while one clip's facts are still being probed (a loaded box):
     that clip's row has no length yet, and the poster URL it will have once it has one."""
     import server
+    from concurrent.futures import wait
+    # The `client` fixture's configure() starts probing every clip on CLIP_FACTS' pool and
+    # returns. Alone, its ensure_proxies() then builds three proxies, so those probes are done
+    # long before the reset below; in the full suite the proxies are already built, configure()
+    # returns at once, and the real probe of CLIP_B, still running, wrote its facts back after
+    # the reset: the "still probing" row had its length (verdict 13: `6.0 is None`, 2 gates of
+    # 3; and 2 of 2 here when this file runs a second time in one session). So: every probe
+    # already started ends first, then the caches it fills are emptied.
+    with server.CLIP_FACTS["lock"]:
+        started = list(server.CLIP_FACTS["running"].values())
+    wait(started, timeout=30)
+    assert all(f.done() for f in started), "a clip-facts probe from configure() never ended"
     for k in ("clip_facts", "durations", "capture", "telemetry"):
         server.STATE.pop(k, None)
     server.CLIP_FACTS["running"].clear()
