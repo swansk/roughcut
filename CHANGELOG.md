@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- Loop state: wave 18 fully merged; the FRAME59 x PLAY9 A/B; PLAY9b on the half-speed interaction.
 - Loop state: wave 18's UNDO5, INDEX2, POLISH12 and REDO2 merged; FRAME59 held for a perf A/B after PLAY9.
 - FOR-KARL.md names the judged rev 799d8b8 with steps to try K4 (the previous commit's message claimed it; the file write had failed).
 - Loop state: verdict 14 rulings, the ledger finding, wave 18's six lanes (judge/WAVE18.md); FOR-KARL names 799d8b8 with K4 steps.

@@ -49,6 +49,15 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-20 ~16:00 (box clock; the entry below stamped ~13:00 was written at ~12:00): **wave 18 fully merged**: PLAY9
+  `3cd784a` (half speed paced on the canvas: slow.py plays with a hold 24/24 -> 4/24, 1440 0/12; a plain cut keeps the
+  incoming's in-frames: frame lost at the cut 26/100 -> 0/40; test_tx_playback on the frame + worker clocks in frames; a 30.5
+  fps draw cap while playing; Blur at 1920 NOT fixed: ~1% of page->worker frame messages arrive 30-66 ms late with the worker
+  idle), FRAME59 `fd5fbf0` (59.94 proxies, PROXY_V v5; parks on the timecode's frame). Rubric entries for both written.
+  **Interleaved A/B (4 rounds, nice 0, load 2-7), runs passed of 4, PLAY9 alone vs + FRAME59:** perf_latency 3 vs 4,
+  tx_playback 3 vs 4, vfx_playback 3 vs 1, cut_frames 2 vs 0 (half-speed graded-1920 4/4 and ungraded-1440 2/4 fail only
+  with FRAME59). **PLAY9 resumed as PLAY9b** (branch `redesign-w18-play9b` from `fd5fbf0`) to find and fix the
+  interaction; the gate and judge 15 wait for it.
 - 2026-10-20 ~13:00 (box clock): **wave 18: four lanes merged**, each green on the merged tree (its listed tests at nice
   19): UNDO5 `f24ad9d` (Selects verdicts on the board's Ctrl+Z), INDEX2 `2cd2be0` (tour / first-pass / AI menu point at the
   Index panel; Run's AI card; 592 px; heard = the pass's count), POLISH12 `32cdb23` (the ruler's edge label; late answers
