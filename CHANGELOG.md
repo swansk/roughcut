@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- The model-call ledger stays inside the board's own `--work`: a board on any `--work` but the default (`~/work/app`) logs to `<work>/roughcut-ledger.jsonl` (its pass tools inherit it; `ROUGHCUT_LEDGER` still wins), and the startup line names the file. Verdict 14 found judge servers appending to Karl's `~/work/roughcut-ledger.jsonl` (section S). JUDGE.md's server line also sets `ROUGHCUT_LEDGER`. Verdict 14 committed.
 - Loop state: PLAY8b found no regression; the gate's two merge collisions fixed; gate GREEN on 799d8b8; judge 14 running.
 - Scrub sprites take the frame on screen at each time, as posters, the Program and the export do (`-ss t` alone gave the frame after whenever t fell between frames; the cell-vs-still bar tightens 10 → 5). A look sidecar whose `frames_sampled` is a count, not a list, is re-derived instead of taking `/api/picks` down for the whole bin; the Index panel tests' fake look pass writes the list visual_pass.py writes. (Wave 17 gate, lead.)
 - Loop state: wave 17 fully merged; PLAY8b chases a graded-cut hold the merge exposed.

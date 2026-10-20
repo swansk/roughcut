@@ -15671,8 +15671,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return ap.parse_args(argv)
 
 
+def keep_ledger_in(work: Path) -> Path:
+    """The model-call ledger for a board run on `work` (verdict 14, section S). Without
+    ROUGHCUT_LEDGER, `config.ledger_path()` is `~/work/roughcut-ledger.jsonl`: Karl's spend
+    record, right for his board on the default `--work` (`~/work/app`). A board given any
+    other `--work` — a judge's, a lane's, a preview's own copy — logs to
+    `<work>/roughcut-ledger.jsonl` instead, set in the environment so the pass tools this
+    server starts log there too. An explicit ROUGHCUT_LEDGER always wins."""
+    work = work.expanduser()
+    default = (Path.home() / "work" / "app").expanduser()
+    if not os.environ.get("ROUGHCUT_LEDGER", "").strip() \
+            and work.resolve() != default.resolve():
+        os.environ["ROUGHCUT_LEDGER"] = str(work / "roughcut-ledger.jsonl")
+    return config.ledger_path()
+
+
 def main() -> int:
     args = parse_args()
+    ledger = keep_ledger_in(args.work)
 
     for tool in ("ffmpeg", "ffprobe", "uv"):
         if shutil.which(tool) is None:
@@ -15696,6 +15712,7 @@ def main() -> int:
     pre = backend_preflight()
     print(f"backend: {pre['backend']} · deep {pre['models']['deep']} · "
           f"quick {pre['models']['quick']}", flush=True)
+    print(f"model calls logged to {ledger}", flush=True)
     if pre["cli"]:
         print(f"  claude CLI {pre['cli'].get('version')} · "
               f"signed in: {pre['cli'].get('logged_in')}", flush=True)

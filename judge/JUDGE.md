@@ -22,7 +22,7 @@ TRUE today:
 
 3. **Drive it yourself, like an editor would.** Serve the FROZEN snapshot, never the working tree and
    never Karl's live board (port 8765) or his work dir:
-   `cd ~/roughcut-loop/snap-$REV && setsid nohup uv run app/server.py --footage ~/footage/killington-neutral --work $J/work --port 8781 > $J/server.log 2>&1 &`
+   `cd ~/roughcut-loop/snap-$REV && ROUGHCUT_LEDGER=$J/ledger.jsonl setsid nohup uv run app/server.py --footage ~/footage/killington-neutral --work $J/work --port 8781 > $J/server.log 2>&1 &`
    then drive `http://127.0.0.1:8781` with Playwright (Python, Chromium, headless; write your scripts
    in `$J/`, e.g. `uv run --with playwright python $J/drive.py`). Viewport 1440×900, then 1920×1080.
    Do, and screenshot each step into `$J/shots/`:
