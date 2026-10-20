@@ -137,6 +137,29 @@ FIRST = {
 }
 
 
+BOX_JS = """([sel, i]) => {
+  const e = document.querySelectorAll(sel)[i];
+  if (!e) return null;
+  const r = e.getBoundingClientRect();
+  return r.width > 0 && r.height > 0 ? { x: r.x, y: r.y, width: r.width, height: r.height } : null;
+}"""
+
+
+def _box(pg, sel: str, nth: int = 0, timeout: float = 5000) -> dict:
+    """`sel`'s nth match's box, found and measured in one page task, once it has one.
+
+    drawGhost (timeline-lanes.js) rebuilds the whole ghost lane on every tl.render, and one
+    comes as the board settles after the load (the first frame cued in the Program: 23-48 ms
+    after the five ghosts show, in 2 loads of 6). A locator's bounding_box() finds the element
+    and measures it in two round trips, and a rebuild between them reads as None (verdict 13:
+    `'NoneType' object is not subscriptable` at the ✗'s box in a full-suite run; 5 runs of 5
+    here with the lane redrawn every 4 ms). An element that never gets a box still fails."""
+    try:
+        return pg.wait_for_function(BOX_JS, arg=[sel, nth], timeout=timeout).json_value()
+    except Exception as err:      # Playwright's timeout: say what had no box
+        raise AssertionError(f"{sel} [{nth}] has no box after {timeout:.0f} ms") from err
+
+
 def _tops(pg, sel: str) -> list[float]:
     return pg.eval_on_selector_all(
         sel, "els => els.filter(e => e.offsetParent !== null)"
@@ -165,15 +188,15 @@ def test_a_waiting_first_cut_opens_on_reload_as_an_edit(browser, live_server, pr
         assert "/media/poster/CLIP_A" in src and src.endswith("t=0.50"), src
         # ✓ / ✗ readable: at least 18 px, on every shot
         assert pg.locator(f"{GHOST} .ghost button.rv.ok").count() == 5
-        box = pg.locator(f"{GHOST} .ghost button.rv.no").first.bounding_box()
+        box = _box(pg, f"{GHOST} .ghost button.rv.no")
         assert box["width"] >= 18 and box["height"] >= 16, box
         # the lane's name is in the header column, clear of the blocks
         assert pg.locator(f"{GHOST} .lbl").count() == 0
         head = pg.locator("#tl .tl-ghead")
         assert head.is_visible() and "Proposal" in head.inner_text()
         assert "5 of 5" in head.inner_text()
-        hb = head.bounding_box()
-        first = pg.locator(f"{GHOST} .ghost").nth(0).bounding_box()
+        hb = _box(pg, "#tl .tl-ghead")
+        first = _box(pg, f"{GHOST} .ghost")
         assert hb["x"] + hb["width"] <= first["x"], (hb, first)
         assert abs(hb["y"] - first["y"]) <= 2 and abs(hb["height"] - first["height"]) <= 2, (hb, first)
 
