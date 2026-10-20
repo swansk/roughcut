@@ -1118,6 +1118,72 @@ def set_look_interval(interval: float) -> None:
     write_edl(edl)
 
 
+# The look interval per clip (wave 17, the Index panel: Karl's K4, "how to re run / tune
+# that"). One clip re-looked at 2 s while the bin stays at 4 s: kept beside the project's
+# own in the EDL (`look.clips`: {clip: seconds}), a property of the project like it, so a
+# resumed or re-run look reads the clip the way the editor tuned it. A clip without one
+# looks at the project's interval. Read per EDL version: the Index panel prices every clip.
+_LOOK_BLOCK: dict = {"key": None, "look": {}}
+
+
+def _look_block() -> dict:
+    try:
+        st = STATE["edl"].stat()
+        key = (str(STATE["edl"]), st.st_mtime_ns, st.st_size)
+    except (KeyError, OSError):
+        return {}
+    if _LOOK_BLOCK["key"] != key:
+        try:
+            look = dict(read_edl().get("look") or {})
+        except (OSError, ValueError):
+            look = {}
+        _LOOK_BLOCK.update(key=key, look=look)
+    return _LOOK_BLOCK["look"]
+
+
+def clip_look_intervals() -> dict[str, float]:
+    """The clips tuned away from the project's interval, and theirs."""
+    out = {}
+    for clip, v in ((_look_block().get("clips") or {})).items():
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            continue
+        if v in VISUAL_INTERVALS:
+            out[str(clip)] = v
+    return out
+
+
+def clip_look_interval(clip: str) -> float:
+    """The interval this clip's next look reads it at: its own, else the project's."""
+    return clip_look_intervals().get(clip) or look_interval()
+
+
+def set_clip_look_interval(clips: list[str], interval: float, *, whole_bin: bool = False) -> None:
+    """Tune the look for these clips; for the whole bin, the project's interval (and no
+    clip keeps its own). A clip set to the project's interval keeps none."""
+    edl = read_edl()
+    look = dict(edl.get("look") or {})
+    per = {} if whole_bin else dict(look.get("clips") or {})
+    if whole_bin:
+        look["interval_s"] = float(interval)
+    try:
+        proj = float(look.get("interval_s") or VISUAL_INTERVAL_S)
+    except (TypeError, ValueError):
+        proj = VISUAL_INTERVAL_S
+    for clip in ([] if whole_bin else clips):
+        if float(interval) == proj:
+            per.pop(clip, None)
+        else:
+            per[clip] = float(interval)
+    if per:
+        look["clips"] = per
+    else:
+        look.pop("clips", None)
+    edl["look"] = look
+    write_edl(edl)
+
+
 def clip_duration_known(clip: str) -> float | None:
     """A clip's length when it is known already (cached, or its sidecar's: clip_duration
     then reads it without an ffprobe), else None — for what a polled request reads (the
@@ -1128,8 +1194,9 @@ def clip_duration_known(clip: str) -> float | None:
 
 
 def sheets_for(clip: str, interval: float | None = None, probe: bool = True) -> int:
+    """Contact sheets one look at `clip` reads: at `interval`, else the clip's own."""
     d = clip_duration(clip) if probe else clip_duration_known(clip)
-    return max(1, math.ceil((d or 0.0) / sheet_seconds(interval or look_interval())))
+    return max(1, math.ceil((d or 0.0) / sheet_seconds(interval or clip_look_interval(clip))))
 
 
 def audit_plan(ranked: list[dict], n: int = AUDIT_CLAIMS) -> list[dict]:
@@ -2921,7 +2988,7 @@ def released_clips() -> list[str]:
             # come from the transcript and whatever coarse look it already has.
             return [c for c in j.ordered() if c in present
                     and not j.clips[c].get("missing")
-                    and all(j.state(c, s) in journal.SETTLED
+                    and all(j.stands(j.clips[c]["stages"][s])
                             for s in journal.STAGES
                             if s not in journal.PRICED and s != "picks")]
         except journal.JournalError:
@@ -4926,9 +4993,15 @@ def api_analyze_status(job: str) -> JSONResponse:
 def visual_cmd(only: list[str], force: bool) -> list[str]:
     """The visual pass, as a command. A function so the tests can replace it: the real
     tool spends a model call per contact sheet."""
+    # one clip (the index's own call) at its own interval (the Index panel tunes it);
+    # `only` holds stems, the tuned intervals are kept by clip name
+    interval = None
+    if len(only) == 1:
+        interval = {Path(c).stem: v for c, v in clip_look_intervals().items()}.get(only[0])
+    interval = interval or look_interval()
     cmd = ["uv", "run", "--quiet", str(TOOLS / "visual_pass.py"), str(tool_footage()),
            "-o", str(STATE["visual"]), "--orient", STATE["orient"],
-           "--interval", f"{look_interval():g}"]
+           "--interval", f"{interval:g}"]
     if only:
         cmd += ["--only", ",".join(only)]
     if force:
@@ -5821,11 +5894,22 @@ def _run_tool(cmd: list[str]) -> str:
     return r.stdout
 
 
+# What the walk is allowed to run (`_walk_only`), for the stage running on this thread:
+# the audio pass batches every clip waiting on it, and a re-run of one clip's hearing must
+# not hear the bin.
+_STAGE_CTX = threading.local()
+
+
 def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
     """Run one stage for one clip with the existing tools. Returns the cost in USD.
-    Raises on failure; the caller records it and the journal decides on retries."""
+    Raises on failure; the caller records it and the journal decides on retries.
+
+    A stage the editor asked for again (`force` in its journal record, the Index panel's
+    re-run) runs its tool with --force, so its output on disk is replaced."""
     stem = Path(clip).stem
     src = clip_path(clip)
+    forced = bool(j.clips.get(clip, {}).get("stages", {}).get(stage, {}).get("force"))
+    allow = getattr(_STAGE_CTX, "allow", None)
     if stage == "probe":
         if clip_duration(clip) is None:
             raise RuntimeError("ffprobe could not read the clip")
@@ -5835,7 +5919,7 @@ def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
         # Optional by Karl's rule: a clip without a gpmd stream skips, never fails.
         if not has_telemetry(clip):
             raise _Skip("no telemetry stream in the file")
-        _run_tool(telemetry_cmd(stem))
+        _run_tool(telemetry_cmd(stem, force=True) if forced else telemetry_cmd(stem))
         d = load_telemetry(clip)
         if not d:
             raise RuntimeError("the telemetry tool wrote no summary")
@@ -5846,14 +5930,18 @@ def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
         # One tool run over every clip still waiting on it, not one per clip: the
         # audio pass loads a 3 GB model per run, and it walks the folder anyway.
         wanted = [c for c in footage_clips()
-                  if c == clip or (j.state(c, "asr") in journal.RETRYABLE
-                                   and j.state(c, "probe") in journal.SETTLED)]
+                  if c == clip or (c in j.clips
+                                   and j.state(c, "asr") in journal.RETRYABLE
+                                   and j.state(c, "probe") in journal.SETTLED
+                                   and (allow is None or allow(c, "asr")))]
         skip = [Path(c).stem for c in footage_clips() if c not in wanted]
         for other in wanted:
             if other != clip:
                 j.start(other, "asr")
+        # heard again (the Index panel): the tool re-hears the clips it is given
+        again = any(j.clips[c]["stages"]["asr"].get("force") for c in wanted if c in j.clips)
         try:
-            _run_tool(analyze_cmd(skip, False))
+            _run_tool(analyze_cmd(skip, again))
         except RuntimeError as exc:
             scope = procscope.current()
             for other in wanted:
@@ -5882,21 +5970,44 @@ def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
             (STATE["proxy_dir"] / f"{Path(c).stem}.mp4").exists() for c in footage_clips())
         return 0.0
     if stage == "look":
-        _run_tool(visual_cmd([stem], False))
+        _run_tool(visual_cmd([stem], forced))
         if not (STATE["visual"] / f"{stem}.visual.json").exists():
             raise RuntimeError("the visual pass wrote no sidecar")
         return sheets_for(clip) * VISUAL_USD_PER_SHEET
     if stage == "close":
         windows = STATE["work"] / f"windows_{stem}.json"
+        # Looked at closely again (the Index panel): the windows are chosen afresh, as if
+        # no close look had been read (the scan skips claims a close look already
+        # audited), and the new read replaces the old. The old file waits beside it until
+        # the new one lands; a failed or stopped re-run puts it back.
+        fine = STATE["visual"] / f"{stem}.fine.json"
+        prev = fine.with_name(fine.name + ".prev")
+        if prev.exists() and not fine.exists():
+            os.replace(prev, fine)               # a re-run that died: its old read back
+        moved = False
+        if forced and fine.exists():
+            os.replace(fine, prev)
+            moved = True
+        ok = False
         try:
             _run_tool(scan_cmd([stem], windows, FINE_WINDOWS_PER_CLIP))
             found = json.loads(windows.read_text(encoding="utf-8")) if windows.exists() else {}
             spans = found.get(stem) if isinstance(found, dict) else found
             if not spans:
+                if moved:
+                    os.replace(prev, fine)       # nothing new to read: the old read stands
+                    moved = False
+                    return 0.0
                 raise _Skip("nothing worth a closer look")
             _run_tool(fine_cmd(windows))
+            ok = fine.exists()
         finally:
             windows.unlink(missing_ok=True)
+            if moved:
+                if ok:
+                    prev.unlink(missing_ok=True)
+                elif not fine.exists():
+                    os.replace(prev, fine)
         if not (STATE["visual"] / f"{stem}.fine.json").exists():
             raise RuntimeError("the close look wrote no sidecar")
         return len(spans) * FINE_USD_PER_WINDOW
@@ -6084,6 +6195,9 @@ def _index_job(job: str, order: str) -> None:
             _index_walk(job, order, scope)
     finally:
         INDEX_SCOPES.pop(job, None)
+        rr = INDEX_RERUNS.get(job)
+        if rr is not None:
+            rr["queue"].clear()
 
 
 def _index_take_in(j: journal.Journal, entry: progress.Job) -> list[str]:
@@ -6122,7 +6236,11 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
         j.remove_missing(gone)
     if order in journal.ORDERS:
         j.set_order(order)
-    if not entry.get("free"):
+    restore_close_looks()
+    # what the Index panel asked for (wave 17): stages reopened to be run again, before
+    # the files are read, so a file on disk that is to be replaced is not taken as done
+    _apply_reruns(j, entry)
+    if not entry.get("free") and not _scoped(entry):
         # An index the editor started (the first pass, the Index button) is the ask the
         # held clips wait for: an import while an earlier index ran held their looks.
         freed = j.release_held()
@@ -6165,6 +6283,11 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
         entry["cost_usd"] = prog.get("cost_usd", 0.0)
         entry["coarse_ready"] = j.coarse_ready()
         entry["held"] = len(prog.get("held") or [])
+        if _scoped(entry):
+            # a re-run's bar is what it was asked for, not the bin's
+            entry["scope_frac"] = _scope_fraction(j, entry)
+            entry.advance("index", entry["scope_frac"], detail=detail)
+            return
         entry.advance("index", max(0.0, min(1.0, float(prog.get("pct") or 0.0) / 100.0)),
                       detail=detail)
 
@@ -6173,6 +6296,7 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
     running: dict[tuple[str, str], threading.Thread] = {}
 
     def work(clip: str, stage: str) -> None:
+        _STAGE_CTX.allow = _walk_only(entry)
         with procscope.active(scope):
             try:
                 out: tuple[str, object] = ("done", _index_stage(j, clip, stage))
@@ -6216,6 +6340,11 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
             if not running:
                 break
         else:
+            # the Index panel's re-runs asked while this run goes on join it here, on the
+            # walk's own journal (a second journal object would lose its writes to this one)
+            if _rerun_pending(entry):
+                _apply_reruns(j, entry)
+                report("asked again — " + str(entry.get("rerun_words") or "re-running"))
             # The bin's junk word, before every pick: a clip the editor confirmed while
             # the last stage ran never gets its sheets bought, and a clip whose proxy
             # just landed is measured and, if it looks like junk, waits behind the clean
@@ -6232,7 +6361,13 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
             asked = int(entry.get("asked") or 0)
             took = int(entry.get("took") or 0)
             if asked > took:
-                _index_take_in(j, entry)
+                took_in = _index_take_in(j, entry)
+                if _scoped(entry):
+                    # a re-run's own index takes imported footage in as a free run would:
+                    # heard and previewed now, its look held for the editor
+                    for c in took_in:
+                        INDEX_RERUNS[entry["id"]]["scope"].setdefault(c, set()).update(
+                            s for s in journal.STAGES if s not in journal.PRICED)
                 if took < int(entry.get("release_at") or 0) <= asked:
                     freed = j.release_held()
                     if freed:
@@ -6245,6 +6380,9 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
             # the Program shows a 360p preview until a clip's 720p proxy lands) — once the
             # first pass's coarse tier, what its proposal waits on, is through.
             pick = _cut_proxy_next(j) if not coarse or j.coarse_ready() else None
+            only = _walk_only(entry)
+            if pick is not None and only is not None and not only(pick, "proxy"):
+                pick = None
             if pick is not None:
                 try:
                     j.start(pick, "proxy", coarse=coarse)
@@ -6258,7 +6396,10 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
             while True:
                 # a free run (started by an import) holds the priced stages for this
                 # run only: the sheet pool at 0, never the journal's own pause
-                nxt = j.next(coarse=coarse, workers=FREE_ONLY if entry.get("free") else None)
+                asked = _asked_pairs(entry)
+                nxt = j.next(coarse=coarse,
+                             workers=FREE_ONLY if entry.get("free") and not asked else None,
+                             only=only, asked=asked)
                 if nxt is None:
                     break
                 clip, stage = nxt
@@ -6279,6 +6420,10 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
             if not running:
                 if int(entry.get("asked") or 0) > int(entry.get("took") or 0):
                     continue                 # new footage asked in meanwhile: take it
+                with INDEX_LOCK:
+                    if _rerun_pending(entry):
+                        continue             # a re-run asked in meanwhile: take it
+                    entry["closing"] = True  # from here a re-run starts its own run
                 break
         with cond:
             if not landed:
@@ -6290,6 +6435,17 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
         entry.finish("cancelled", detail="stopped — what finished is kept; index the rest any time")
         return
     entry.complete("index")
+    if _scoped(entry):
+        # the picks wait on stages a re-run may not have touched (a close look nobody
+        # asked for): the ranked events are rebuilt from what is on disk now, free
+        if any(j.clips[c]["stages"]["picks"]["state"] not in journal.SETTLED
+               for c in (INDEX_RERUNS[job]["scope"] or {}) if c in j.clips):
+            try:
+                rebuild_events()
+            except (OSError, ValueError) as exc:
+                entry.note(f"events not rebuilt: {str(exc)[:80]}")
+        entry.finish("done", detail=_scope_words(j, entry))
+        return
     n = len([c for c in j.clips if not j.clips[c].get("missing")])
     tail = (f" — priced stages paused: {j.data.get('paused_reason') or 'budget cap'}"
             if j.paused_priced else "")
@@ -6343,11 +6499,12 @@ def telemetry_dir() -> Path:
     return STATE["work"] / "telemetry" / STATE["footage"].name
 
 
-def telemetry_cmd(stem: str) -> list[str]:
+def telemetry_cmd(stem: str, force: bool = False) -> list[str]:
     """R11's tool over one clip — a function so the tests can replace it. Free: ffmpeg
-    and pure Python, no model call."""
+    and pure Python, no model call. `force` re-extracts over a summary on disk (the
+    Index panel's re-run)."""
     return ["uv", "run", "--quiet", str(TOOLS / "telemetry.py"), str(tool_footage()),
-            "-o", str(telemetry_dir()), "--only", stem]
+            "-o", str(telemetry_dir()), "--only", stem, *(["--force"] if force else [])]
 
 
 def load_telemetry(clip: str) -> dict | None:
@@ -6646,11 +6803,15 @@ async def api_index(request: Request) -> JSONResponse:
     is dropped into the folder is "index what isn't done"."""
     body = await request.json() if int(request.headers.get("content-length") or 0) else {}
     live = next((x for x in INDEXES.values() if x["state"] not in progress.TERMINAL), None)
-    if live is not None and (live.get("free") or live.get("held")) \
+    if live is not None and (live.get("free") or live.get("held") or _scoped(live)) \
             and not live.get("cancel") and not body.get("pause_priced"):
         # the free run an import started, or a run holding the looks of footage imported
-        # into it: asking for the index is asking for those priced stages, so that run
-        # takes them on (no second index, no 409)
+        # into it, or the Index panel's re-run of a few clips: asking for the index is
+        # asking for the whole bin's stages, so that run takes them on (no second index,
+        # no 409)
+        if _scoped(live):
+            INDEX_RERUNS[live["id"]]["scope"] = None
+            flowmod.honest_index_job(live)       # the bin's bar and time left again
         live["free"] = False
         live["label"] = "Indexing the footage"
         index_ask_intake(live, release=True)
@@ -6775,6 +6936,626 @@ def api_index_cancel() -> JSONResponse:
     return JSONResponse({"stopped": [x["id"] for x in live],
                          "states": {x["id"]: x["state"] for x in live},
                          "first_pass": stopped_pass, "killed": sum(killed)})
+
+
+# ---------------------------------------------------------------- the Index panel (wave 17)
+#
+# Karl, K4 (2026-10-19): "it is still not clear to me what indexing was run over the
+# existing footage, or how to re run / tune that". The Index panel (/modules/indexpanel.js,
+# Window › Index) shows each clip's stages — heard, looked at (at what interval), looked at
+# closely, telemetry, previews — with when each ran and what it cost, and re-runs or
+# re-tunes a clip, a selection or the bin with the price shown before anything runs:
+#
+#   GET  /api/index/clips   the per-clip report: the journal's word on each stage, bent to
+#                           the files on disk (the files are the truth), and what a run in
+#                           progress is doing to it now
+#   POST /api/index/price   what a re-run of {clips, stages, interval_s} would run and cost,
+#                           nothing started
+#   POST /api/index/rerun   that re-run: the stages reopened in the journal with `force`
+#                           (their files replaced, not trusted), the look interval re-tuned
+#                           for those clips, and run by an index scoped to exactly that — or
+#                           taken in by the index already running, on its own journal
+#
+# A priced stage still never runs unasked (REDESIGN-GOAL dimension 13): a re-run's index
+# runs only the (clip, stage) pairs it was asked for and their free prerequisites; joined
+# to a free run (an import's), only those priced pairs pass its hold.
+
+INDEX_PANEL_STAGES = ("asr", "look", "close", "telemetry", "proxy")
+RERUN_ALIASES = {"asr": "asr", "hear": "asr", "heard": "asr", "look": "look", "looked": "look",
+                 "close": "close", "close_looks": "close", "telemetry": "telemetry",
+                 "proxy": "proxy", "preview": "proxy", "previews": "proxy"}
+RERUN_WORDS = {"asr": "heard", "look": "looked at", "close": "looked at closely",
+               "telemetry": "telemetry read", "proxy": "previews built"}
+# The re-run state of each index job, by id. Out of the job's own dict on purpose: sets do
+# not serialise, and /api/job/<id> hands the dict out whole.
+INDEX_RERUNS: dict[str, dict] = {}
+INDEX_LOCK = threading.Lock()
+
+
+def _rr(entry) -> dict:
+    return INDEX_RERUNS.setdefault(entry["id"], {"scope": None, "asked": set(), "queue": []})
+
+
+def _scoped(entry) -> bool:
+    """Is this run a re-run's own, scoped to what was asked? Not once the first pass or
+    the Index button joined it (it is the whole bin's then)."""
+    rr = INDEX_RERUNS.get(entry["id"]) if entry is not None else None
+    return rr is not None and rr["scope"] is not None and not entry.get("coarse")
+
+
+def _rerun_pending(entry) -> bool:
+    rr = INDEX_RERUNS.get(entry["id"])
+    return bool(rr and rr["queue"])
+
+
+def _asked_pairs(entry) -> set:
+    rr = INDEX_RERUNS.get(entry["id"]) if entry is not None else None
+    return rr["asked"] if rr else set()
+
+
+def _deps_closure(stages) -> set[str]:
+    out: set[str] = set()
+    todo = list(stages)
+    while todo:
+        for d in journal.DEPENDS.get(todo.pop(), ()):
+            if d not in out:
+                out.add(d)
+                todo.append(d)
+    return out
+
+
+def _walk_only(entry):
+    """What the walk may run for this job, as `journal.next(only=...)`: a re-run's own
+    pairs and their free prerequisites; a free run's free stages and the priced pairs a
+    re-run asked of it; everything (None) for the first pass's and the Index button's."""
+    if entry is None:
+        return None
+    if _scoped(entry):
+        scope = INDEX_RERUNS[entry["id"]]["scope"]
+
+        def only(clip: str, stage: str) -> bool:
+            want = scope.get(clip)
+            if not want:
+                return False
+            return stage in want or (stage not in journal.PRICED
+                                     and stage in _deps_closure(want))
+        return only
+    if entry.get("free"):
+        asked = _asked_pairs(entry)
+        if asked:
+            return lambda clip, stage: stage not in journal.PRICED or (clip, stage) in asked
+    return None
+
+
+def _scope_pairs(entry) -> list[tuple[str, str]]:
+    rr = INDEX_RERUNS.get(entry["id"]) or {}
+    return [(c, s) for c, ss in (rr.get("scope") or {}).items() for s in ss if s != "picks"]
+
+
+def _scope_fraction(j: journal.Journal, entry) -> float:
+    pairs = _scope_pairs(entry)
+    if not pairs:
+        return 0.0
+    done = sum(1 for c, s in pairs if c in j.clips
+               and j.clips[c]["stages"][s]["state"] in journal.SETTLED
+               + ("parked",))
+    return done / len(pairs)
+
+
+def _scope_words(j: journal.Journal, entry) -> str:
+    """What a re-run did, said once it ends: "CLIP_03 looked at again (2 s)", "3 clips
+    heard again", and what failed."""
+    by: dict[str, list[str]] = {}
+    bad: list[str] = []
+    for c, s in _scope_pairs(entry):
+        st = j.clips.get(c, {}).get("stages", {}).get(s, {})
+        if st.get("state") in journal.SETTLED:
+            by.setdefault(s, []).append(Path(c).stem)
+        elif st.get("state") in ("failed", "parked"):
+            bad.append(f"{Path(c).stem} {RERUN_WORDS.get(s, s)}: {str(st.get('last_error') or 'failed')[:60]}")
+    parts = []
+    for s in INDEX_PANEL_STAGES:
+        names = by.get(s)
+        if not names:
+            continue
+        who = names[0] if len(names) == 1 else f"{len(names)} clips"
+        parts.append(f"{who} {RERUN_WORDS[s]} again")
+    out = " · ".join(parts) or "nothing re-ran"
+    if bad:
+        out += " — failed: " + "; ".join(bad[:3])
+    return out
+
+
+def _scoped_bound(entry) -> float:
+    if _scoped(entry):
+        return 100.0 * float(entry.get("scope_frac") or 0.0)
+    return 100.0 * flowmod.honest_pct(flowmod.journal_counts(entry.get("journal")))
+
+
+def restore_close_looks() -> None:
+    """A close look put aside for a re-run that died with the process goes back: the old
+    read is the truth until a new one lands (`_index_stage`)."""
+    vis = STATE.get("visual")
+    if vis is None or not vis.is_dir():
+        return
+    for prev in vis.glob("*.fine.json.prev"):
+        fine = prev.with_name(prev.name[: -len(".prev")])
+        if not fine.exists():
+            try:
+                os.replace(prev, fine)
+            except OSError:
+                pass
+
+
+def _apply_reruns(j: journal.Journal, entry) -> None:
+    """The re-runs asked of this run, on its own journal: each stage reopened with
+    `force` (its file is replaced, not trusted), a held clip's hold lifted for the
+    priced stages asked of it, and the pairs added to what the run may do. A stage
+    running now is asked again once it lands (it stays in the queue until then)."""
+    rr = _rr(entry)
+    with INDEX_LOCK:
+        reqs, rr["queue"] = list(rr["queue"]), []
+    if not reqs:
+        return
+    present = set(footage_clips())
+    later = []
+    for req in reqs:
+        new = [c for c in req["plan"] if c in present and c not in j.clips]
+        if new:
+            j.add_clips(new, captured={c: capture_time(c) for c in new})
+        wait: dict[str, list[str]] = {}
+        for clip, stages in req["plan"].items():
+            if clip not in j.clips:
+                continue
+            for stage in stages:
+                if j.state(clip, stage) == "running":
+                    wait.setdefault(clip, []).append(stage)
+                    continue
+                # the picks are derived: always rebuilt after what they read (forced, so
+                # an events file older than the run is not taken for them)
+                force = bool(req.get("force", True)) or stage == "picks"
+                if not force and j.state(clip, stage) in journal.SETTLED:
+                    continue             # done meanwhile: nothing left to do for it
+                j.reopen(clip, stage, force=force)
+            if any(s in journal.PRICED for s in stages):
+                j.release_held([clip])
+            if rr["scope"] is not None:
+                rr["scope"].setdefault(clip, set()).update(stages)
+        rr["asked"].update((c, s) for c, ss in req["plan"].items() for s in ss
+                           if s in journal.PRICED)
+        entry["rerun_words"] = req.get("words") or ""
+        if wait:
+            later.append({**req, "plan": wait})
+    if later:
+        with INDEX_LOCK:
+            rr["queue"][:0] = later
+
+
+def _rerun_clips(body: dict) -> tuple[list[str], bool]:
+    present = footage_clips()
+    raw = body.get("clips")
+    if raw in (None, "bin", "all") or raw == []:
+        return list(present), True
+    if not isinstance(raw, list) or not all(isinstance(c, str) for c in raw):
+        raise HTTPException(400, "clips must be a list of clip names, or null for the bin")
+    unknown = [c for c in raw if c not in present]
+    if unknown:
+        raise HTTPException(404, f"not in this bin: {', '.join(unknown[:5])}")
+    clips = list(dict.fromkeys(raw))
+    return clips, set(clips) >= set(present)
+
+
+def _rerun_stages(body: dict) -> list[str]:
+    raw = body.get("stages")
+    if raw in (None, "everything", "all") or raw == ["everything"]:
+        return list(INDEX_PANEL_STAGES)
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list) or not raw:
+        raise HTTPException(400, "stages must name what to run again: "
+                                 "asr, look, close, telemetry, proxy, or everything")
+    out = []
+    for x in raw:
+        s = RERUN_ALIASES.get(str(x).strip().lower())
+        if s is None:
+            raise HTTPException(400, f"no such stage {x!r}: asr, look, close, telemetry, "
+                                     "proxy, or everything")
+        out.append(s)
+    return [s for s in journal.STAGES if s in out]
+
+
+def rerun_plan(body: dict) -> dict:
+    """What a re-run of `{clips, stages, interval_s, only_missing}` runs and costs, without
+    starting anything: per clip, the stages asked (a close look on a clip never looked at
+    brings its look, priced with it; a confirmed-junk clip's priced stages stay skipped) and
+    the derived picks; the price of the looks at the interval asked (or each clip's own) and
+    of the close looks, with every interval's price for the same looks.
+
+    `only_missing` is the old open screen's "Index what isn't done": of the stages asked,
+    only those not done (nor skipped) on each clip — nothing on disk is replaced."""
+    clips, whole = _rerun_clips(body)
+    stages = _rerun_stages(body)
+    missing = bool(body.get("only_missing"))
+    interval = body.get("interval_s")
+    if interval is not None:
+        try:
+            interval = float(interval)
+        except (TypeError, ValueError):
+            raise HTTPException(400, "interval_s must be a number")
+        if interval not in VISUAL_INTERVALS:
+            raise HTTPException(400, f"interval_s must be one of {list(VISUAL_INTERVALS)}")
+        if "look" not in stages:
+            raise HTTPException(400, "the look interval is tuned with a look: ask for look")
+    j = None
+    if journal_path().exists():
+        try:
+            j = load_journal()
+        except journal.JournalError:
+            j = None
+    junk = confirmed_junk()
+    looked, closed, heard = visual_stems(), fine_stems(), analysed_stems()
+    exists = {"asr": lambda c: Path(c).stem in heard,
+              "look": lambda c: Path(c).stem in looked,
+              "close": lambda c: Path(c).stem in closed,
+              "telemetry": lambda c: (telemetry_dir() / f"{Path(c).stem.upper()}.telemetry.json").exists(),
+              "proxy": lambda c: (STATE["proxy_dir"] / f"{Path(c).stem}.mp4").exists()}
+    tele_known = STATE.get("telemetry") or {}
+
+    def settled(clip: str, s: str) -> bool:
+        """Done by its file (the files are the truth: a journal's "done" over a file that is
+        gone is not done), or not applicable to the clip (skipped)."""
+        if exists[s](clip):
+            return True
+        st = j.clips[clip]["stages"][s]["state"] if j is not None and clip in j.clips else None
+        if st == "skipped":
+            return True
+        return s == "telemetry" and st is None and tele_known.get(clip) is False
+
+    plan: dict[str, list[str]] = {}
+    notes: list[str] = []
+    junked = brought = 0
+    for clip in clips:
+        want = list(stages)
+        if missing:
+            want = [s for s in want if not settled(clip, s)]
+        if clip in junk and any(s in journal.PRICED for s in want):
+            want = [s for s in want if s not in journal.PRICED]
+            junked += 1
+        if "close" in want and "look" not in want:
+            st = j.state(clip, "look") if j is not None and clip in j.clips else None
+            if Path(clip).stem not in looked and st not in journal.SETTLED:
+                want = [s for s in journal.STAGES if s in want or s == "look"]
+                brought += 1
+        if not want:
+            continue
+        if any(s in ("asr", "look", "close") for s in want):
+            want.append("picks")
+        plan[clip] = want
+    if junked:
+        notes.append(f"{junked} clip{'s' if junked != 1 else ''} marked junk: "
+                     "not looked at (priced)")
+    if brought:
+        notes.append(f"{brought} clip{'s' if brought != 1 else ''} never looked at: "
+                     "the look comes first, priced with it")
+    looks = [c for c, ss in plan.items() if "look" in ss]
+    closes = [c for c, ss in plan.items() if "close" in ss]
+    close_usd = len(closes) * FINE_WINDOWS_PER_CLIP * FINE_USD_PER_WINDOW
+
+    def look_usd(at: float | None) -> float:
+        return sum(sheets_for(c, at or clip_look_interval(c), probe=False)
+                   for c in looks) * VISUAL_USD_PER_SHEET
+
+    sheets = sum(sheets_for(c, interval or clip_look_interval(c), probe=False) for c in looks)
+    replaces = {s: sum(1 for c, ss in plan.items() if s in ss and exists[s](c))
+                for s in INDEX_PANEL_STAGES}
+    running = [[c, s] for c, ss in plan.items() for s in ss
+               if j is not None and c in j.clips and j.state(c, s) == "running"]
+    names = [Path(c).stem for c in plan]
+    who = ("the bin" if whole and len(plan) > 1 else names[0] if len(names) == 1
+           else f"{len(names)} clips")
+    what = ("what isn't done" if missing
+            else "everything" if set(stages) >= set(INDEX_PANEL_STAGES)
+            else ", ".join(RERUN_WORDS[s] for s in stages if s in RERUN_WORDS))
+    if interval is not None and "look" in stages:
+        what += f" (looks at {interval:g} s)"
+    return {
+        "clips": list(plan), "whole_bin": whole, "stages": stages, "only_missing": missing,
+        "plan": plan, "interval_s": interval,
+        "looks": len(looks), "sheets": sheets, "close": len(closes),
+        "windows": len(closes) * FINE_WINDOWS_PER_CLIP,
+        "usd": round(sheets * VISUAL_USD_PER_SHEET + close_usd, 2),
+        "by_interval": {f"{i:g}": round(look_usd(i) + close_usd, 2) for i in VISUAL_INTERVALS},
+        # a clip whose length is not known yet is priced at one sheet until it is
+        "unmeasured": sum(1 for c in looks if clip_duration_known(c) is None),
+        "replaces": replaces, "running": running, "notes": notes,
+        "words": f"{who}: {what}" if plan else "",
+        **config.cost_terms(),
+    }
+
+
+async def _body_json(request: Request) -> dict:
+    if not int(request.headers.get("content-length") or 0):
+        return {}
+    try:
+        body = await request.json()
+    except ValueError:
+        raise HTTPException(400, "the body is not JSON")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "the body must be a JSON object")
+    return body
+
+
+@app.post("/api/index/price")
+async def api_index_price(request: Request) -> JSONResponse:
+    """What a re-run would run and cost — the price the Index panel shows before its
+    button is pressed. Nothing starts and nothing is written."""
+    body = await _body_json(request)
+    return JSONResponse(await asyncio.to_thread(rerun_plan, body))
+
+
+@app.post("/api/index/rerun")
+async def api_index_rerun(request: Request) -> JSONResponse:
+    """Run a clip's, a selection's or the bin's stages again (`rerun_plan`), the look at
+    the interval asked. Answers at once with the job that runs it: a new index scoped to
+    exactly that, or the index already running, which takes it in (`joined`)."""
+    body = await _body_json(request)
+    return JSONResponse(await asyncio.to_thread(_rerun_start, body))
+
+
+def _rerun_start(body: dict) -> dict:
+    plan = rerun_plan(body)
+    if not plan["plan"]:
+        raise HTTPException(400, "nothing to run again" + (": " + "; ".join(plan["notes"])
+                                                         if plan["notes"] else ""))
+    if plan["usd"] > 0:
+        refuse_past_cap("Running the index again", plan["usd"])
+    # "what isn't done" replaces nothing on disk: its stages are reopened, not forced
+    req = {"plan": {c: list(ss) for c, ss in plan["plan"].items()}, "words": plan["words"],
+           "force": not plan["only_missing"]}
+    with INDEX_LOCK:
+        live = next((x for x in INDEXES.values() if x["state"] not in progress.TERMINAL), None)
+        if live is not None and live.get("cancel"):
+            raise HTTPException(409, "the index is stopping — ask again in a moment")
+        if plan["interval_s"] is not None:
+            set_clip_look_interval([c for c, ss in plan["plan"].items() if "look" in ss],
+                                   plan["interval_s"], whole_bin=plan["whole_bin"])
+        if live is not None and not live.get("closing"):
+            _rr(live)["queue"].append(req)
+            live.note(f"asked again — {plan['words']}")
+            job, joined = live["id"], True
+        else:
+            job, joined = index_entry(), False
+            entry = INDEXES[job]
+            entry["label"] = f"Indexing again — {plan['words']}"[:80]
+            rr = _rr(entry)
+            rr["scope"] = {}
+            rr["queue"].append(req)
+            entry.bound_fn = _scoped_bound
+            entry.eta_fn = lambda e: None
+            threading.Thread(target=_index_run, args=(job, ""), daemon=True).start()
+    out = {k: plan[k] for k in ("clips", "stages", "only_missing", "interval_s", "looks", "sheets", "close",
+                                "windows", "usd", "replaces", "running", "notes", "words",
+                                "backend", "charged")}
+    return {"job": job, "joined": joined, **out}
+
+
+# ------------------------------------------------------------- the per-clip report
+
+_SIDE_FACTS: dict[str, tuple] = {}
+
+
+def _side_facts(p: Path) -> dict | None:
+    """What the panel shows of a visual (or close-look) sidecar, read once per version:
+    the interval it sampled at, the sheets and frames it read, the windows, what it cost."""
+    try:
+        st = p.stat()
+    except OSError:
+        return None
+    key = (st.st_mtime_ns, st.st_size)
+    hit = _SIDE_FACTS.get(str(p))
+    if hit is not None and hit[0] == key:
+        return hit[1]
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        d = {}
+    params = d.get("params") or {}
+    wr = d.get("windows_read")
+    try:
+        usd = float(d.get("projected_usd")) if d.get("projected_usd") is not None else None
+    except (TypeError, ValueError):
+        usd = None
+    frames = d.get("frames_sampled")
+    facts = {"at": st.st_mtime, "interval_s": params.get("interval_s"),
+             "sheets": d.get("sheets_read"), "sheets_total": d.get("sheets_total"),
+             # visual_pass.py writes the sampled times (a list); older sidecars a count
+             "frames": len(frames) if isinstance(frames, list) else frames,
+             "failed_sheets": d.get("failed_sheets"),
+             "windows": len(wr) if isinstance(wr, list) else wr,
+             "moments": len(d.get("moments") or []), "usd": usd}
+    _SIDE_FACTS[str(p)] = (key, facts)
+    return facts
+
+
+def _index_clips_disk() -> dict:
+    """The report's disk half (`_snapped`): every clip's stages from the journal and the
+    files. What a running index is doing is merged in per call (`index_clips_payload`)."""
+    clips = footage_clips()
+    j = None
+    if journal_path().exists():
+        try:
+            j = load_journal()
+        except journal.JournalError:
+            j = None
+    heard = analysed_stems()
+    vis, tdir, pdir = STATE["visual"], telemetry_dir(), STATE["proxy_dir"]
+    junk = confirmed_junk()
+    per = clip_look_intervals()
+    proj = look_interval()
+    tele_known = STATE.get("telemetry") or {}
+    rows = []
+    for clip in clips:
+        stem = Path(clip).stem
+        rec = j.clips.get(clip) if j is not None else None
+        fine = vis / f"{stem}.fine.json"
+        if not fine.exists() and fine.with_name(fine.name + ".prev").exists():
+            fine = fine.with_name(fine.name + ".prev")     # put aside for a re-run
+        paths = {"asr": STATE["sidecars"] / f"{stem}.audio.json",
+                 "look": vis / f"{stem}.visual.json", "close": fine,
+                 "telemetry": tdir / f"{stem.upper()}.telemetry.json",
+                 "proxy": pdir / f"{stem}.mp4"}
+        stages = {}
+        for s in INDEX_PANEL_STAGES:
+            js = (rec or {}).get("stages", {}).get(s) or {}
+            p = paths[s]
+            if s == "asr" and stem not in heard:
+                mtime = None
+            else:
+                try:
+                    mtime = p.stat().st_mtime
+                except OSError:
+                    mtime = None
+            facts = _side_facts(p) if s in ("look", "close") and mtime is not None else None
+            cost = facts["usd"] if facts and facts.get("usd") is not None else js.get("cost_usd")
+            v = {"journal": js.get("state"), "file": mtime is not None,
+                 "at": (js.get("finished") if js.get("state") in journal.SETTLED else None) or mtime,
+                 "started": js.get("started"), "attempts": js.get("attempts") or 0,
+                 "error": js.get("last_error"), "force": bool(js.get("force")),
+                 "cost_usd": round(float(cost or 0.0), 4)}
+            if s == "look" and facts:
+                v.update(interval_s=facts.get("interval_s") or VISUAL_INTERVAL_S,
+                         sheets=facts.get("sheets"), frames=facts.get("frames"),
+                         moments=facts.get("moments"))
+            if s == "close" and facts:
+                v.update(windows=facts.get("windows"), moments=facts.get("moments"))
+            if s == "telemetry" and not js and tele_known.get(clip) is False:
+                v.update(journal="skipped", error="no telemetry stream in the file")
+            stages[s] = v
+        f = (rec or {}).get("facts") or {}
+        rows.append({
+            "clip": clip, "stem": stem, "duration": clip_duration_known(clip),
+            "priority": (rec or {}).get("priority"), "junk": clip in junk,
+            "held": (rec or {}).get("held"), "missing": bool((rec or {}).get("missing")),
+            "parked": (rec or {}).get("parked"),
+            "words": f.get("words"), "telemetry_peaks": f.get("telemetry_peaks"),
+            # the interval its next look reads it at, and whether it is tuned off the bin's
+            "interval_s": per.get(clip) or proj, "tuned": clip in per,
+            "sheets_at": {f"{i:g}": sheets_for(clip, i, probe=False) for i in VISUAL_INTERVALS},
+            "stages": stages})
+    return {"rows": rows, "journal": j is not None,
+            "paused_priced": bool(j and j.paused_priced),
+            "paused_reason": j.data.get("paused_reason") if j is not None else None,
+            "interval_s": proj, "intervals": list(VISUAL_INTERVALS),
+            "usd_per_sheet": VISUAL_USD_PER_SHEET,
+            "usd_per_close": round(FINE_WINDOWS_PER_CLIP * FINE_USD_PER_WINDOW, 4),
+            "mean_s": {s: (round(m, 2) if m is not None else None)
+                       for s in journal.STAGES
+                       for m in [j.mean_duration(s) if j is not None else None]},
+            "path": str(journal_path()),
+            **config.cost_terms()}
+
+
+def _stage_state(row: dict, s: str, v: dict, disk: dict, live, only, asked: set,
+                 now: float) -> dict:
+    """One stage's word for the panel: done / held / queued / running (with %) / failed /
+    skipped / not run, and why, from the journal, the file and the run in progress."""
+    clip, js = row["clip"], v["journal"]
+    out: dict = {}
+    priced = s in journal.PRICED
+    holds = priced and (disk["paused_priced"] or bool(row.get("held")))
+    walk_takes = (live is not None and not live.get("cancel") and js in journal.RETRYABLE
+                  and (only is None or only(clip, s))
+                  and not (holds and (clip, s) not in asked)
+                  and not (priced and live.get("free") and only is None))
+    if js == "running":
+        out["state"] = "running"
+        started = v.get("started")
+        mean = disk["mean_s"].get(s)
+        if started:
+            out["elapsed_s"] = round(max(0.0, now - float(started)), 1)
+            if mean:
+                out["pct"] = int(min(99, 100.0 * (now - float(started)) / float(mean)))
+    elif row.get("missing"):
+        out["state"] = "missing"
+    elif v["file"] and not (v["force"] and walk_takes):
+        out["state"] = "done"
+        if v["force"] or js in ("failed", "parked"):
+            # asked again and not run (stopped), or the new run failed: the old one stands
+            out["again"] = "failed" if js in ("failed", "parked") else "waiting"
+    elif js == "skipped":
+        out["state"] = "skipped"
+    elif walk_takes:
+        out["state"] = "queued"
+    elif js in ("failed", "parked"):
+        out["state"] = "failed"
+    elif priced and row.get("junk"):
+        out["state"] = "held"
+        out["why"] = "marked junk: not looked at"
+    elif holds:
+        out["state"] = "held"
+        reason = str(disk.get("paused_reason") or "")
+        out["why"] = ("imported while the index ran: waits for you" if row.get("held")
+                      else "the budget cap holds it" if reason.startswith("budget cap")
+                      else "paused" + (f": {reason}" if reason else ""))
+    else:
+        out["state"] = "not run"
+    return out
+
+
+def index_clips_payload() -> dict:
+    disk = _snapped("index_clips", _index_clips_disk)
+    live = next((x for x in INDEXES.values() if x["state"] not in progress.TERMINAL), None)
+    only = _walk_only(live)
+    asked = _asked_pairs(live)
+    now = time.time()
+    rows = []
+    summary = {"clips": 0, "heard": 0, "looked": 0, "close": 0, "telemetry": 0,
+               "no_telemetry": 0, "previews": 0, "looked_at": {}, "cost_usd": 0.0,
+               "running": 0, "queued": 0, "held": 0, "failed": 0}
+    count = {"asr": "heard", "look": "looked", "close": "close", "telemetry": "telemetry",
+             "proxy": "previews"}
+    for r in disk["rows"]:
+        stages = {}
+        for s, v in r["stages"].items():
+            stages[s] = {**v, **_stage_state(r, s, v, disk, live, only, asked, now)}
+            st = stages[s]["state"]
+            if st == "done":
+                summary[count[s]] += 1
+                summary["cost_usd"] += float(v.get("cost_usd") or 0.0)
+                if s == "look":
+                    k = f"{float(v.get('interval_s') or VISUAL_INTERVAL_S):g}"
+                    summary["looked_at"][k] = summary["looked_at"].get(k, 0) + 1
+            elif s == "telemetry" and st == "skipped":
+                summary["no_telemetry"] += 1
+            if st in ("running", "queued", "held", "failed"):
+                summary[st] += 1
+        if not r.get("missing"):
+            summary["clips"] += 1
+        rows.append({**r, "stages": stages})
+    summary["cost_usd"] = round(summary["cost_usd"], 2)
+    out = {k: v for k, v in disk.items() if k != "rows"}
+    out.update(rows=rows, summary=summary,
+               running=live is not None, job=live["id"] if live is not None else None,
+               job_label=live.get("label") if live is not None else None,
+               job_detail=live.get("detail") if live is not None else None,
+               stopping=bool(live is not None and live.get("cancel")),
+               scoped=_scoped(live) if live is not None else False)
+    return out
+
+
+@app.get("/api/index/clips")
+async def api_index_clips() -> Response:
+    """The Index panel's report: per clip, each stage's state (done / held / queued /
+    running with its % / failed / skipped / not run), when it ran, the interval its look
+    used, what it cost, and the interval its next look will use; the bin's summary; the
+    unit prices a re-run is priced from. From the snapshot (`_snapped`); a running
+    index's part from memory."""
+    def live_key():
+        x = next((x for x in INDEXES.values() if x["state"] not in progress.TERMINAL), None)
+        if x is None:
+            return None
+        return (x["id"], x.get("detail"), x.get("cancel"), int(time.time()))
+    return await snap_respond("index_clips", index_clips_payload, live=live_key)
 
 
 def probe_duration(path: Path) -> float | None:
@@ -10968,7 +11749,9 @@ MODULE_FILES = {"firstpass.js", "firstpass.css", "export.js", "export.css", "met
                 "meters.css", "effects.js", "effects.css", "workspace.css", "scopes.js",
                 # wave 12 (K3): Import, actions (the AI's vocabulary + review), the AI prompt, the walk-through
                 "import.js", "import.css", "actions.js", "actions.css", "aiprompt.js", "aiprompt.css",
-                "tour.js", "tour.css"}
+                "tour.js", "tour.css",
+                # wave 17 (K4): the Index panel
+                "indexpanel.js", "indexpanel.css"}
 
 
 @app.get("/modules/{name}")

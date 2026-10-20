@@ -171,7 +171,7 @@
   // 365 → 342; nothing with two badges up); if that is not enough the AI prompt goes to its
   // own row under the header (aiprompt.js `rcAI.drop`), whole at its least in any Timeline
   // of SEL_TLW.
-  const SELECTS_W = 592, SEL_TLW = 460;
+  const SELECTS_W = 592, SEL_TLW = 460, INDEX_W = 440;   // INDEX_W: the Index tab's (wave 17 INDEXPANEL)
   const SPLIT = 4;
   // The Assistant's full-height column (a waiting proposal's `ptall`, app.js; an AI review's
   // `aitall`, actions.js) takes its width from the Source monitor, the Program keeping its
@@ -230,6 +230,9 @@
       if (short > 0 && short <= give) { insp -= short; room += short; }
       proj = SELECTS_W;
     }
+    else if (indexOpen() && proj < INDEX_W && room - INDEX_W >= Math.max(SEL_TLW, head)) {
+      proj = INDEX_W;                       // the Index panel's width, taken the same way (wave 17)
+    }
     px = { proj, insp, src, top, prog: a.W - SPLIT - src, tl: a.H - SPLIT - top, tlw: room - proj };
     root.setProperty('--c-proj', `${proj}px`);
     root.setProperty('--c-insp', `${insp}px`);
@@ -243,6 +246,10 @@
 
   function saveLayout() { store.set(LAYOUT_KEY, { ...frac, v: LAYOUT_V }); }
   const selectsOpen = () => isOpen('bin');
+  // The Index panel (wave 17, K4; indexpanel.js) is the Project group's other wide tab: its
+  // stage columns and its re-run bar whole want INDEX_W, taken from the Timeline the way
+  // Selects takes its width, under the same guard for the Timeline's header row.
+  const indexOpen = () => isOpen('index');
 
   /* A panel group's width for its tab strip whole: its borders, its header's padding and
    * every tab at its own width (their badges as they are now). */

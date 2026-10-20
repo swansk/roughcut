@@ -484,3 +484,8 @@ next judge runs, and the next judge rules it honest or lenient.
   price first ("one design call, about $X, billed to the API key"; "Ask · ~$X" / "Don't ask") and nothing is called until
   Ask. This replaces wave 16 AIHONEST's entry (a redo re-asked every discarded design, unasked on the API): stricter. A
   new edit empties the redo side and deletes what it set aside; a page reload loses the redo stack, as before.
+
+- 2026-10-20 (wave 17, lane INDEXPANEL; logged by the lead): **the screens budget grows by the Index tab: +1 word and +1
+  control on each board screen** (the Project group's fourth tab, Karl's K4 (a)): `/` 110·58, `/ shot` 139·73, `/ film`
+  118·57, `/ fx` 144·61, `/ jobs` 119·59, measured, no headroom (proven by lowering one). More lenient by exactly the
+  measured count; it is the panel Karl chose.

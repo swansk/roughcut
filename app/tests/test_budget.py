@@ -150,10 +150,16 @@ HEADER_MAX_PX = 50
 # the window but unseen): on b7848ec that rule measures exactly the numbers above it.
 # Both wave 13 lanes together (the lead's merge, measured): / 109, / shot 138, / film 117,
 # / fx 143, / jobs 118 (AIUX's +3 on the two shot screens and BINLOOK2's +6 on all five).
-WORDS_IN_VIEW = {"/": 109, "/floor": 58, "/open": 59, "/ shot": 138, "/ film": 117, "/ fx": 143,
-                 "/ jobs": 118}
-CONTROLS_IN_VIEW = {"/": 57, "/floor": 8, "/open": 9, "/ shot": 72, "/ film": 56, "/ fx": 60,
-                    "/ jobs": 58}
+# Wave 17, lane INDEXPANEL (Karl's K4: the Index panel), measured, no headroom: the Project
+# group's fourth tab "Index" is one word and one control on every board screen (its panel is
+# in view only while the tab is open; Window › Index sits in a closed menu): words / 109 →
+# 110, / shot 138 → 139, / film 117 → 118, / fx 143 → 144, / jobs 118 → 119; controls / 57 →
+# 58, / shot 72 → 73, / film 56 → 57, / fx 60 → 61, / jobs 58 → 59. /floor and /open are
+# unchanged.
+WORDS_IN_VIEW = {"/": 110, "/floor": 58, "/open": 59, "/ shot": 139, "/ film": 118, "/ fx": 144,
+                 "/ jobs": 119}
+CONTROLS_IN_VIEW = {"/": 58, "/floor": 8, "/open": 9, "/ shot": 73, "/ film": 57, "/ fx": 61,
+                    "/ jobs": 59}
 
 # Contracts another lane delivers (M16 stage 1, C1): until that lane is merged the
 # check is an expected failure on that screen. Every stage-1 lane is merged, so this is

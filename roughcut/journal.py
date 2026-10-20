@@ -158,8 +158,12 @@ def score(facts: dict | None) -> float:
 # ------------------------------------------------------------------- the records
 
 def _stage_record() -> dict:
+    # `force`: the editor asked for this stage again (the Index panel's re-run, wave 17):
+    # its output on disk is replaced, not trusted — `reconcile` leaves it queued even
+    # though the file exists, and the server runs the tool with its --force. Cleared when
+    # the stage settles.
     return {"state": "queued", "attempts": 0, "last_error": None, "cost_usd": 0.0,
-            "started": None, "finished": None, "not_before": None}
+            "started": None, "finished": None, "not_before": None, "force": False}
 
 
 def _clip_record(clip: str, now: float, captured: float | None) -> dict:
@@ -224,6 +228,7 @@ class Journal:
             for s in STAGES:
                 rec["stages"].setdefault(s, _stage_record())
                 rec["stages"][s].setdefault("not_before", None)
+                rec["stages"][s].setdefault("force", False)
             rec.setdefault("missing", False)
             rec.setdefault("parked", None)
             rec.setdefault("facts", None)
@@ -383,6 +388,8 @@ class Journal:
         st["state"] = "skipped"
         st["last_error"] = reason or None
         st["finished"] = now
+        st["force"] = False
+        st["kept"] = False
         self._touch()
 
     @_locked
@@ -426,22 +433,35 @@ class Journal:
         return touched
 
     @_locked
-    def reopen(self, clip: str, stage: str, *, now: float | None = None) -> None:
+    def reopen(self, clip: str, stage: str, *, force: bool = False,
+               now: float | None = None) -> None:
         """Put a settled or skipped stage back in the queue — a skip that turned out
         not to be a fact about the clip (a stage that did not exist yet when it was
         recorded), or a human asking for a stage to run again. Attempts start over;
-        cost already recorded stays recorded. Not for a running stage."""
+        cost already recorded stays recorded. Not for a running stage.
+
+        `force` (the Index panel's re-run): the stage's output on disk is to be replaced,
+        so `reconcile` does not mark it done again because its file exists. A parked
+        clip parked at this stage is unparked: the editor asked for another try."""
         now = time.time() if now is None else now
+        rec = self._rec(clip)
         st = self._stage(clip, stage)
         if st["state"] == "running":
             raise JournalError(f"{clip} {stage} is running; finish or fail it first")
+        # asked again over a settled stage: its output stands until the new one lands, so
+        # the clip stays released (its picks on the floor) while the re-run waits or runs,
+        # and after one that was stopped or failed
+        st["kept"] = bool(force) and (st["state"] in SETTLED or bool(st.get("kept")))
         st["state"] = "queued"
         st["attempts"] = 0
         st["last_error"] = None
         st["started"] = None
         st["finished"] = None
         st["not_before"] = None
-        self._log(now, f"{clip} {stage} reopened")
+        st["force"] = bool(force)
+        if (rec.get("parked") or {}).get("stage") == stage:
+            rec["parked"] = None
+        self._log(now, f"{clip} {stage} {'asked again' if force else 'reopened'}")
         self._touch()
 
     @_locked
@@ -526,6 +546,8 @@ class Journal:
             reported = files.get(clip) or {}
             for stage in STAGES:
                 st = rec["stages"][stage]
+                if st.get("force") and st["state"] in RETRYABLE:
+                    continue          # asked again: the file on disk is what it replaces
                 if stage in reported:
                     exists = bool(reported[stage])
                     if exists and st["state"] != "done":
@@ -597,7 +619,9 @@ class Journal:
     @_locked
     def next(self, *, now: float | None = None,
              workers: dict[str, int] | None = None,
-             coarse: bool = False) -> tuple[str, str] | None:
+             coarse: bool = False,
+             only=None,
+             asked: set | frozenset | None = None) -> tuple[str, str] | None:
         """The next (clip, stage) to run, or None when nothing is runnable right now.
 
         Walks clips in the journal's order and stages in pipeline order, so the top
@@ -609,6 +633,11 @@ class Journal:
         `coarse` (the first pass): the `COARSE` stages of every clip come before any
         other stage of any clip, and a look waits on the probe only — the whole bin
         heard and looked at once, then the rest.
+
+        `only(clip, stage) -> bool` narrows the walk to what a run was asked for (the
+        Index panel's re-run of one clip's look, a free run's free stages); `asked` is
+        the (clip, stage) pairs the editor asked for with their price shown, which the
+        priced pause and an import's hold do not hold back.
         """
         now = time.time() if now is None else now
         limits = {**self.workers, **(workers or {})}
@@ -616,12 +645,13 @@ class Journal:
         tiers = ([COARSE, tuple(s for s in STAGES if s not in COARSE)] if coarse
                  else [STAGES])
         for tier in tiers:
-            hit = self._next_in(tier, now, limits, load, coarse)
+            hit = self._next_in(tier, now, limits, load, coarse, only, asked or ())
             if hit is not None:
                 return hit
         return None
 
-    def _next_in(self, stages, now, limits, load, coarse) -> tuple[str, str] | None:
+    def _next_in(self, stages, now, limits, load, coarse, only=None,
+                 asked=()) -> tuple[str, str] | None:
         for clip in self.ordered():
             rec = self.clips[clip]
             if rec.get("missing") or rec.get("parked"):
@@ -630,7 +660,10 @@ class Journal:
                 st = rec["stages"][stage]
                 if st["state"] not in RETRYABLE:
                     continue
-                if stage in PRICED and (self.paused_priced or rec.get("held")):
+                if only is not None and not only(clip, stage):
+                    continue
+                if stage in PRICED and (self.paused_priced or rec.get("held")) \
+                        and (clip, stage) not in asked:
                     continue
                 if st.get("not_before") and float(st["not_before"]) > now:
                     continue
@@ -681,6 +714,8 @@ class Journal:
         st["cost_usd"] = round(float(st.get("cost_usd") or 0.0) + float(cost_usd or 0.0), 4)
         st["last_error"] = None
         st["not_before"] = None
+        st["force"] = False
+        st["kept"] = False
         if self.released(clip):
             self._log(now, f"{clip} released")
         self._touch()
@@ -769,14 +804,21 @@ class Journal:
 
     # -------------------------------------------------------------- release
 
+    @staticmethod
+    def stands(st: dict) -> bool:
+        """A stage whose output stands: settled, or asked again over a settled one (the
+        Index panel's re-run: the old output is kept until the new one lands)."""
+        return st["state"] in SETTLED or bool(st.get("force") and st.get("kept"))
+
     def released(self, clip: str) -> bool:
         """Every applicable stage done (or skipped) and the footage present. All or
         nothing: the floor never shows a clip whose picture can't play or whose picks
-        might still change."""
+        might still change. A stage asked again over a settled one counts as its old
+        output until the new one lands (`stands`)."""
         rec = self._rec(clip)
         if rec.get("missing"):
             return False
-        return all(rec["stages"][s]["state"] in SETTLED for s in STAGES)
+        return all(self.stands(rec["stages"][s]) for s in STAGES)
 
     @_locked
     def released_clips(self) -> list[str]:
