@@ -164,7 +164,7 @@
   // The Project tab gives the width back. Verdict 12, punch 8: the Timeline it leaves is
   // never under what its own header row needs whole (`tlHeadNeed`: the panel's title and the
   // AI prompt at its least: the chip's words, a 160 px input), whichever is more.
-  const SELECTS_W = 592, SEL_TLW = 460;
+  const SELECTS_W = 592, SEL_TLW = 460, INDEX_W = 440;
   const SPLIT = 4;
   // The Assistant's full-height column (a waiting proposal's `ptall`, app.js; an AI review's
   // `aitall`, actions.js) takes its width from the Source monitor, the Program keeping its
@@ -215,6 +215,7 @@
     const room = a.W - 2 * SPLIT - insp;
     let proj = Math.round(clamp(frac.proj * a.W, MIN.proj, Math.min(a.W * 0.42, room - MIN.tlw)));
     if (selectsOpen() && room - SELECTS_W >= Math.max(SEL_TLW, tlHeadNeed())) proj = Math.max(proj, SELECTS_W);
+    else if (indexOpen() && room - INDEX_W >= Math.max(SEL_TLW, tlHeadNeed())) proj = Math.max(proj, INDEX_W);
     px = { proj, insp, src, top, prog: a.W - SPLIT - src, tl: a.H - SPLIT - top, tlw: room - proj };
     root.setProperty('--c-proj', `${proj}px`);
     root.setProperty('--c-insp', `${insp}px`);
@@ -225,6 +226,10 @@
 
   function saveLayout() { store.set(LAYOUT_KEY, { ...frac, v: LAYOUT_V }); }
   const selectsOpen = () => isOpen('bin');
+  // The Index panel (wave 17, K4; indexpanel.js) is the Project group's other wide tab: its
+  // stage columns and its re-run bar whole want INDEX_W, taken from the Timeline the way
+  // Selects takes its width, under the same guard for the Timeline's header row.
+  const indexOpen = () => isOpen('index');
 
   /* A panel group's width for its tab strip whole: its borders, its header's padding and
    * every tab at its own width (their badges as they are now). */
@@ -2294,7 +2299,7 @@
     if (p) p.textContent = `Program${n}`;
     if (t) t.textContent = `Timeline${n}`;
     // a longer title needs more of the row: the Selects width is weighed against it again
-    if (selectsOpen()) layout();
+    if (selectsOpen() || indexOpen()) layout();
   }
 
   window.dock = {

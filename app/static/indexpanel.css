@@ -1,0 +1,81 @@
+/* The Index panel (indexpanel.js; wave 17, Karl's K4): the Project group's fourth tab, dense
+ * like Premiere's Metadata panel and the Project panel's List view — one
+ * line for the bin, a list with a heading row that stays and 21 px rows (the Name pinned
+ * when the columns scroll sideways), the selected clip's detail, and a foot bar with the
+ * re-run: what, the look interval, the price, Run / Stop. */
+#projBody > section[data-tool=index] { display: flex; flex-direction: column; height: 100%; padding: 0; }
+#projBody > section[data-tool=index][hidden] { display: none; }
+
+.ix-sum { flex: none; padding: 4px 8px; font-size: 11px; line-height: 15px; color: var(--text);
+          border-bottom: 1px solid #0f0f10; font-variant-numeric: tabular-nums; }
+
+.ix-list { flex: 1 1 auto; min-height: 60px; overflow: auto; outline: none; position: relative;
+           scrollbar-width: thin; scrollbar-color: #45454b transparent; user-select: none;
+           -webkit-user-select: none; }
+table.ixt { font-size: 11px; width: max-content; min-width: 100%; }
+table.ixt col.c-name { width: 66px; }
+table.ixt col.c-asr { width: 38px; }
+table.ixt col.c-look { width: 44px; }
+table.ixt col.c-close { width: 38px; }
+table.ixt col.c-telemetry { width: 58px; }
+table.ixt col.c-proxy { width: 48px; }
+table.ixt col.c-cost { width: 36px; }
+table.ixt col.c-ran { width: 46px; }
+table.ixt th { top: 0; height: 22px; padding: 0 5px; background: var(--head);
+               border-bottom: 1px solid #0f0f10; border-right: 1px solid #2c2c30; color: var(--dim);
+               font-weight: 400; cursor: default; }
+table.ixt th:last-child { border-right: 0; }
+table.ixt th.num, table.ixt td.num { text-align: right; }
+table.ixt td { height: 21px; padding: 0 5px; line-height: 20px; border-bottom: 1px solid #242427; }
+table.ixt tr.row:hover td { background: #262629; }
+table.ixt tr.row.sel td { background: #34343a; color: #fff; }
+.ws-panel.focus table.ixt tr.row.sel td { background: #2b4f78; }
+table.ixt tr.missing td { color: var(--faint); }
+/* the Name stays while the stages scroll under it */
+table.ixt th.name, table.ixt td.name { position: sticky; left: 0; }
+table.ixt td.name { z-index: 1; background: var(--panel); }
+table.ixt th { z-index: 2; }
+table.ixt th.name { z-index: 3; }
+table.ixt td.name { display: table-cell; }
+table.ixt td.name .n { display: inline; }
+table.ixt td.name .tuned, table.ixt td.name .junk {
+  margin-left: 4px; padding: 0 3px; border-radius: 3px; font-size: 10px; line-height: 14px;
+  color: #cfe3fb; background: #24384f; }
+table.ixt td.name .junk { color: #f0d9a5; background: #4a3a1c; }
+/* each stage's word, in the colour of its state */
+table.ixt td.stg { color: var(--faint); }
+table.ixt td.stg.s-done { color: var(--good); }
+table.ixt td.stg.s-running { color: var(--accent); font-weight: 600; }
+table.ixt td.stg.s-queued { color: #9fc6f3; }
+table.ixt td.stg.s-held { color: var(--warn); }
+table.ixt td.stg.s-failed { color: var(--bad); }
+table.ixt td.stg.s-skipped { color: var(--dim); }
+table.ixt tr.row.sel td.stg.s-done { color: #8be0a8; }
+table.ixt td.cost, table.ixt td.ran { color: var(--dim); }
+table.ixt tr.empty td { padding: 8px; height: auto; }
+
+/* the focused clip, in Premiere's Metadata way: a name and a property per line */
+.ix-detail { flex: none; max-height: 42%; overflow: auto; padding: 4px 8px 5px; font-size: 11px;
+             border-top: 1px solid #0f0f10; background: #19191b; }
+.ix-detail[hidden] { display: none; }
+.ix-dh { display: flex; gap: 8px; align-items: baseline; margin-bottom: 2px; white-space: nowrap; }
+.ix-dh b { font-weight: 600; }
+.ix-dh span { color: var(--dim); }
+.ix-dl { display: flex; gap: 8px; line-height: 17px; white-space: nowrap; }
+.ix-dl .k { flex: none; width: 74px; color: var(--dim); }
+.ix-dl .v { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.ix-dl .bad, .ix-detail .bad { color: var(--bad); }
+
+/* the foot: Premiere's bottom bar, the re-run on it */
+.ix-foot { flex: none; min-height: 28px; display: flex; flex-wrap: wrap; align-items: center; gap: 3px 4px;
+           padding: 2px 4px; border-top: 1px solid #0f0f10; background: var(--head); white-space: nowrap; }
+.ix-foot select { padding: 1px 4px; font-size: 11px; height: 22px; }
+.ix-foot select[hidden] { display: none; }
+.ix-foot .ix-scope { flex: 0 1 auto; min-width: 28px; max-width: 90px; overflow: hidden;
+                     text-overflow: ellipsis; color: var(--text); font-size: 11px; padding: 0 3px; }
+.ix-foot select, .ix-foot .ix-price, .ix-foot button { flex: none; }
+.ix-foot .ix-price { color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+.ix-foot button { padding: 1px 9px; line-height: 18px; }
+.ix-foot .ix-run { background: #2b4f78; border-color: #3a6698; color: #fff; }
+.ix-foot .ix-run:hover { background: #335c8b; }
+.ix-foot .ix-stop[hidden] { display: none; }

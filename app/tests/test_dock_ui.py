@@ -467,8 +467,9 @@ def test_the_rail_names_its_tools_and_badges_only_what_waits(page):
     # AI designer is "Designed Effects" and Premiere's Effects bin (the transitions) is the
     # Project group's third tab (verdict 8 punch 5)
     names = page.eval_on_selector_all(".ws-tab[data-tool]", "els => els.map(e => e.textContent.trim())")
-    assert names == ["Project", "Selects", "Effects", "Effect Controls", "Designed Effects", "Audio",
-                     "Assistant", "Export"], names
+    # (wave 17, K4: the Index panel is the Project group's fourth tab, opening as wide as Selects)
+    assert names == ["Project", "Selects", "Effects", "Index", "Effect Controls", "Designed Effects",
+                     "Audio", "Assistant", "Export"], names
     assert page.locator(".ws-tab[data-tool=out] .badge").count() == 0
     assert page.locator("#projectBtn").count() == 0 and page.locator("#projectPop").count() == 0
     page.evaluate("location.hash = '#tool=out'")

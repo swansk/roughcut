@@ -71,6 +71,7 @@
       <button type="button" data-cmd="w:sound">Audio</button>
       <button type="button" data-cmd="w:ask">Assistant</button>
       <button type="button" data-cmd="w:out">Export</button>
+      <button type="button" data-cmd="w:index" data-testid="menu-index">Index</button>
       <hr><button type="button" data-cmd="reset">Reset workspace layout</button>
     </div></div>
     <div class="menu" data-menu="help"><button type="button" class="mtop">Help</button><div class="mdrop" role="menu">
@@ -102,6 +103,7 @@
         <button type="button" class="ws-tab tool" data-tool="project" role="tab"><span class="lbl">Project</span></button>
         <button type="button" class="ws-tab tool" data-tool="bin" role="tab" title="what the pass kept, and Find"><span class="lbl">Selects</span><b class="badge"></b></button>
         <button type="button" class="ws-tab tool" data-tool="effects" role="tab" title="transitions: drag one onto an edit, or onto a clip's start or end"><span class="lbl">Effects</span></button>
+        <button type="button" class="ws-tab tool" data-tool="index" role="tab" data-testid="index-tab" title="what was indexed on each clip — heard, looked at, close looks, telemetry, previews — and re-run or re-tune it"><span class="lbl">Index</span></button>
       </div>
       <div class="ws-tools" id="projView">
         <button type="button" data-view="list" title="list view"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 4h12M2 8h12M2 12h12"/></svg></button>
@@ -125,6 +127,10 @@
         </div>
         <div id="fxbin" role="tree" aria-label="Effects"></div>
       </section>
+      <!-- INDEX (wave 17, Karl's K4): per clip, which index stages ran, when, at what look
+           interval and cost; re-run or re-tune a clip, a selection or the bin, the price
+           first. Opens as wide as Selects. /modules/indexpanel.js fills it (window.rcIndex). -->
+      <section data-tool="index" data-testid="index-panel" hidden></section>
       <!-- SELECTS — the pass's keeps, with one find box: typing filters the keeps, Enter
            finds a moment anywhere in the footage, and the priced model search sits under
            any find. The machine's offers are behind "more found ▸". -->
@@ -409,5 +415,8 @@
 <script src="/modules/aiprompt.js"></script>
 <link rel="stylesheet" href="/modules/tour.css">
 <script src="/modules/tour.js"></script>
+<!-- wave 17 (K4): the Index panel -->
+<link rel="stylesheet" href="/modules/indexpanel.css">
+<script src="/modules/indexpanel.js"></script>
 </body>
 </html>
