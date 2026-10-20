@@ -49,6 +49,18 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-20 ~10:30 (box clock): **VERDICT 14 FAIL on `799d8b8`** (15 of 16 at 8-9; 6 at 7; the judge's gate GREEN in
+  3377 s with 3 flaky under its load; perf both runs). K4 (a) + (b) delivered as far as it can test. Blockers: K2-K4
+  (Karl's), dimension 6 (0.5x judders 8/8 plays; 59.94 clips step a new picture on 5/10 frames), **section S: the
+  app wrote its call ledger to `~/work/roughcut-ledger.jsonl` whatever `--work` said** (config.ledger_path); the judge's
+  server added ~21 rows to Karl's. Read-only count by the lead: **~1,550 of its 2,144 rows (~$395 API-equivalent, all
+  claude_cli or scripted) date from 2026-10-14..20**, the loop's servers; nothing in the app reads the ledger back.
+  Not edited (rule: never write ~/work); told Karl. Fixed in `1fc6907` (a board on any `--work` but `~/work/app` logs
+  to `<work>/roughcut-ledger.jsonl`; JUDGE.md's server line sets ROUGHCUT_LEDGER). Rulings: Lumetri skip, INDEXPANEL,
+  FOLDIN, TESTS2 honest; SNAP honest (only test_import_snap covers it); REDO honest for a landed design, wrong in
+  flight; PLAY8b: the 67 ms bar honest, its clock not (move to rAF + worker clocks, the bar in frames). **Wave 18**
+  (judge/WAVE18.md) from `1fc6907`: FRAME59 (2), PLAY9 (3, 4, blur), UNDO5 (5), INDEX2 (6, 8), REDO2 (7), POLISH12 (10).
+  FOR-KARL updated to `799d8b8` with K4 steps; the 8766 restart from a frozen snapshot waits for Karl's yes.
 - 2026-10-20 ~08:40 (box clock): **PLAY8b: no regression.** Pooled interleaved plays: the plain graded cut drops a frame
   at the same rate in base `c9723b3` (4/38), PLAY8 alone (3/30) and the merge (4/48); a test run fails ~20% in every
   tree, so the lead's 4/10 vs 0/10 was noise. No commit. Its finding for the judge: test_tx_playback's 67 ms is read on
