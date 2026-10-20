@@ -3256,6 +3256,13 @@ async def api_selects_put(request: Request) -> JSONResponse:
 DICTATE_MAX_BYTES = 6 * 1024 * 1024        # ~30 s of webm/opus with room to spare
 
 
+@app.get("/api/dictate")
+def api_dictate_available() -> JSONResponse:
+    """Whether the recogniser is installed: the AI prompt's mic shows only then (wave 17
+    FOLDIN, voice.js). Cheap on purpose — the board asks it on every load."""
+    return JSONResponse({"available": dictate.available()})
+
+
 @app.post("/api/dictate")
 async def api_dictate(request: Request) -> JSONResponse:
     """A spoken note in, its text out. The body is the recording itself (webm/opus or
@@ -12107,8 +12114,9 @@ def module_static(name: str) -> Response:
 
 
 # Wave 17 FOLDIN (K4 b): what the old footage and pass screens held, folded into the
-# editor as its own modules: the pass's verdicts in Selects, File › Project Settings….
-MODULE_FILES |= {"passreview.js", "projsettings.js"}
+# editor as its own modules: the pass's verdicts in Selects, File › Project Settings…, and
+# hold-to-speak in the AI prompt.
+MODULE_FILES |= {"passreview.js", "projsettings.js", "voice.js"}
 # ---------------------------------------------------------------- audio peaks (wave 3 TLAUDIO)
 #
 # A1 draws each shot's real waveform (verdict 3, punch 6: "A1 has no waveform, just

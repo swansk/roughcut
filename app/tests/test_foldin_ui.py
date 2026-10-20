@@ -572,3 +572,88 @@ def test_a_cap_from_the_environment_disables_the_choice(browser, live, fold, mon
         assert pg.errors == []
     finally:
         pg.close()
+
+
+# ------------------------------------------------------ the voice, in the AI prompt
+
+@pytest.fixture
+def mic_browser():
+    with sync_playwright() as pw:
+        # a fake microphone, so holding the mic records (the old screens' arrangement)
+        b = pw.chromium.launch(args=["--use-fake-ui-for-media-stream",
+                                     "--use-fake-device-for-media-stream"])
+        yield b
+        b.close()
+
+
+def _hold_mic(pg) -> None:
+    mic = pg.locator("[data-testid=ai-mic]")
+    box = mic.bounding_box()
+    pg.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    pg.mouse.down()
+    pg.wait_for_function("document.querySelector('[data-testid=ai-mic]').classList.contains('live')", timeout=3000)
+    pg.wait_for_timeout(700)
+    pg.mouse.up()
+
+
+def test_holding_the_mic_types_what_was_said_into_the_ai_prompt(mic_browser, live, fold, monkeypatch):
+    """/open's and /floor's hold-to-speak ("holding V ... dictates into it", "a dictated
+    note lands in the slot"), in the AI prompt: the mic shows while the prompt has the
+    focus (nothing added at rest), the recording goes through POST /api/dictate for real
+    with the recogniser stubbed on the server, and the words are typed into the prompt,
+    not sent: ↵ is still the ask."""
+    from roughcut import dictate
+    monkeypatch.setattr(dictate, "available", lambda: True)
+    monkeypatch.setattr(dictate, "transcribe", lambda path, names=None: {
+        "text": "warmer on the snow shots", "latency_ms": 800, "model": "stub", "duration_s": 0.7})
+    _fresh(fold)
+    asks: list[str] = []
+    pg = _open(mic_browser, live, size=(1440, 900))
+    pg.on("request", lambda r: asks.append(r.url) if "/api/assist" in r.url and r.method == "POST" else None)
+    try:
+        mic = pg.locator("[data-testid=ai-mic]")
+        pg.wait_for_function("window.rcVoice && rcVoice.state.avail === true", timeout=5000)
+        assert mic.count() == 1 and not mic.is_visible(), "at rest the board is as it was"
+        box = pg.locator("[data-testid=ai-prompt-input]")
+        box.click()
+        assert mic.is_visible()
+        box.fill("and")
+        sent = pg.evaluate("rcVoice.state.sent")
+        _hold_mic(pg)
+        pg.wait_for_function(f"rcVoice.state.sent > {sent}", timeout=10000)
+        pg.wait_for_function("document.querySelector('[data-testid=ai-prompt-input]').value.includes('snow')",
+                             timeout=5000)
+        assert box.input_value() == "and warmer on the snow shots"
+        assert "0.8 s" in pg.locator("#toast").inner_text()
+        assert pg.evaluate("document.activeElement && document.activeElement.dataset.testid") == "ai-prompt-input"
+        assert asks == [], "speaking never asks the AI by itself"
+        assert pg.errors == []
+    finally:
+        pg.close()
+
+
+def test_the_mic_is_not_there_without_the_recogniser_and_goes_on_a_501(mic_browser, live, fold, monkeypatch):
+    """/open's "an absent recogniser hides the mic before any hold" and "the mic hides on
+    a 501 and typing stays"."""
+    from roughcut import dictate
+    _fresh(fold)
+    monkeypatch.setattr(dictate, "available", lambda: False)
+    pg = _open(mic_browser, live, size=(1440, 900))
+    try:
+        pg.wait_for_function("window.rcVoice && rcVoice.state.avail === false", timeout=5000)
+        pg.locator("[data-testid=ai-prompt-input]").click()
+        assert not pg.locator("[data-testid=ai-mic]").is_visible()
+        # said available, then the server's 501 on the hold: the mic goes, typing stays
+        pg.evaluate("rcVoice.state.avail = true; document.querySelector('[data-testid=ai-mic]').hidden = false")
+        hits: list[int] = []
+        pg.on("response", lambda r: hits.append(r.status) if "/api/dictate" in r.url else None)
+        _hold_mic(pg)
+        pg.wait_for_function("document.querySelector('#toast').textContent.includes('not installed')", timeout=10000)
+        assert hits == [501], hits
+        assert not pg.locator("[data-testid=ai-mic]").is_visible()
+        pg.locator("[data-testid=ai-prompt-input]").click()
+        pg.keyboard.type("very silly")
+        assert pg.locator("[data-testid=ai-prompt-input]").input_value() == "very silly"
+        assert pg.errors == []
+    finally:
+        pg.close()

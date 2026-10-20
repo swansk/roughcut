@@ -198,6 +198,16 @@ def test_dictation_returns_the_text_the_tool_heard(client, project, tmp_path, mo
                        headers={"content-type": "audio/wav"}).status_code == 400
 
 
+def test_get_dictate_says_whether_the_recogniser_is_installed(client, monkeypatch):
+    """The AI prompt's mic (wave 17 FOLDIN, voice.js) asks this on every load: the
+    recogniser's presence, and nothing heavier."""
+    from roughcut import dictate
+    monkeypatch.setattr(dictate, "available", lambda: False)
+    assert client.get("/api/dictate").json() == {"available": False}
+    monkeypatch.setattr(dictate, "available", lambda: True)
+    assert client.get("/api/dictate").json() == {"available": True}
+
+
 def test_a_recording_over_thirty_seconds_is_refused_with_413(client, monkeypatch):
     from roughcut import dictate
 
