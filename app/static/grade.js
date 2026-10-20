@@ -1904,6 +1904,21 @@ function release() {
     if (!G.drawReq) settle();
     if (G.pre) { G.pre.f.close(); G.pre = null; }            // not drawn: let the frame go
   }
+  /* (wave 18 PLAY9, after lane FRAME59's 59.94 proxies) Playback Resolution in time: while playing
+   * the canvas draws at most MAX_DRAW_FPS frames a second of film, as it draws at most PLAY_W
+   * across. A 59.94 proxy (FRAME59: a 59.94 source's proxy keeps its rate, so a parked or stepped
+   * frame is the export's) is drawn every other frame while it plays at 1x, as its 29.97 proxy
+   * was before; at 0.5x every frame. Measured on FRAME59's branch merged with this one, at load
+   * 6-11: the graded canvas drew a 59.94 proxy at 42-49 frames a second, 9-14 of a play's frames
+   * never drawn and a hold of 4 display frames in 2 of 3 plain cuts (test_tx_playback). Paused,
+   * stepped and parked: every frame. `grade.maxDrawFps` says the rate (the tests read it). */
+  const MAX_DRAW_FPS = 30.5;
+  function tooSoon(p, v, md) {
+    const mt = md.mediaTime, rate = Math.max(0.05, v.playbackRate), last = p.drawnMt;
+    if (last != null && mt > last && mt - last < 0.5 && (mt - last) / rate < 1 / MAX_DRAW_FPS - 0.002) return true;
+    p.drawnMt = mt;
+    return false;
+  }
   function armFrames() {
     const v = live();
     const gen = ++G.frameGen;
@@ -1918,8 +1933,9 @@ function release() {
         try { G.cutPre.fs.push(new VideoFrame(v)); } catch (e) { /* the next one */ }
       } else if (G.worker && !G.drawReq && !G.mix && !G.mixZone && playerPlaying() && !v.paused && !nearCut(v)) {
         const due = md && md.expectedDisplayTime;
+        if (md && tooSoon(pace, v, md)) { /* drawn at most MAX_DRAW_FPS a second (tooSoon) */ }
         // a slowed shot: on the pacer's clock (paceDue), the worker putting it up when it is due
-        if (md && v.playbackRate < PACE_BELOW) drawAt(v, paceDue(pace, v, now, md));
+        else if (md && v.playbackRate < PACE_BELOW) drawAt(v, paceDue(pace, v, now, md));
         else if (due && due - now > DUE_EARLY_MS) { pace.m0 = null; drawWhenShown(gen, v, due); }
         else { pace.m0 = null; settle(); }
       } else drawSoon();
@@ -2400,6 +2416,7 @@ function release() {
     get drawLog() { return G.drawLog; },
     get warmLog() { return G.warmLog; },
     get paceLog() { return G.paceLog; },
+    maxDrawFps: MAX_DRAW_FPS,
     get yuv() { return G.yuv; },
     get autoW() { return G.autoW; },
     get mode() { return G.worker ? 'worker' : (G.R ? 'main' : 'off'); },

@@ -39,6 +39,7 @@ The measurement helpers (burners, load, ports, the limit) are test_perf_latency'
 from __future__ import annotations
 
 import json
+import math
 import os
 import subprocess
 import threading
@@ -209,7 +210,7 @@ V_MS = 1000 / 60                 # a display frame (headless Chromium's 60 Hz)
 
 
 def canvas_frames(playing: list[dict], dlog: list[dict], ph0: float, ph1: float, period: float,
-                  shots: list[dict], plain: bool) -> dict:
+                  shots: list[dict], plain: bool, max_fps: float = 0.0) -> dict:
     """(wave 18 PLAY9, verdict 14 punch 4) The graded canvas across an edit, the bar in frames.
 
     Its draws in the window (the playhead from `ph0` to `ph1`) on two clocks, as test_perf_latency
@@ -221,7 +222,10 @@ def canvas_frames(playing: list[dict], dlog: list[dict], ph0: float, ph1: float,
     back at the edit (the outgoing shot, then the incoming one), as proxy frame numbers.
 
     The bar (`frame_ok`), per the proxy's own cadence (`period`, the live buffer's frame step:
-    a 29.97 proxy is 2 display frames, a 59.94 one 1):
+    a 29.97 proxy is 2 display frames, a 59.94 one 1) and the canvas's drawing rate (`max_fps`,
+    grade.maxDrawFps: a 59.94 proxy playing at 1x is drawn every other frame, `step` 2, as
+    Playback Resolution draws at most 640 across; "every frame" below is every step-th, a
+    source frame either way when step > 1, as the canvas then takes the newest frame up):
       * a plain cut: every source frame drawn — no frame number skipped inside either shot, the
         outgoing shot's last frame and the incoming shot's first (its in's) drawn — and none up
         past its cadence: no gap over the cadence + 1 display frames on either clock (29.97: 3,
@@ -238,7 +242,10 @@ def canvas_frames(playing: list[dict], dlog: list[dict], ph0: float, ph1: float,
         return {"frame_ok": False, "why": "no window"}
     f0, f1 = win[0]["ft"], win[-1]["ft"]
     t0, t1 = win[0]["t"], win[-1]["t"]
-    cadence = max(1, round(period * 1000 / V_MS + 0.49))           # display frames a source frame is up
+    step = 1
+    if max_fps > 0 and period < 1 / max_fps - 0.002:                # drawn every step-th frame
+        step = math.ceil((1 / max_fps - 0.002) / period)
+    cadence = max(1, round(step * period * 1000 / V_MS + 0.49))    # display frames a drawn frame is up
     limit = cadence + 1 if plain else 2 * cadence
 
     def lit(key, a, b):
@@ -255,21 +262,24 @@ def canvas_frames(playing: list[dict], dlog: list[dict], ph0: float, ph1: float,
     cut = next((i for i in range(1, len(ks)) if ks[i] < ks[i - 1] - 3), None)
     parts = [ks[:cut], ks[cut:]] if cut is not None else [ks]
     skipped = []
+    # (drawn every step-th frame, the canvas takes the newest frame the buffer has; a frame the
+    # buffer itself never presented puts the next drawn one a source frame later: allowed there)
+    slack = step if step == 1 else step + 1
     for part in parts:
         seen = sorted(set(part))
-        skipped += [k for a, b in zip(seen, seen[1:]) for k in range(a + 1, b)]
+        skipped += [k for a, b in zip(seen, seen[1:]) if b - a > slack for k in range(a + slack, b)]
     ends = None
     if plain and cut is not None and len(shots) == 2:
         last = int((shots[0]["out"] - period / 2) / period + 1e-6)      # the outgoing shot's last frame
         first = int((shots[1]["in"] + 0.001) / period + 1e-6)          # the incoming shot's in's frame
         ends = {"last_wanted": last, "last_drawn": max(parts[0]), "first_wanted": first, "first_drawn": min(parts[1])}
-        if ends["last_drawn"] < last:
-            skipped += list(range(ends["last_drawn"] + 1, last + 1))
+        if ends["last_drawn"] < last - (step - 1):
+            skipped += list(range(ends["last_drawn"] + step, last + 1))
         if ends["first_drawn"] > first:
             skipped += list(range(first, ends["first_drawn"]))
     worst_f = max(frame_g, default=(0.0, None))
     worst_w = max(worker_g, default=(0.0, None))
-    out = {"cadence": cadence, "limit_frames": limit, "period_ms": round(period * 1000, 2),
+    out = {"cadence": cadence, "step": step, "limit_frames": limit, "period_ms": round(period * 1000, 2),
            "frame_clock_ms": round(worst_f[0], 1), "frame_clock_at": round(worst_f[1]) if worst_f[1] is not None else None,
            "frame_clock_frames": n(worst_f[0]), "worker_ms": round(worst_w[0], 1),
            "worker_at": round(worst_w[1]) if worst_w[1] is not None else None, "worker_frames": n(worst_w[0]),
@@ -359,7 +369,9 @@ def measure_dissolve(page, k: int = 0) -> dict:
     steps = sorted(b["mt"] - a["mt"] for a, b in zip(lv, lv[1:]) if a["v"] == b["v"] and 0.004 < b["mt"] - a["mt"] < 0.1)
     period = steps[len(steps) // 2] if steps else 1001 / 30000         # the proxy's frame, s
     shots = page.evaluate(f"[segs[{edit}], segs[{edit + 1}]].map((s) => ({{in: s.in, out: s.out}}))")
-    cf = canvas_frames(playing, dlog, c["at"] - hh - 0.3, c["at"] + hh, period, shots, plain=not c["video"] > 0)
+    max_fps = page.evaluate("(window.grade && grade.maxDrawFps) || 0")
+    cf = canvas_frames(playing, dlog, c["at"] - hh - 0.3, c["at"] + hh, period, shots, plain=not c["video"] > 0,
+                       max_fps=max_fps)
     dump = os.environ.get("ROUGHCUT_TX_DUMP")       # a path prefix: each play's raw record
     if dump:
         Path(f"{dump}-{time.time():.3f}.json").write_text(json.dumps({
