@@ -49,6 +49,14 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-20 ~03:35 (box clock): **wave 17 fully merged** (REDO `615f275`, SELECTS `a1f378c`, INDEXPANEL `14db7ae`, SNAP
+  `d1b7318`, FOLDIN `1cfbd7b`, VFXBLUR `774a893`, TESTS2 `c9723b3` + the Lumetri frame bar logged, PLAY8 `1864eb6`). PLAY8
+  (punch 9 + the parked frame): wrong-buffer cuts 12/18 -> 0/18, edit.py `wrong_clip_frames` 0 in 12/12 plays, 0.5x canvas
+  holds 108 -> 2 in 28 plays, parked frame = export 48/48 at 29.97 and 23.976 (59.94: 24/48, the 29.97 proxy holds every
+  other frame; a design question, not built). The judge's 2/24 play-start holds not reproduced. **After the merge the
+  plain graded cut in test_tx_playback holds 67.9-70.4 ms in 4 of 10 runs** (base 0/4, PLAY8 alone 0/6, interleaved at
+  the same load): PLAY8 resumed as **PLAY8b** (branch `redesign-w17-play8b`) to find it and fix it without moving the
+  67 ms bar. Full gate and judge 14 wait for it. PLAY8's 2.8 GB `kwork` scratch copy deleted (a real dir, no links).
 - 2026-10-20 ~00:30 (box clock): **VERDICT 13 FAIL on `b12b979`** (15 of 16 at 8-9; 16 at 7 from K4; the judge's gate GREEN in
   3080 s, 2 flaky). Blockers: K2, K3, K4 (Karl's), dimension 16. Rulings: page-clock disclosure honest; the design redo
   honest as disclosure, lenient as behaviour (REDO fixes it); Lumetri clock honest in substance (arm() from the latest input:
