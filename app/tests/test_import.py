@@ -75,6 +75,26 @@ def _board(work: Path, media: dict):
     return TestClient(server.app)
 
 
+def _quiet(server) -> None:
+    """Every task configure() put on the clip-facts pool has ended (each clip's facts, then
+    its colour tags: ffprobes on the pool's threads, `warm_clip_facts`). One task per worker
+    meets the caller at a barrier: the queue is first in, first out, so when every worker is
+    in one, nothing queued before them is still running or waiting.
+
+    Lane TESTS2, wave 17: test_browse patches `subprocess.run` (the module's, process-wide)
+    to see whether listing a folder probes, and in 1 neighbourhood run of 20 the bin's own
+    configure-time probes, still on the pool, ran inside the patch: "the browser never
+    probes" read two ffprobes that were not the browser's."""
+    pool = server.CLIP_FACTS["pool"]
+    if pool is None:
+        return
+    n = server.CLIP_FACTS_WORKERS
+    meet = threading.Barrier(n + 1)
+    for _ in range(n):
+        pool.submit(meet.wait, 30)
+    meet.wait(30)
+
+
 def _clips(c) -> dict:
     """/api/clips, waited on until every clip's facts are probed."""
     deadline = time.time() + 30
@@ -121,6 +141,7 @@ def test_browse_lists_folders_and_videos_with_sizes_and_never_probes(tmp_path, m
     import server
 
     with _board(tmp_path, media) as c:
+        _quiet(server)                     # the bin's own probes are not the browser's
         calls = []
         real = subprocess.run
         monkeypatch.setattr(server.subprocess, "run", lambda *a, **k: (
