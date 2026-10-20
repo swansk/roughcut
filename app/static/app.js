@@ -1423,6 +1423,7 @@ function arm(v, seg, at = seg.in) {
     v.load();
     noteKind(v, src);
   }
+  dropInFrame(v);                   // (wave 18 PLAY9) a kept in-frame is for the cut it rolled for
   if (v._roll) {                    // whatever it was prerolling, it is parked now
     v._roll = null;
     if (!v.paused) v.pause();
@@ -2083,7 +2084,7 @@ function pauseCut() {
   player.gen++;                     // any shot still opening must not start behind this
   player.off = null;                // a clock playing past a shot stops where it is
   if (prog.tx && prog.tx.outHand) txUnhandOut(prog.tx, liveVideo());
-  player.vids.forEach((v) => v.pause());
+  player.vids.forEach((v) => { v.pause(); dropInFrame(v); });
   if (bed.el) bed.el.pause();
   player.playing = false;
   // stopped on a frame whose playhead was not drawn (paintPos `quiet`): drawn where it is
@@ -3167,9 +3168,49 @@ function trackFrames(v) {
     // as a play starts, which says nothing yet of where its clock is)
     v._pf = { mt: md.mediaTime, ed: md.expectedDisplayTime || now, n: md.presentedFrames, src,
               moved: !!p && p.src === src && !v.paused && md.mediaTime > p.mt + 1e-4 };
+    keepInFrame(v, md);
     v.requestVideoFrameCallback(cb);
   };
   v.requestVideoFrameCallback(cb);
+}
+
+/* (wave 18 PLAY9, verdict 14 punch 4) The incoming shot's first frame, kept as it goes by unseen.
+ * A buffer rolling into a plain cut changes frame on display frames of its own: its clock starts
+ * on the animation frame nearest its time, up to half a display frame either side of the outgoing
+ * one's (rollStart), and a 29.97 frame is two display frames. When it changes a display frame
+ * before the outgoing buffer does, its first frame (the in's) is up only while it is hidden, under
+ * the outgoing shot's last one, and at the cut the buffer is on its second: the grade canvas, which
+ * draws the buffer's frame at the cut (grade.setShot), never drew the in's (test_tx_playback's plain
+ * graded cut: 2-5 plays in 10 at load 5-8 opened on the shot's second frame, `ahead_ms` +12, and
+ * the base's ~10 % that judge 14 asked about), and a buffer a whole frame ahead lost its second
+ * frame the same way. So the frame callback of a rolling buffer takes a VideoFrame of each frame
+ * from the in's on as it is presented (IN_KEEP at most, in turn), and the cut gives them to the
+ * grade (grade.cutFrame): the in's is the cut's first picture and the rest go up a display frame
+ * each after it, so the outgoing shot's last frame and every frame of the incoming one are up a
+ * display frame or more, none never. A dissolve's cut does not: its incoming picture is the mix's.
+ * Closed at the cut, a re-arm, a pause. */
+const IN_KEEP = 3;                  // frames kept from the in's on (a buffer a frame or two ahead)
+function keepInFrame(v, md) {
+  const r = v._roll;
+  if (!r || !r.seg || v.classList.contains('live') || typeof VideoFrame !== 'function') return;
+  const fd = frameDur(v);
+  if (!(fd > 0) || txLeadIn(r.seg) > 0) return;
+  const k = Math.round(md.mediaTime / fd), kIn = Math.floor((r.seg.in + PARK_TOL_S) / fd + 1e-6);
+  if (v._inFrame && v._inFrame.seg !== r.seg) dropInFrame(v);
+  const kept = v._inFrame ? v._inFrame.fs : [];
+  // from the in's frame on, each frame once, in turn (none before the in's; none after a gap)
+  if (k < kIn || kept.length >= IN_KEEP || (kept.length ? k !== kept[kept.length - 1].k + 1 : k !== kIn)) return;
+  try {
+    const f = new VideoFrame(v);
+    if (Math.abs(f.timestamp / 1e6 - md.mediaTime) >= fd / 2) { f.close(); return; }
+    kept.push({ f, k });
+    v._inFrame = { fs: kept, seg: r.seg };
+  } catch (e) { /* no frame to take: the cut draws the buffer's own */ }
+}
+function dropInFrame(v) {
+  if (!v || !v._inFrame) return;
+  for (const x of v._inFrame.fs) { try { x.f.close(); } catch (e) { /* closed */ } }
+  v._inFrame = null;
 }
 
 /* The media time a playing buffer has on screen at display time t (ms, the page clock): its
@@ -3280,6 +3321,12 @@ function advance() {
   for (const b of player.vids) {
     if (b !== nv && b !== v && b._roll && b._roll.seg === segs[next + 1] && !b.paused) b._roll.gen = g;
   }
+  // (wave 18 PLAY9) the incoming shot's first frame, kept as it went by unseen (keepInFrame): the
+  // grade's first picture of the shot at this cut
+  const inKept = rolled && nv._inFrame && nv._inFrame.seg === nseg && txLeadIn(nseg) <= 0
+    ? nv._inFrame.fs.map((x) => x.f) : null;
+  if (inKept) nv._inFrame = null;
+  dropInFrame(nv);
   if (rolled) {
     nv._roll = null;
     // a start that went badly wrong is put right; a frame or two either side is not
@@ -3302,7 +3349,12 @@ function advance() {
   const short = tl.dur(nseg) < SHORT_S;
   // the last few cuts, for the judge and the perf test: prerolled or not, how long held
   const rec = { shot: next, rolled, parked, buf: nv.id, held_ms: 0, t: performance.now(),
-                kept: keep ? v.id : null, ...(player.cutAt || {}) };
+                kept: keep ? v.id : null, ...(player.cutAt || {}), ...(inKept ? { in_kept: inKept.length } : {}) };
+  if (inKept) {
+    const gk = gradeApi();
+    if (gk && typeof gk.cutFrame === 'function') gk.cutFrame(nv, inKept);
+    else inKept.forEach((f) => f.close());
+  }
   player.cutAt = null;
   player.cutLog = [...(player.cutLog || []).slice(-7), rec];
   // (wave 17 PLAY8) A rolled buffer at a plain cut goes up when the frame it shows at the next

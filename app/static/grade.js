@@ -1279,6 +1279,7 @@ function release() {
     warmed: new Set(),       // the video effects' stage kinds the renderer has built (warmStages)
     warmLog: [],             // {kinds, ms}: each build, as the worker reports it (a record)
     paceLog: [],             // a slowed shot's frames: {mt, ed, due} (paceDue; a record)
+    cutPre: null,            // {v, f}: a plain cut's first picture, from app.js (cutFrame)
   };
 
   function $(s) { return document.querySelector(s); }
@@ -1401,9 +1402,16 @@ function release() {
   function toWorker(j) {
     let frame;
     // (wave 17 PLAY8) the frame drawWhenShown took in its callback, when this is that draw
-    const pre = G.pre && G.pre.v === j.v ? G.pre.f : null;
+    let pre = G.pre && G.pre.v === j.v ? G.pre.f : null;
     const at = pre && G.pre.at ? G.pre.at : 0;     // (wave 18 PLAY9) when it is to go up (paceDue)
     if (pre) G.pre = null;
+    // (wave 18 PLAY9) a plain cut's first picture: the incoming shot's first frame, kept by app.js
+    // as the buffer rolled by it unseen (cutFrame), not the frame the buffer is on now; any frames
+    // kept after it go up one a display frame (drainCut)
+    if (!pre && G.cutPre && G.cutPre.v === j.v && G.cutPre.fs.length) {
+      pre = G.cutPre.fs.shift();
+      if (G.cutPre.fs.length) requestAnimationFrame(drainCut); else G.cutPre = null;
+    }
     // (wave 18 PLAY9) stamped with the frame's own media time (a VideoFrame of a <video> is, unless
     // told otherwise; grade.drawLog `ts`, the drawn frame's record): the clock's currentTime ran
     // 0-15 ms behind the frame on screen, a frame's number off by one
@@ -1905,7 +1913,10 @@ function release() {
     const again = (now, md) => {
       if (gen !== G.frameGen) return;
       if (v !== live()) { G.rides = null; return; }
-      if (G.worker && !G.drawReq && !G.mix && !G.mixZone && playerPlaying() && !v.paused && !nearCut(v)) {
+      if (G.cutPre && G.cutPre.v === v && G.cutPre.fs.length && playerPlaying()) {
+        // (wave 18 PLAY9) the cut's kept frames are still going up (drainCut): this one after them
+        try { G.cutPre.fs.push(new VideoFrame(v)); } catch (e) { /* the next one */ }
+      } else if (G.worker && !G.drawReq && !G.mix && !G.mixZone && playerPlaying() && !v.paused && !nearCut(v)) {
         const due = md && md.expectedDisplayTime;
         // a slowed shot: on the pacer's clock (paceDue), the worker putting it up when it is due
         if (md && v.playbackRate < PACE_BELOW) drawAt(v, paceDue(pace, v, now, md));
@@ -2080,6 +2091,37 @@ function release() {
         queueMicrotask(() => { if (gen === G.gen && !G.drawReq && G.drawNo === n) settle(); });
       } else settle();
     }
+  }
+
+  /* (wave 18 PLAY9, verdict 14 punch 4) app.js advance(): the incoming shot's first frame for the
+   * cut's first draw of buffer `v` (toWorker), taken while that buffer rolled by it unseen
+   * (app.js keepInFrame). Closed if no draw of `v` takes it within CUT_PRE_MS. */
+  const CUT_PRE_MS = 250;
+  function cutFrame(v, fs) {
+    dropCut();
+    const list = (Array.isArray(fs) ? fs : [fs]).filter(Boolean);
+    if (!list.length) return;
+    const mine = G.cutPre = { v, fs: list };
+    setTimeout(() => { if (G.cutPre === mine && mine.fs.length === list.length) dropCut(); }, CUT_PRE_MS);
+  }
+  function dropCut() {
+    const c = G.cutPre;
+    G.cutPre = null;
+    if (c) c.fs.forEach((f) => { try { f.close(); } catch (e) { /* closed */ } });
+  }
+  /* The next kept frame of the cut, a display frame after the one before it; the incoming buffer's
+   * frames that come meanwhile queue behind them (armFrames), so each goes up in turn. */
+  function drainCut() {
+    const c = G.cutPre;
+    if (!c) return;
+    if (c.v !== live() || !playerPlaying()) { dropCut(); return; }
+    const f = c.fs.shift();
+    if (!c.fs.length) G.cutPre = null;
+    if (!f) return;
+    G.pre = { v: c.v, f };
+    if (!G.drawReq) settle();
+    if (G.pre) { G.pre.f.close(); G.pre = null; }
+    if (G.cutPre === c && c.fs.length) requestAnimationFrame(drainCut);
   }
 
   /* The player parked the buffer for the next cut on this shot (app.js armNext): its LUT
@@ -2325,6 +2367,7 @@ function release() {
   // Paused: the parked frame is drawn at the monitor's full size again (PLAY_W above).
   document.addEventListener('pause', (e) => {
     if (e.target && G.videos.includes(e.target)) e.target.__gradeParkT = e.target.currentTime;
+    if (G.cutPre && e.target === G.cutPre.v) dropCut();
     if (e.target === live()) settle();
   }, true);
 
@@ -2345,6 +2388,7 @@ function release() {
     get previewing() { return !!G.pcol; },
     setMix,
     mixNear,
+    cutFrame,
     get mix() { return G.mix ? { id: G.mix.id, w: G.mix.w, graded: mixIsGraded() } : null; },
     draw: settle,
     probe,
