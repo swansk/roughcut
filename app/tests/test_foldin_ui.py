@@ -686,3 +686,44 @@ def test_a_junk_proposal_shows_in_the_project_panels_status(browser, live, fold)
         assert pg.errors == []
     finally:
         pg.close()
+
+
+# ------------------------------------------------ the index's journal, in Window › Events
+
+def test_window_events_lists_the_index_journal_newest_first(browser, live, fold):
+    """/open's journal (behind its how-it-was-indexed line: the path and the last lines),
+    as Premiere's Events: Window › Events lists the index journal's lines newest first,
+    with its path; before any index it says none has run; nothing in it starts anything."""
+    import server
+    from roughcut import journal as jmod
+
+    _fresh(fold)
+    server.journal_path().unlink(missing_ok=True)
+    pg = _open(browser, live, size=(1440, 900))
+    try:
+        def events():
+            pg.locator("#menubar .menu[data-menu=window] .mtop").click()
+            pg.locator("[data-testid=menu-events]").click()
+            pg.wait_for_selector("[data-testid=events][open]", timeout=3000)
+            pg.wait_for_function("rcEvents.state.data !== null", timeout=5000)
+        events()
+        assert "No index has run on this bin yet" in pg.locator("[data-testid=events]").inner_text()
+        assert pg.locator("[data-testid=events-row]").count() == 0
+        pg.locator("[data-testid=events-close]").click()
+        assert pg.locator("[data-testid=events]").is_hidden()
+        # a journal with three lines: listed newest first, with the journal's path
+        j = jmod.Journal.load(server.journal_path(), bin=server.STATE["footage"].name)
+        j.add_clips(server.footage_clips())
+        for k, what in enumerate(("indexing 3 clips", "CLIP_A · heard", "paused at the budget cap")):
+            j._log(time.time() + k, what)
+        j.save()
+        events()
+        rows = pg.locator("[data-testid=events-row] td:last-child").all_inner_texts()
+        assert rows[:3] == ["paused at the budget cap", "CLIP_A · heard", "indexing 3 clips"], rows
+        assert str(server.journal_path()) in pg.locator("[data-testid=events-path]").inner_text()
+        pg.keyboard.press("Escape")
+        assert pg.locator("[data-testid=events]").is_hidden()
+        assert pg.errors == []
+    finally:
+        pg.close()
+        server.journal_path().unlink(missing_ok=True)
