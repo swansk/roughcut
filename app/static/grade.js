@@ -265,8 +265,13 @@
       return sh;
     }
 
+    // (wave 17 VFXBLUR) no depth or stencil buffer: nothing here tests depth, and with
+    // preserveDrawingBuffer false the browser cleared the depth buffer it kept beside the
+    // picture after every commit and reallocated it at every resize — the play's start, where
+    // the first frames' commits were the play's slowest (traced, interleaved, 18 blurred plays
+    // each: the first frame's 25.7 → 22.8 ms mean, 54.5 → 40.2 ms worst)
     const opts = { alpha: false, antialias: false, premultipliedAlpha: false,
-                   preserveDrawingBuffer: false };
+                   preserveDrawingBuffer: false, depth: false, stencil: false };
     let gl = null, gl2 = false;
     try { gl = canvas.getContext('webgl2', opts); gl2 = !!gl; } catch (e) { gl = null; }
     if (!gl) {
