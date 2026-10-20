@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **Loop state: Karl's look and K4; wave 17 launched** (judge/LOOP.md).
 - **K4's two answers recorded and turned into bars** (REDESIGN-GOAL.md section K + rubric log): an Index panel in the editor; the old `/open` and `/floor` pages folded in and removed. Wave 17 plan in judge/WAVE17.md.
 - **Karl's K4 in REDESIGN-GOAL.md** (verbatim, 2026-10-19, after trying b12b979): what indexing ran over the footage and how to re-run or tune it is still unclear; the old "pass" screens reached from the top are still there.
 - **Loop state: wave 16 merged; the gate's perf line GREEN in both runs; judge 13 launched** (judge/LOOP.md).
