@@ -150,7 +150,10 @@ tools. The bar is a Premiere editor who has never seen Roughcut and never reads 
   ran on each clip (heard, looked, close looks, telemetry, proxies), when, with what settings (the look interval) and at
   what cost, and re-running or re-tuning it per clip or for the bin: dimensions 2, 3, 13, 16; (b) the old separate screens
   (`/open` "Footage and index…", `/floor` "Review the pass…", reached from the File menu and the header's Next chip) do not
-  belong beside the editor: dimensions 1, 4, 9. The lead's reading of (b) is being confirmed with Karl.
+  belong beside the editor: dimensions 1, 4, 9. **Karl's answers (2026-10-19):** (a) "Index panel": a docked panel in the
+  workspace showing, per clip, which stages ran, when, at what look interval and cost, with re-run / re-tune for a clip,
+  a selection or the bin, price shown first; (b) "Fold in, then remove": what is useful on `/open` and `/floor` moves into
+  the editor, the File menu items and the Next chip stop jumping to separate screens, and the old pages go away.
 - **K3 (2026-10-16, after trying the paused branch; Karl said "no need to start yet"):** "off what we have
   currently, I still don't like the way the footage and pass look, there is no clear way to add new footage
   or to run the AI tooling on this - remember, it needs to have that premiere pro quality (I like having the
@@ -455,3 +458,12 @@ next judge runs, and the next judge rules it honest or lenient.
   always, and <= 150 ms only when the box is under its core count (the scopes' own read-back at nice 19 cost 80-159 ms
   at load 11-14). The first is a fix of the clock (honest); the second is more lenient on a loaded box, for the judge
   to rule on.
+
+- 2026-10-19 (lead, recording Karl's K4 and his two answers): **a new open K line; its two parts become bars the judge
+  checks.** (a) dimension 16 (and 2, 3, 13): an Index panel docked in the workspace (Window › Index) shows each clip's
+  index stages (heard, looked, close looks, telemetry, previews), when each ran, the look interval, the cost on the
+  current backend, and re-runs or re-tunes a clip, a selection or the whole bin, its price shown before anything runs; a
+  driven test re-tunes one clip's look interval and re-runs it. (b) dimensions 1, 4 and 9: no menu item, chip, link or
+  tour step leaves the editor for another page; `/open` and `/floor` are gone (their routes answer with the editor), and
+  every feature they had is reachable inside it (an audit listed in the lane's report and checked by the judge).
+  Strictly stricter. K4 stays open until Karl looks again.

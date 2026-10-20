@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- **K4's two answers recorded and turned into bars** (REDESIGN-GOAL.md section K + rubric log): an Index panel in the editor; the old `/open` and `/floor` pages folded in and removed. Wave 17 plan in judge/WAVE17.md.
 - **Karl's K4 in REDESIGN-GOAL.md** (verbatim, 2026-10-19, after trying b12b979): what indexing ran over the footage and how to re-run or tune it is still unclear; the old "pass" screens reached from the top are still there.
 - **Loop state: wave 16 merged; the gate's perf line GREEN in both runs; judge 13 launched** (judge/LOOP.md).
 - **The journey's one-Accept-two-undos mutant targets the accept's current line** (test_journey_tool; AIUX's `labelFor` label had made it miss its text, so the lead's gate on 3b37b53 read it BROKEN). 19 passed.
