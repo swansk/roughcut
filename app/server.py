@@ -44,6 +44,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import contextvars
 import ctypes
 import gc
 import json
@@ -2148,7 +2149,12 @@ def _cause(ms: float, w: dict) -> str:
     "loop" (the loop thread ran server code: sync work on the loop), "thread" (another
     server thread ran with the GIL), "starved" (the loop thread was runnable and the box
     did not run it), "faults" (pages read back from swap while the GIL was held) or "?";
-    a request's "server" is the process's own CPU through it (every thread)."""
+    a request's "waiting" is the handler waiting on a worker thread or a subprocess
+    (`wait_ms`, what on in `waited_on`: `req_wait`) and its "server" the process's own
+    CPU through it (every thread). Verdict 13, punch 10: two import-time requests that
+    waited on the snapshot's rebuild read "faults" on 3 and 8 major faults. A wait the
+    loop's own run-queue wait outlasts is the box's ("starved": the loop could not even
+    look at what it waited on)."""
     half = 0.5 * ms
     if float(w.get("gc_ms") or 0) >= half:
         return "gc"
@@ -2156,6 +2162,9 @@ def _cause(ms: float, w: dict) -> str:
         return "loop"
     if float(w.get("busy_cpu_ms") or 0) >= half:
         return "thread"
+    wait, rq = float(w.get("wait_ms") or 0), float(w.get("rq_ms") or 0)
+    if wait >= half and wait >= rq:
+        return "waiting"             # a request: its handler waited on a thread or a process
     if "loop_cpu_ms" not in w and float(w.get("proc_cpu_ms") or 0) >= half:
         return "server"              # a request: the process worked through it
     if float(w.get("rq_ms") or 0) >= half:
@@ -2272,6 +2281,34 @@ def _watch_loop() -> None:
         _LOOP_WATCH["task"] = loop.create_task(_loop_lag())
 
 
+# What a request waited on (wave 17, verdict 13 punch 10). A handler that waits on a
+# worker thread (a snapshot's rebuild, a clip's facts probe) or a subprocess says so with
+# `req_wait(what)`: the time goes to the request's `wait_ms` (and `waited_on`, by what),
+# and `_cause` calls a request whose time it mostly was "waiting" — not "faults" because a
+# few pages were read back meanwhile. A wait the client asked for (`asked`: the media
+# status's `?at=` hint, answered when the head it waits on is made) is the client's, as a
+# body's upload is (wave 14): kept as `asked_ms`, not in `ms`.
+_REQ: contextvars.ContextVar = contextvars.ContextVar("roughcut_request", default=None)
+
+
+@contextmanager
+def req_wait(what: str, asked: bool = False):
+    """Time a wait inside a request's handler (no-op outside one). Works around an
+    `await` too: the request's record is a context variable, which a sync handler's
+    worker thread and `asyncio.to_thread` both carry."""
+    acc = _REQ.get()
+    t = time.perf_counter()
+    try:
+        yield
+    finally:
+        if acc is not None:
+            ms = (time.perf_counter() - t) * 1000.0
+            k = "asked" if asked else "wait"
+            acc[k] = acc.get(k, 0.0) + ms
+            on = acc.setdefault("on", {})
+            on[what] = round(on.get(what, 0.0) + ms, 1)
+
+
 class RequestTiming:
     """Pure ASGI (a BaseHTTPMiddleware would buffer the media streams)."""
 
@@ -2310,6 +2347,8 @@ class RequestTiming:
                 waited[0] += time.perf_counter() - t
             return msg
 
+        acc: dict = {}
+        token = _REQ.set(acc)
         if saving:
             SAVES_IN_FLIGHT["n"] += 1
         elif method == "GET" and where in ("/", "/api/project") and SAVES_IN_FLIGHT["n"]:
@@ -2319,19 +2358,25 @@ class RequestTiming:
         try:
             await self.app(scope, body, timed)
         finally:
+            _REQ.reset(token)
             if saving:
                 SAVES_IN_FLIGHT["n"] -= 1
             path = scope.get("path") or ""
             if path != "/api/debug/slow":
                 end = first[0] if first[0] is not None else time.perf_counter()
                 ep = scope.get("endpoint")
+                span = end - t0
+                asked = min(acc.get("asked", 0.0) / 1000.0, span)
                 row = {"method": scope.get("method"), "path": path,
                        "handler": getattr(ep, "__name__", None) or "-",
-                       "ms": round((end - t0 - min(waited[0], end - t0)) * 1000.0, 1),
+                       "ms": round((span - min(waited[0] + asked, span)) * 1000.0, 1),
                        "status": first[1], "at": time.time()}
                 if waited[0] >= 0.001:
-                    row.update(body_ms=round(waited[0] * 1000.0, 1),
-                               wall_ms=round((end - t0) * 1000.0, 1))
+                    row["body_ms"] = round(waited[0] * 1000.0, 1)
+                if asked >= 0.001:
+                    row["asked_ms"] = round(asked * 1000.0, 1)
+                if waited[0] >= 0.001 or asked >= 0.001:
+                    row["wall_ms"] = round(span * 1000.0, 1)
                 if row["ms"] >= REQUEST_BUDGET_MS:
                     # over the budget: what the whole process ran meanwhile (every thread)
                     # and how busy the box was — a request the server worked through
@@ -2345,6 +2390,9 @@ class RequestTiming:
                     # run-queue wait, major faults, GC time — from the sampler's last
                     # reading before the request began
                     row.update(_box_since(_box_before(t0)))
+                    if acc.get("wait"):
+                        row["wait_ms"] = round(acc["wait"], 1)
+                        row["waited_on"] = dict(acc.get("on") or {})
                     row["cause"] = _cause(row["ms"], row)
                 note_request(row)
 
@@ -10756,7 +10804,9 @@ def media_status(name: str, at: float | None = None) -> JSONResponse:
         with MEDIA["lock"]:
             hev = MEDIA["building"].get(f"head:{stem}")
         if hev is not None:
-            hev.wait(HEAD_HINT_WAIT_S)
+            # the board asked to be answered when the head is made: its wait, not the server's
+            with req_wait("the head being made (asked: ?at=)", asked=True):
+                hev.wait(HEAD_HINT_WAIT_S)
     kind, url = media_fallback(clip)
     key = str(preview_path(stem))
     rec = range_record(stem)
