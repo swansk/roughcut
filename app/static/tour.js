@@ -193,6 +193,20 @@
     what: 'The AI designs an effect from your words (a title, hit markers, motion) and checks it on the frames.',
     change: 'A proposed effect card for this shot; nothing renders until you accept.',
   };
+  // AI › Look again / re-tune the index… (dock.js): opens the Index panel; its Run has its
+  // own card (indexpanel.js), with what that re-run replaces and its price
+  const INDEX_MENU = {
+    name: 'Look again / re-tune the index',
+    what: () => {
+      const n = window.tl && tl.state && tl.state.sel ? tl.state.sel.size : 0;
+      return `Opens the Index panel${n ? ' on the selected shots’ clips' : ''}: what was heard and looked at on`
+        + ' each clip, when, how often and at what cost. Choose what to run again there (a look at a finer'
+        + ' interval, the close looks, everything) and see its price before Run.';
+    },
+    change: 'Nothing by itself. A re-run you start there replaces what it runs again on those clips and'
+      + ' re-ranks their picks; the cut does not change.',
+    price: NO_CALL,
+  };
   const FIRSTCUT = {
     name: () => { const b = $('#firstCut'); return b ? b.textContent.replace(/\s*·.*$/, '') : 'Make a first cut'; },
     what: 'Writes a first cut from your keeps, or from the whole index when there are none, to the length shown.',
@@ -268,6 +282,7 @@
     ['#menubar [data-cmd="ai:colour"]', item(COLOUR)],
     ['#menubar [data-cmd="ai:fx"]', item(FX)],
     ['#menubar [data-cmd="ai:deep"]', item(DEEP)],
+    ['#menubar [data-cmd="ai:index"]', item(INDEX_MENU)],
     ['#menubar [data-cmd="ai:find"]', item(FIND)],
     ['#menubar [data-cmd="ai:audit"]', item(AUDIT)],
     ['#menubar [data-cmd="ask"]', item({ ...ASK,
@@ -447,8 +462,12 @@
     },
     {
       key: 'firstpass', title: 'Run the first pass',
+      // verdict 14, punch 6: nothing taught the Index panel (Karl's K4: "not clear what
+      // indexing was run … or how to re run / tune that"); this step says where it is
       body: () => 'It hears and looks at every clip, picks the best moments and proposes a rough cut'
-        + ` (${esc(costShort())}). Nothing changes until you accept.`,
+        + ` (${esc(costShort())}). Nothing changes until you accept. The Project panel’s`
+        + ' <button type="button" class="ix-open-link" data-rc-index data-testid="tour-index-link">Index tab</button>'
+        + ' shows what was heard and looked at on each clip; re-tune a clip there.',
       anchor: ['#firstpass .fp-btn', '[data-fp-open]'], fallback: () => menuTop('ai'),
       show: () => { if (window.rcFirstPass) rcFirstPass.open(); },
       avoid: () => $('#firstpass .fp-panel'),
@@ -530,7 +549,7 @@
     {
       key: 'menu', title: 'Every AI action, one menu',
       body: () => 'The AI menu lists them all: the first pass, Ask, a shot or colour ask, Designed Effects,'
-        + ' Look deeper, Find and the claims check.',
+        + ' Look deeper, a new look at the index (the Index panel), Find and the claims check.',
       anchor: ['[data-testid="menu-ai"]'], fallback: () => menuTop('ai'),
       show: () => { openMenu('ai'); },
     },
@@ -560,6 +579,13 @@
       T.point = $('[data-testid="menu-import"]');
       place();
     }, 350);
+  }
+  /* The Index panel (indexpanel.js `rcIndex`, through dock.js's `rcOpenIndex`): opened from
+   * the first-pass step's link; the callout stays, placed again once the panel is up. */
+  function openIndex() {
+    if (typeof window.rcOpenIndex === 'function') window.rcOpenIndex();
+    else if (window.rcIndex && typeof rcIndex.open === 'function') rcIndex.open();
+    requestAnimationFrame(() => requestAnimationFrame(tick));
   }
   function showPrompt() {
     if (first('[data-testid="ai-prompt-input"]') && window.rcAI) { rcAI.focus(); return; }
@@ -604,6 +630,7 @@
       else if (b.classList.contains('rt-back')) go(T.i - 1);
       else if (b.classList.contains('rt-show')) showMe();
       else if (b.dataset.dot != null) go(Number(b.dataset.dot));
+      else if (b.hasAttribute('data-rc-index')) openIndex();
     });
     const ring = document.createElement('div');
     ring.className = 'rc-tour-ring';

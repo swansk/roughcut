@@ -7779,6 +7779,20 @@ def _index_clips_disk() -> dict:
             **config.cost_terms()}
 
 
+def _heard_in_batch(s: str, v: dict) -> bool:
+    """A clip the batch hear has finished while the batch still runs (verdict 14, punch 6).
+    The hear stage is one tool run over every clip waiting on it (`_index_stage`), so the
+    journal says each of them "running" until the last one is heard, while the tool writes
+    each clip's sidecar as it finishes it. /api/firstpass counts those sidecars ("heard
+    11/12"); the panel read "heard 1", eleven cells at "running 1:20". A sidecar written
+    since the stage started is this run's word on that clip: it is heard. One older than
+    the start (a clip asked to be heard again) is still being replaced."""
+    if s != "asr" or v.get("journal") != "running" or not v.get("file"):
+        return False
+    started, at = v.get("started"), v.get("at")
+    return started is not None and at is not None and float(at) >= float(started)
+
+
 def _stage_state(row: dict, s: str, v: dict, disk: dict, live, only, asked: set,
                  now: float) -> dict:
     """One stage's word for the panel: done / held / queued / running (with %) / failed /
@@ -7791,7 +7805,10 @@ def _stage_state(row: dict, s: str, v: dict, disk: dict, live, only, asked: set,
                   and (only is None or only(clip, s))
                   and not (holds and (clip, s) not in asked)
                   and not (priced and live.get("free") and only is None))
-    if js == "running":
+    if _heard_in_batch(s, v):
+        out["state"] = "done"
+        out["batch"] = True                  # the rest of its batch is still being heard
+    elif js == "running":
         out["state"] = "running"
         started = v.get("started")
         mean = disk["mean_s"].get(s)
@@ -7843,8 +7860,14 @@ def index_clips_payload() -> dict:
         for s, v in r["stages"].items():
             stages[s] = {**v, **_stage_state(r, s, v, disk, live, only, asked, now)}
             st = stages[s]["state"]
+            # heard: the clips whose sound is transcribed on disk, as /api/firstpass counts
+            # them ("heard 11/12"), so the two never disagree (verdict 14, punch 6) — a
+            # clip being heard again still has the transcript it had
+            if s == "asr" and v["file"] and not r.get("missing"):
+                summary["heard"] += 1
             if st == "done":
-                summary[count[s]] += 1
+                if s != "asr":
+                    summary[count[s]] += 1
                 summary["cost_usd"] += float(v.get("cost_usd") or 0.0)
                 if s == "look":
                     k = f"{float(v.get('interval_s') or VISUAL_INTERVAL_S):g}"

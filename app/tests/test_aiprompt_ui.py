@@ -660,6 +660,12 @@ def test_every_ai_menu_item_does_something_visible(live_server, project, browser
                          timeout=8000)
     assert pg.locator("#inspector .lookhost .dv-look").is_visible()
 
+    # Look again / re-tune the index (verdict 14, punch 6: the look is a model call, so the AI
+    # menu lists it): the Index panel, on the selected shot's clip, nothing run
+    _menu(pg, "index").click()
+    pg.wait_for_function("dock.current() === 'index' && rcIndex.state().open"
+                         " && rcIndex.state().selection.join() === 'CLIP_B.MP4'", timeout=5000)
+
     # Find a moment: Selects, its find box focused
     _menu(pg, "find").click()
     pg.wait_for_function("dock.current() === 'bin' && document.activeElement.id === 'findQ'", timeout=3000)

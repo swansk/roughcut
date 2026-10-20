@@ -19,7 +19,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from roughcut import journal  # noqa: E402
+from roughcut import inference, journal  # noqa: E402
 
 from test_index import _stub_tools, _wait_index  # noqa: E402
 from test_server import _fresh  # noqa: E402
@@ -408,3 +408,83 @@ def test_the_walk_takes_only_what_it_may_and_what_was_asked_passes_the_hold(tmp_
     j.hold_priced(["A.MP4"], "imported")
     assert j.next() == ("B.MP4", "look")
     assert j.next(only=only) is None and j.next(only=only, asked={("A.MP4", "look")}) == ("A.MP4", "look")
+
+
+# ------------------------------------------------------------------ the batch hear, per clip
+
+def test_a_batch_hear_reports_each_clip_as_its_sidecar_lands(tmp_path, project, monkeypatch):
+    """Verdict 14, punch 6: during a first pass the hear stage is one tool run over every
+    clip, so the journal says all of them "running" until the last is heard, while the
+    tool writes each clip's sidecar as it finishes it. /api/firstpass counted the sidecars
+    ("heard 11/12") and the Index panel read "heard 1", eleven cells at "running 1:20".
+    Now a clip whose sidecar landed since the batch started is heard in its row, and the
+    summary counts what /api/firstpass counts: sampled index → pass → index, the pass's
+    number is never outside the two (they agree within one poll)."""
+    import server
+    from test_firstpass import Scripted, _end_jobs
+
+    model = Scripted()
+    inference.set_backend(model)
+    script = tmp_path / "slow_hear.py"
+    script.write_text(
+        "import json, sys, time\n"
+        "from pathlib import Path\n"
+        "out = Path(sys.argv[1])\n"
+        "for stem in sys.argv[2:]:\n"
+        "    time.sleep(1.2)\n"
+        "    (out / f'{stem}.audio.json').write_text(json.dumps({\n"
+        "        'clip': f'{stem}.MP4', 'duration_s': 6.0, 'transcript': [], 'candidates': [],\n"
+        "        'summary': {'speech_fraction': 0.0, 'audio_usable': True}}))\n"
+        "time.sleep(1.0)\n", encoding="utf-8")
+    try:
+        # a bin nobody has heard: the sidecars dir derived under tmp_path, empty
+        with _fresh(tmp_path, project, visual=None) as c:
+            _stub_tools(server, monkeypatch, tmp_path)
+            monkeypatch.setattr(server, "analyze_cmd", lambda skip, force: [
+                sys.executable, str(script), str(server.STATE["sidecars"]),
+                *[Path(x).stem for x in server.footage_clips() if Path(x).stem not in skip]])
+            monkeypatch.setattr(server, "FIRSTPASS_POLL_S", 0.05)
+            server.FIRSTPASS.clear()
+            server.INDEXES.clear()
+            assert not list(server.STATE["sidecars"].glob("*.audio.json"))
+            assert c.post("/api/firstpass", json={"mode": "run"}).status_code == 200
+
+            def heard_by_pass() -> int:
+                s = c.get("/api/firstpass").json()
+                ix = (s.get("counts") or {}).get("index") \
+                    or next(st for st in s["would"]["steps"] if st["key"] == "index")["counts"]
+                return int(ix["listened"])
+
+            samples, mid = [], []
+            deadline = time.time() + 90
+            while time.time() < deadline:
+                a = c.get("/api/index/clips").json()
+                f = heard_by_pass()
+                b = c.get("/api/index/clips").json()
+                ha, hb = a["summary"]["heard"], b["summary"]["heard"]
+                samples.append((ha, f, hb))
+                assert ha <= f <= hb, ("the panel and the pass disagree", samples)
+                cells = {r["clip"]: r["stages"]["asr"] for r in b["rows"]}
+                done = [k for k, v in cells.items() if v["state"] == "done"]
+                assert len(done) == hb, (cells, hb)
+                if any(v["state"] == "running" for v in cells.values()) and 0 < hb < 3:
+                    mid.append(hb)
+                    j = journal.Journal.load(server.journal_path())
+                    # the journal still says running for every clip of the batch...
+                    assert all(j.state(k, "asr") == "running" for k in cells), \
+                        {k: j.state(k, "asr") for k in cells}
+                    # ...and the heard ones read done in their rows, when they landed
+                    for k in done:
+                        assert cells[k].get("batch") is True and cells[k]["at"] >= cells[k]["started"]
+                if hb == 3 and f == 3:
+                    break
+                time.sleep(0.15)
+            assert samples[-1] == (3, 3, 3), samples
+            assert mid, ("no sample caught the batch half-heard", samples)
+    finally:
+        # the pass and its index stopped and forgotten: a cancelled index job left in the
+        # registry shows (hidden) in the next file's header job row, before its own
+        _end_jobs(server, model)
+        server.FIRSTPASS.clear()
+        server.INDEXES.clear()
+        inference.set_backend(None)

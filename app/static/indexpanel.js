@@ -298,6 +298,7 @@
       if (k === 'look') title += ` · one frame every ${Number(v.interval_s || 4)} s${v.sheets ? ` · ${plural(v.sheets, 'sheet')}` : ''}`;
       if (k === 'close' && v.windows) title += ` · ${plural(v.windows, 'window')}`;
       if (k === 'asr' && r.words != null) title += ` · ${plural(r.words, 'word')}`;
+      if (v.batch) title += ' · the rest of its batch is still being heard';
       if (PRICED.has(k)) title += ` · ${costWords(v.cost_usd, true).title || costWords(v.cost_usd, true).text}`;
       if (v.again === 'waiting') { text += ' ↻'; title += ' — asked again, not run yet (stopped): runs with the next index'; }
       if (v.again === 'failed') { text += ' !'; title += ` — running it again failed: ${v.error || 'failed'}`; }
@@ -455,6 +456,7 @@
     $('.ix-sum', sec).textContent = IX.err || summaryWords() || 'reading the index…';
     const s = (rep && rep.summary) || {};
     $('.ix-sum', sec).title = rep ? [
+      summaryWords(),
       `telemetry ${s.telemetry || 0}${s.no_telemetry ? ` (${s.no_telemetry} without a sensor stream)` : ''} · previews ${s.previews || 0}`,
       free() ? `~${dollars(s.cost_usd)} if using the API · free on your plan` : `spent ${dollars(s.cost_usd)}`,
       rep.journal ? `journal: ${rep.path}` : 'no journal yet: the files on disk',
@@ -561,6 +563,87 @@
     await refresh();
   }
 
+  /* ------------------------------------------------------------ Run's hover card */
+
+  /* Run is a model call when it looks, so it gets the AI hover card every AI control has
+   * (tour.js `rcTour.card`; verdict 14, punch 6: it had a plain title): what it runs, what
+   * it costs on this backend ("free on your plan" on the subscription with the API's
+   * estimate beside it; the price itself, before anything runs, on the API) and what it
+   * changes — what it replaces on those clips, and what it keeps (a look again keeps the
+   * close looks read from the old look). From the price the foot shows (the server's
+   * quote, `replaces` and `windows` with it, once it is in). */
+  function who() {
+    const n = scopeClips().length;
+    if (!wholeBin() && n === 1) { const c = stem(scopeClips()[0]); return { name: c, poss: `${c}’s`, its: 'its' }; }
+    if (wholeBin()) return { name: `all ${plural(n, 'clip')}`, poss: 'every clip’s', its: 'their' };
+    return { name: plural(n, 'clip'), poss: `these ${n} clips’`, its: 'their' };
+  }
+  function runName() {
+    const w = IX.what === 'missing' ? 'Run what isn’t done'
+      : (WHAT.find(([k]) => k === IX.what) || ['', '', 'Run'])[2];
+    return `${w} — ${who().name}`;
+  }
+  function runWhat() {
+    const q = IX.quote || {}, w = who(), iv = intervalShown();
+    const every = iv != null ? `one frame every ${iv} s` : 'each clip at its own interval';
+    const sheets = q.sheets ? ` (${plural(q.sheets, 'sheet')})` : '';
+    const windows = q.windows || (q.close ? q.close * 3 : 0);
+    switch (IX.what) {
+      case 'asr': return `Hears ${w.poss} sound again with the speech model, on this machine.`;
+      case 'look': return `The model reads ${w.poss} contact sheets again, ${every}${sheets}.`;
+      case 'close': return `The model reads ${w.poss} busiest seconds again, frame by frame${windows ? ` (${plural(windows, 'window')})` : ''}.`;
+      case 'telemetry': return `Reads ${w.poss} motion sensors again, on this machine.`;
+      case 'proxy': return `Builds ${w.poss} preview again (the proxy the monitors play), on this machine.`;
+      case 'everything': return `Runs every stage again on ${w.name}: hears, looks (${every}${sheets}), looks closely, reads the telemetry and builds the previews.`;
+      default: return `Runs only what is not done yet on ${w.name}: ${every} for a look it still needs.`;
+    }
+  }
+  function runChanges() {
+    const q = IX.quote || {}, w = who(), rep = q.replaces || null;
+    const had = (k) => (rep ? Number(rep[k] || 0) > 0
+      : rows().some((r) => scopeClips().includes(r.clip) && r.stages[k] && r.stages[k].state === 'done'));
+    const one = !wholeBin() && scopeClips().length === 1 ? rows().find((r) => r.clip === scopeClips()[0]) : null;
+    const iv = intervalShown();
+    const was = one && one.stages.look && one.stages.look.state === 'done' ? Number(one.stages.look.interval_s || 4) : null;
+    const tune = was != null && iv != null && was !== iv ? ` (the ${was} s look → ${iv} s)` : '';
+    const ranked = `${w.its} picks are re-ranked`;
+    let out;
+    switch (IX.what) {
+      case 'asr': out = `${had('asr') ? 'Replaces' : 'Adds'} ${w.poss} transcript; ${ranked}.`; break;
+      case 'look':
+        out = had('look')
+          ? `Replaces ${w.poss} looked-at moments${tune}; ${ranked}; ${w.its} close looks are kept from the old look (Close looks reads them again).`
+          : `Adds ${w.poss} looked-at moments; ${ranked}.`;
+        break;
+      case 'close':
+        out = `${had('close') ? 'Replaces' : 'Adds'} ${w.poss} close looks; ${ranked}.`
+          + ((q.notes || []).some((n) => /look comes first/.test(n)) ? ' A clip never looked at is looked at first, priced with it.' : '');
+        break;
+      case 'telemetry': out = `Replaces ${w.poss} telemetry summary.`; break;
+      case 'proxy': out = `Replaces ${w.poss} preview; the picks do not change.`; break;
+      case 'everything': out = `Replaces everything the index has on ${w.name} (transcript, looked-at moments, close looks, telemetry, preview); ${ranked}.`; break;
+      default: out = 'Nothing on disk is replaced: only what is missing is added, and the picks are re-ranked where something new was read.';
+    }
+    return `${out} The cut does not change; Stop keeps what finished.`;
+  }
+  /* In every AI card's words (tour.js `costWords`, cli.js `rcCost.note`): "free on your
+   * Claude plan — about $1.62 estimated cost if using the API" on the subscription, "about
+   * $1.62, billed to the API key" on the API (the foot shows that price before Run). */
+  function runPrice() {
+    const q = IX.quote;
+    if (!q) return { none: 'priced before it runs — reading the price…' };
+    if (q.error) return { none: `no price: ${q.error}` };
+    if (!q.local && Array.isArray(q.clips) && !q.clips.length) return { none: 'nothing to run: every stage asked is done on these clips' };
+    if (!(q.usd > 0)) return { none: 'none — no model call' };
+    return { usd: Number(q.usd), terms: terms() };
+  }
+  const RUN_CARD = { name: runName, what: runWhat, change: runChanges, price: runPrice };
+  function registerCard() {
+    if (!window.rcTour || typeof rcTour.card !== 'function') return false;
+    rcTour.card('[data-testid="index-rerun"]', RUN_CARD);
+    return true;
+  }
+
   /* ------------------------------------------------------------ the contract */
 
   function open(clips) {
@@ -591,9 +674,12 @@
     };
   }
 
-  window.rcIndex = { open, rerun, state, refresh, select: (c) => { select(c); paint(); requote(); } };
+  window.rcIndex = { open, rerun, state, refresh, select: (c) => { select(c); paint(); requote(); },
+    /* Run's hover card's words now (what / cost / changes): for the suite */
+    runCard: () => ({ name: runName(), what: runWhat(), change: runChanges(), price: runPrice() }) };
 
   function init() {
+    if (!registerCard()) window.addEventListener('load', registerCard, { once: true });
     const sec = mount();
     // the tab shown, whichever way (its click, Window › Index, dock.open('index'), a tab
     // remembered from the last visit): read fresh

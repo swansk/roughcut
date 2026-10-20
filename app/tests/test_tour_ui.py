@@ -374,7 +374,7 @@ def test_every_ai_menu_items_card_is_titled_by_the_item(live, bins, tmp_path, br
     pg.locator("#tl .blk").first.click()                  # the items that need a clip, enabled
     pg.locator('#menubar .menu[data-menu="ai"] .mtop').click()
     titles = {}
-    for cmd in ("prompt", "firstpass", "ask", "shot", "colour", "fx", "deep", "find", "audit"):
+    for cmd in ("prompt", "firstpass", "ask", "shot", "colour", "fx", "deep", "index", "find", "audit"):
         pg.locator(f'#menubar [data-cmd="ai:{cmd}"]').hover()
         pg.wait_for_function(f"(() => {{ const c = document.querySelector('[data-testid=ai-hover]');"
                              f" return c && !c.hidden && c.dataset.for === 'ai:{cmd}'; }})()", timeout=3000)
@@ -626,7 +626,7 @@ def test_every_ai_control_has_a_hover_card(live, bins, tmp_path, browser):
 
     # the AI menu: every action in it
     pg.locator('#menubar .menu[data-menu="ai"] .mtop').click()
-    for cmd in ("prompt", "firstpass", "ask", "shot", "colour", "fx", "deep", "find", "audit"):
+    for cmd in ("prompt", "firstpass", "ask", "shot", "colour", "fx", "deep", "index", "find", "audit"):
         pg.locator(f'#menubar [data-cmd="ai:{cmd}"]').hover()
         pg.wait_for_function(f"(() => {{ const c = document.querySelector('[data-testid=ai-hover]');"
                              f" return c && !c.hidden && c.dataset.for === 'ai:{cmd}'; }})()", timeout=3000)
@@ -683,6 +683,11 @@ def test_every_ai_control_has_a_hover_card(live, bins, tmp_path, browser):
     for name in ("firstpass", "menu ai:ask", "shot ask", "ask", "design", "menu ai:colour"):
         assert "until you accept" in cards[name]["change"], (name, cards[name])
     assert "does not change" in cards["look deeper"]["change"]
+    # AI › Look again / re-tune the index… (verdict 14, punch 6): what the panel does, and that
+    # the item itself runs nothing
+    assert "Index panel" in cards["menu ai:index"]["what"], cards["menu ai:index"]
+    assert cards["menu ai:index"]["cost"] == "none — no model call"
+    assert "the cut does not change" in cards["menu ai:index"]["change"]
     _done(pg)
 
 

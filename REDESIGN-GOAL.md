@@ -514,3 +514,19 @@ next judge runs, and the next judge rules it honest or lenient.
   the change to show by the second animation frame after that input, asserted at any load (the logged `within_limit`
   skip above 2x cores still applies only to the millisecond bar). A mutant that shows the preview 3 frames late passed the
   old 150 ms bar 3/3 and fails the new one 5/5. Stricter.
+
+- 2026-10-20 (wave 18, lane INDEX2, punch 6; logged by the lead): **the Index panel's "heard" is the pass's count.** The
+  summary's `heard` counts clips with a transcript on disk, as `/api/firstpass`'s `listened` does, not `done` cells; a clip
+  the batch hear has finished reads done in its row (`batch: true`) while the journal still says running; a clip being heard
+  again still counts as heard (its old transcript stands) while its cell says running. Neither looser nor stricter: the two
+  readouts share one definition, and a test asserts they agree within one poll.
+- 2026-10-20 (wave 18, lane INDEX2, punch 8): **the Index tab takes Selects' width** (592 px, through Selects' own layout
+  branch; at 1440 the Timeline gives up 152 px, 467 left; Effect Controls gives what it has beyond its tabs, else the AI prompt
+  takes its own row, exactly as with Selects). A clip's detail is a two-column grid from 520 px. Stricter for dimensions 4 and
+  9 (a `test_workspace` check at 1440 and 1920: >= 560 px, >= 10 rows with a detail open, the foot one row, nothing wraps).
+  **No screens-budget change** (measured exact: / 110·58, / shot 139·73, / film 118·57, / jobs 119·59, / fx 144·61): the new
+  AI menu item and tour words are not in view in the budget's states.
+- 2026-10-20 (wave 18, lane UNDO5, punch 5): **no new control.** The Selects row menu's Undo shows its key (Ctrl+Z) and
+  appears only while a Selects verdict is what Ctrl+Z takes next; the reject and batch toasts say "Ctrl+Z undoes it" /
+  "Ctrl+Z brings them back" instead of "right-click › Undo". A tagged undo entry where nothing on the board moved is neither
+  restored nor autosaved (it would have saved an unchanged cut and re-synced Selects).
