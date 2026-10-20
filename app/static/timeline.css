@@ -450,6 +450,8 @@ body.rc-playing #tl .blk .tl-h::after { transition: none; }
                                 text-overflow: ellipsis; cursor: pointer; z-index: 3; }
 #tl .tl-ruler .tl-marker-name:hover { filter: brightness(1.3); }
 #tl .tick.major label.under-marker { visibility: hidden; }
+/* a label the view's edge crosses, zoomed in and scrolled (timeline.js `rulerEdges`): hidden until whole */
+#tl .tick.major label.edge-cut { visibility: hidden; }
 /* the sequence's in / out: the ruler shaded between them, a bracket at each end */
 #tl .tl-ruler .tl-inout { position: absolute; top: 0; bottom: 0; pointer-events: none;
                           background: rgba(110, 168, 254, .16); box-sizing: border-box; }
