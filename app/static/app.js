@@ -410,7 +410,9 @@ function posterSrc(seg) {
   if (!posterAt.has(seg)) posterAt.set(seg, seg.in);
   const base = (P.clips[seg.clip] || {}).poster;
   if (!base) return '';
-  return `${base}${base.includes('?') ? '&' : '?'}t=${Math.max(0, posterAt.get(seg)).toFixed(2)}`;
+  // to 4 places, as the rest still asks (paintRestStill): the server cuts the frame at or
+  // before it + 1 ms, the export's (wave 17 PLAY8)
+  return `${base}${base.includes('?') ? '&' : '?'}t=${Math.max(0, posterAt.get(seg)).toFixed(4)}`;
 }
 
 /* Catch the still up to the in-point, once the trimming stops — the timeline's rule and
@@ -1331,9 +1333,22 @@ function whenParked(v, fn) {
  * which resets `playbackRate` to the default, and kept on `dataset.speed` so the JKL
  * shuttle (timeline-keys.js, which rides on `defaultPlaybackRate`) can multiply it
  * rather than overwrite it. A generated clip (`gen_…`) is armed like any other: the
- * server lists it with a proxy. */
+ * server lists it with a proxy.
+ *
+ * (wave 17 PLAY8) It parks PARK_TOL_S past `at` (parkAt): the frame a <video> shows parked
+ * is the last one starting at or before its time, and the export's is the last one at or
+ * before the time + assemble.py's SEEK_TOL_S (1 ms) — an in kept to the edit grid's 4
+ * places sits up to 0.05 ms under the start of the frame it names, and parked on it
+ * exactly the monitor showed the frame before (FRAMEACC: 27 of 48 right at 29.97, 48 of 48
+ * at the time + 1 ms). The fragment says the same time to 3 places (within half a
+ * millisecond of it, past the frame's start), and a buffer is left alone only that close
+ * to it (parkedOn). */
+const PARK_TOL_S = 0.001;
+const parkAt = (t) => Math.max(0, t) + PARK_TOL_S;
+const parkedOn = (v, want) => v.currentTime >= want - 0.0005 && v.currentTime - want <= 0.002;
 function arm(v, seg, at = seg.in) {
   const src = proxyOf(seg);
+  const want = parkAt(at);
   v._for = null;                    // armNext says which upcoming shot it holds
   v._used = performance.now();
   v._at = at;                       // where it is parked (a waited-on clip's head is made there)
@@ -1344,7 +1359,7 @@ function arm(v, seg, at = seg.in) {
     v.dataset.src = src;
     v._head = null;
     if (v._waitStop && !headMiss) { v._waitStop(); v._waitStop = null; }
-    v.src = src ? `${src}#t=${Math.max(0, at).toFixed(2)}` : src;
+    v.src = src ? `${src}#t=${want.toFixed(3)}` : src;
     v._shown = false;               // a new file: no frame on screen until loadeddata
     v._status = null;
     v.load();
@@ -1364,8 +1379,8 @@ function arm(v, seg, at = seg.in) {
   // A buffer already there is left alone: the same time set again is still a seek (a
   // decode from the keyframe before it) — verdict 4 punch 5.
   const park = () => {
-    if (v.dataset.src === src && Math.abs(v.currentTime - at) > 0.002) {
-      v.currentTime = at;
+    if (v.dataset.src === src && !parkedOn(v, want)) {
+      v.currentTime = want;
       seekTimed(v);
     }
   };
@@ -1420,11 +1435,12 @@ async function freshen(v) {
   const t = v.currentTime;
   v._kind = k;
   v._head = null;
-  v.src = `${src}#t=${Math.max(0, t).toFixed(2)}`;
+  v.src = `${src}#t=${Math.max(0, t).toFixed(3)}`;
   v._shown = false;
   v.load();
   const park = () => {
-    if (v.dataset.src === src && Math.abs(v.currentTime - t) > 0.002) { v.currentTime = t; seekTimed(v); }
+    // the same frame as before the reload (arm's parkedOn: never one under it)
+    if (v.dataset.src === src && !parkedOn(v, t)) { v.currentTime = t; seekTimed(v); }
   };
   v.addEventListener('loadedmetadata', park, { once: true });
 }
@@ -1952,7 +1968,7 @@ function playFrom(i, { single = false } = {}) {
   const go = () => {
     if (g !== player.gen || !player.playing) return;   // pause, or a later command, won
     // parked on the in-point already (arm): the same time again would be a second seek
-    if (!resume && Math.abs(v.currentTime - seg.in) > 0.002) v.currentTime = seg.in;
+    if (!resume && !parkedOn(v, parkAt(seg.in))) v.currentTime = parkAt(seg.in);
     setShotRate(v, seg);
     v.play().catch((err) => { if (g === player.gen) playRefused(err); });
   };
@@ -3054,7 +3070,7 @@ function advance() {
   if (rolled) {
     nv._roll = null;
     // a start that went badly wrong is put right; a frame or two either side is not
-    if (Math.abs(nv.currentTime - segs[next].in) > 0.15) nv.currentTime = segs[next].in;
+    if (Math.abs(nv.currentTime - segs[next].in) > 0.15) nv.currentTime = parkAt(segs[next].in);
   } else {
     arm(nv, segs[next]);        // normally armed already; re-arming survives edits made mid-play
   }
@@ -3092,7 +3108,7 @@ function advance() {
     // keyframe before it, up to a second of frames — and it was most of the hole at the
     // cut (verdict 4 punch 5: 317 ms on Killington, 450 ms on a 59.94 fixture at load 20).
     // (currentTime is already the target while a seek to it is pending: no second one)
-    if (Math.abs(nv.currentTime - segs[next].in) > 0.002) nv.currentTime = segs[next].in;
+    if (!parkedOn(nv, parkAt(segs[next].in))) nv.currentTime = parkAt(segs[next].in);
     setShotRate(nv, segs[next]);
     nv.play().catch((err) => { if (g === player.gen) playRefused(err); });
   };
@@ -3244,7 +3260,10 @@ function paintRestStill() {
   const base = seg && (P.clips[seg.clip] || {}).poster;
   if (live || !base) { img.hidden = true; return; }
   const sep = base.includes('?') ? '&' : '?';
-  const t = Math.max(0, at.clipT).toFixed(2);
+  // the playhead's exact clip time to 4 places (the edit grid's): the server cuts the frame
+  // at or before it + 1 ms, the export's and the parked buffer's (wave 17 PLAY8; at 0.01 s,
+  // cut with the first frame from that time on, it was the frame after as often as not)
+  const t = Math.max(0, at.clipT).toFixed(4);
   const src = `${base}${sep}t=${t}`;
   img.hidden = false;
   if (img.getAttribute('src') === src || img._want === src) return;
