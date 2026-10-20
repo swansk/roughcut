@@ -7111,7 +7111,12 @@ def _apply_reruns(j: journal.Journal, entry) -> None:
                 if j.state(clip, stage) == "running":
                     wait.setdefault(clip, []).append(stage)
                     continue
-                j.reopen(clip, stage, force=True)
+                # the picks are derived: always rebuilt after what they read (forced, so
+                # an events file older than the run is not taken for them)
+                force = bool(req.get("force", True)) or stage == "picks"
+                if not force and j.state(clip, stage) in journal.SETTLED:
+                    continue             # done meanwhile: nothing left to do for it
+                j.reopen(clip, stage, force=force)
             if any(s in journal.PRICED for s in stages):
                 j.release_held([clip])
             if rr["scope"] is not None:
@@ -7160,13 +7165,17 @@ def _rerun_stages(body: dict) -> list[str]:
 
 
 def rerun_plan(body: dict) -> dict:
-    """What a re-run of `{clips, stages, interval_s}` runs and costs, without starting
-    anything: per clip, the stages asked (a close look on a clip never looked at brings
-    its look, priced with it; a confirmed-junk clip's priced stages stay skipped) and the
-    derived picks; the price of the looks at the interval asked (or each clip's own) and
-    of the close looks, with every interval's price for the same looks."""
+    """What a re-run of `{clips, stages, interval_s, only_missing}` runs and costs, without
+    starting anything: per clip, the stages asked (a close look on a clip never looked at
+    brings its look, priced with it; a confirmed-junk clip's priced stages stay skipped) and
+    the derived picks; the price of the looks at the interval asked (or each clip's own) and
+    of the close looks, with every interval's price for the same looks.
+
+    `only_missing` is the old open screen's "Index what isn't done": of the stages asked,
+    only those not done (nor skipped) on each clip — nothing on disk is replaced."""
     clips, whole = _rerun_clips(body)
     stages = _rerun_stages(body)
+    missing = bool(body.get("only_missing"))
     interval = body.get("interval_s")
     if interval is not None:
         try:
@@ -7185,11 +7194,30 @@ def rerun_plan(body: dict) -> dict:
             j = None
     junk = confirmed_junk()
     looked, closed, heard = visual_stems(), fine_stems(), analysed_stems()
+    exists = {"asr": lambda c: Path(c).stem in heard,
+              "look": lambda c: Path(c).stem in looked,
+              "close": lambda c: Path(c).stem in closed,
+              "telemetry": lambda c: (telemetry_dir() / f"{Path(c).stem.upper()}.telemetry.json").exists(),
+              "proxy": lambda c: (STATE["proxy_dir"] / f"{Path(c).stem}.mp4").exists()}
+    tele_known = STATE.get("telemetry") or {}
+
+    def settled(clip: str, s: str) -> bool:
+        """Done by its file (the files are the truth: a journal's "done" over a file that is
+        gone is not done), or not applicable to the clip (skipped)."""
+        if exists[s](clip):
+            return True
+        st = j.clips[clip]["stages"][s]["state"] if j is not None and clip in j.clips else None
+        if st == "skipped":
+            return True
+        return s == "telemetry" and st is None and tele_known.get(clip) is False
+
     plan: dict[str, list[str]] = {}
     notes: list[str] = []
     junked = brought = 0
     for clip in clips:
         want = list(stages)
+        if missing:
+            want = [s for s in want if not settled(clip, s)]
         if clip in junk and any(s in journal.PRICED for s in want):
             want = [s for s in want if s not in journal.PRICED]
             junked += 1
@@ -7218,11 +7246,6 @@ def rerun_plan(body: dict) -> dict:
                    for c in looks) * VISUAL_USD_PER_SHEET
 
     sheets = sum(sheets_for(c, interval or clip_look_interval(c), probe=False) for c in looks)
-    exists = {"asr": lambda c: Path(c).stem in heard,
-              "look": lambda c: Path(c).stem in looked,
-              "close": lambda c: Path(c).stem in closed,
-              "telemetry": lambda c: (telemetry_dir() / f"{Path(c).stem.upper()}.telemetry.json").exists(),
-              "proxy": lambda c: (STATE["proxy_dir"] / f"{Path(c).stem}.mp4").exists()}
     replaces = {s: sum(1 for c, ss in plan.items() if s in ss and exists[s](c))
                 for s in INDEX_PANEL_STAGES}
     running = [[c, s] for c, ss in plan.items() for s in ss
@@ -7230,12 +7253,13 @@ def rerun_plan(body: dict) -> dict:
     names = [Path(c).stem for c in plan]
     who = ("the bin" if whole and len(plan) > 1 else names[0] if len(names) == 1
            else f"{len(names)} clips")
-    what = ("everything" if set(stages) >= set(INDEX_PANEL_STAGES)
+    what = ("what isn't done" if missing
+            else "everything" if set(stages) >= set(INDEX_PANEL_STAGES)
             else ", ".join(RERUN_WORDS[s] for s in stages if s in RERUN_WORDS))
     if interval is not None and "look" in stages:
         what += f" (looks at {interval:g} s)"
     return {
-        "clips": list(plan), "whole_bin": whole, "stages": stages,
+        "clips": list(plan), "whole_bin": whole, "stages": stages, "only_missing": missing,
         "plan": plan, "interval_s": interval,
         "looks": len(looks), "sheets": sheets, "close": len(closes),
         "windows": len(closes) * FINE_WINDOWS_PER_CLIP,
@@ -7285,7 +7309,9 @@ def _rerun_start(body: dict) -> dict:
                                                          if plan["notes"] else ""))
     if plan["usd"] > 0:
         refuse_past_cap("Running the index again", plan["usd"])
-    req = {"plan": {c: list(ss) for c, ss in plan["plan"].items()}, "words": plan["words"]}
+    # "what isn't done" replaces nothing on disk: its stages are reopened, not forced
+    req = {"plan": {c: list(ss) for c, ss in plan["plan"].items()}, "words": plan["words"],
+           "force": not plan["only_missing"]}
     with INDEX_LOCK:
         live = next((x for x in INDEXES.values() if x["state"] not in progress.TERMINAL), None)
         if live is not None and live.get("cancel"):
@@ -7307,7 +7333,7 @@ def _rerun_start(body: dict) -> dict:
             entry.bound_fn = _scoped_bound
             entry.eta_fn = lambda e: None
             threading.Thread(target=_index_run, args=(job, ""), daemon=True).start()
-    out = {k: plan[k] for k in ("clips", "stages", "interval_s", "looks", "sheets", "close",
+    out = {k: plan[k] for k in ("clips", "stages", "only_missing", "interval_s", "looks", "sheets", "close",
                                 "windows", "usd", "replaces", "running", "notes", "words",
                                 "backend", "charged")}
     return {"job": job, "joined": joined, **out}

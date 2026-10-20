@@ -290,6 +290,29 @@ def test_a_rerun_asked_while_an_index_runs_joins_it(indexed, monkeypatch):
 
 
 
+def test_what_isnt_done_runs_only_that_and_replaces_nothing(indexed):
+    """The open screen's "Index what isn't done", in the panel: of the stages asked, only
+    those not done on each clip (a look whose file is gone), and nothing forced."""
+    c, server, looks = indexed["c"], indexed["server"], indexed["looks"]
+    body = {"clips": None, "stages": "everything", "only_missing": True}
+    p = c.post("/api/index/price", json=body).json()
+    assert p["plan"] == {} and p["usd"] == 0, "a bin indexed whole has nothing left"
+    assert c.post("/api/index/rerun", json=body).status_code == 400
+    (server.STATE["visual"] / "CLIP_B.visual.json").unlink()
+    p = c.post("/api/index/price", json={**body, "interval_s": 2}).json()
+    assert p["plan"] == {"CLIP_B.MP4": ["look", "picks"]} and p["looks"] == 1
+    assert p["replaces"]["look"] == 0 and p["words"] == "CLIP_B: what isn't done (looks at 2 s)"
+    before = journal.Journal.load(server.journal_path())
+    r = c.post("/api/index/rerun", json={**body, "interval_s": 2}).json()
+    s = _wait_index(c, r["job"])
+    assert s["state"] == "done", s
+    assert looks == [{"only": ["CLIP_B"], "force": False, "interval": 2.0}]
+    j = journal.Journal.load(server.journal_path())
+    assert j.state("CLIP_B.MP4", "look") == "done"
+    assert j.clips["CLIP_A.MP4"]["stages"]["look"] == before.clips["CLIP_A.MP4"]["stages"]["look"]
+    # the whole bin asked at 2 s: the bin's interval (the old slider's one setting)
+    assert server.read_edl()["look"]["interval_s"] == 2.0
+
 def test_footage_imported_during_a_rerun_is_heard_and_its_look_waits(indexed, project, monkeypatch):
     """A re-run's own index takes footage imported meanwhile in as a free run would: heard
     and previewed in that run, its priced look held for the editor."""

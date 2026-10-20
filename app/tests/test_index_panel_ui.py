@@ -240,6 +240,14 @@ def test_the_panel_shows_what_ran_retunes_a_clip_and_reruns_a_selection(page, li
         assert j.clips[c]["stages"]["asr"]["finished"] > before[c]
     assert j.clips["CLIP_B.MP4"]["stages"]["asr"] == b_heard
 
+    # the old open screen's "Index what isn't done", for the whole bin: all of it is done
+    pg.evaluate("rcIndex.select([])")
+    pg.locator(WHAT).select_option("missing")
+    assert pg.locator('[data-testid="index-scope"]').inner_text() == "all 3 clips"
+    pg.wait_for_function("document.querySelector('[data-testid=index-price]').textContent === 'nothing to run'",
+                         timeout=5000)
+    assert pg.locator(RUN).is_disabled()
+
 
 def test_a_run_is_stopped_from_the_panel(page, live):
     pg, server = page, live["server"]

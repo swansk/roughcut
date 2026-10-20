@@ -45,6 +45,7 @@
     ['asr', 'Hear', 'Hear again'], ['look', 'Look', 'Look again'],
     ['close', 'Close looks', 'Look closely again'], ['telemetry', 'Telemetry', 'Read the telemetry again'],
     ['proxy', 'Previews', 'Build the previews again'], ['everything', 'Everything', 'Everything again'],
+    ['missing', 'What isn\'t done', 'Run only what is not done yet: nothing on disk is replaced'],
   ];
   const PRICED = new Set(['look', 'close']);
   const POLL_MS = 10000, FAST_MS = 1000;
@@ -156,20 +157,22 @@
     return picked.length ? picked : all;
   }
   function wholeBin() { return !rows().some((r) => IX.sel.has(r.clip)); }
-  function stagesOf(what) { return what === 'everything' ? ['asr', 'look', 'close', 'telemetry', 'proxy'] : [what]; }
-  function wantsLook(what) { return what === 'look' || what === 'everything'; }
-  /* The interval the foot offers: the one chosen, else the selection's own (all alike),
-   * else the bin's. */
+  const ALL = ['asr', 'look', 'close', 'telemetry', 'proxy'];
+  function stagesOf(what) { return what === 'everything' || what === 'missing' ? ALL.slice() : [what]; }
+  function wantsLook(what) { return what === 'look' || what === 'everything' || what === 'missing'; }
+  /* The interval the foot offers: the one chosen, else the selection's own when its clips
+   * share one, else none ("each clip's own"). Only one the editor chose is sent: a run left
+   * at its default looks at each clip's own interval and re-tunes nothing. */
   function intervalShown() {
     if (IX.interval != null) return IX.interval;
     const sel = rows().filter((r) => scopeClips().includes(r.clip));
     const ivs = [...new Set(sel.map((r) => Number(r.interval_s)))];
-    if (ivs.length === 1) return ivs[0];
-    return IX.rep ? Number(IX.rep.interval_s) : 4;
+    return ivs.length === 1 ? ivs[0] : null;
   }
   function body() {
     const b = { clips: wholeBin() ? null : scopeClips(), stages: stagesOf(IX.what) };
-    if (wantsLook(IX.what)) b.interval_s = intervalShown();
+    if (IX.what === 'missing') b.only_missing = true;
+    if (wantsLook(IX.what) && IX.interval != null) b.interval_s = IX.interval;
     return b;
   }
   /* The price from the report's own unit prices, at once (the server's quote follows and
@@ -177,13 +180,16 @@
   function localQuote() {
     const rep = IX.rep;
     if (!rep) return null;
-    const st = stagesOf(IX.what), iv = String(intervalShown());
+    const st = stagesOf(IX.what), chosen = intervalShown();
     let sheets = 0, looks = 0, closes = 0;
+    const missing = IX.what === 'missing';
+    const todo = (r, k) => !missing || !['done', 'skipped'].includes(r.stages[k] && r.stages[k].state);
     for (const r of rows()) {
       if (!scopeClips().includes(r.clip) || r.junk) continue;
-      const wantClose = st.includes('close');
+      const wantClose = st.includes('close') && todo(r, 'close');
       const needLook = wantClose && !st.includes('look') && r.stages.look.state !== 'done';
-      if (st.includes('look') || needLook) { looks += 1; sheets += Number((r.sheets_at || {})[iv] || 1); }
+      const iv = String(chosen != null ? chosen : Number(r.interval_s));
+      if ((st.includes('look') && todo(r, 'look')) || needLook) { looks += 1; sheets += Number((r.sheets_at || {})[iv] || 1); }
       if (wantClose) closes += 1;
     }
     const usd = sheets * Number(rep.usd_per_sheet || 0) + closes * Number(rep.usd_per_close || 0);
@@ -212,6 +218,9 @@
   function priceWords(q) {
     if (!q) return { text: '', title: '' };
     if (q.error) return { text: 'no price', title: q.error };
+    if (!q.local && Array.isArray(q.clips) && !q.clips.length) {
+      return { text: 'nothing to run', title: (q.notes && q.notes.join('; ')) || 'every stage asked is done on these clips' };
+    }
     const parts = [];
     if (q.looks) parts.push(`${plural(q.looks, 'look')} · ${plural(q.sheets, 'sheet')}`);
     if (q.close) parts.push(plural(q.close, 'close look'));
@@ -273,7 +282,7 @@
     what.value = IX.what;
     what.addEventListener('change', () => { IX.what = what.value; paintFoot(); requote(); });
     const iv = $('.ix-iv', sec);
-    iv.addEventListener('change', () => { IX.interval = Number(iv.value); paintFoot(); requote(); });
+    iv.addEventListener('change', () => { IX.interval = iv.value === '' ? null : Number(iv.value); paintFoot(); requote(); });
     $('.ix-run', sec).addEventListener('click', () => runNow());
     $('.ix-stop', sec).addEventListener('click', () => stop());
     return sec;
@@ -413,12 +422,14 @@
     scope.title = picked ? 'the clips selected above (none selected: the whole bin)' : 'no clip selected: the whole bin';
     const iv = $('.ix-iv', sec);
     const stops = (rep && rep.intervals) || [4, 3, 2, 1];
-    const want = String(intervalShown());
-    if (iv.dataset.stops !== stops.join(',')) {
-      iv.innerHTML = stops.map((s) => `<option value="${s}">every ${s} s</option>`).join('');
-      iv.dataset.stops = stops.join(',');
+    const shown = intervalShown();
+    const key = `${stops.join(',')}|${shown == null ? 'own' : ''}`;
+    if (iv.dataset.stops !== key) {
+      iv.innerHTML = (shown == null ? '<option value="">each clip\'s own</option>' : '')
+        + stops.map((s) => `<option value="${s}">every ${s} s</option>`).join('');
+      iv.dataset.stops = key;
     }
-    iv.value = want;
+    iv.value = shown == null ? '' : String(shown);
     iv.hidden = !wantsLook(IX.what);
     const pw = priceWords(IX.quote);
     const price = $('.ix-price', sec);
@@ -427,7 +438,8 @@
     price.dataset.usd = IX.quote && IX.quote.usd != null ? String(IX.quote.usd) : '';
     price.dataset.local = IX.quote && IX.quote.local ? '1' : '';
     const run = $('.ix-run', sec);
-    run.disabled = !rep || IX.busy || !n || !!(rep && rep.stopping) || !!(IX.quote && IX.quote.error);
+    const none = !!(IX.quote && !IX.quote.local && Array.isArray(IX.quote.clips) && !IX.quote.clips.length);
+    run.disabled = !rep || IX.busy || !n || none || !!(rep && rep.stopping) || !!(IX.quote && IX.quote.error);
     const whatWord = (WHAT.find(([k]) => k === IX.what) || ['', '', ''])[2];
     run.title = `${whatWord} for ${scope.textContent}${pw.text ? ` — ${pw.text}` : ''}${pw.title ? ` (${pw.title})` : ''}`;
     const stopB = $('.ix-stop', sec);
@@ -511,6 +523,7 @@
       stages: opts.stages || (opts.what ? stagesOf(opts.what) : ['look']),
     };
     if (opts.interval_s != null) b.interval_s = Number(opts.interval_s);
+    if (opts.only_missing || opts.what === 'missing') b.only_missing = true;
     const r = await getJSON('/api/index/rerun', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(b) });
     IX.lastJob = r.job;
     IX.job = r.job;
@@ -525,7 +538,7 @@
     paintFoot();
     const b = body();
     try {
-      const r = await rerun(b.clips, { stages: b.stages, interval_s: b.interval_s });
+      const r = await rerun(b.clips, { stages: b.stages, interval_s: b.interval_s, only_missing: b.only_missing });
       say(`${r.joined ? 'Added to the index running now' : 'Running'} — ${r.words}`, 3200);
       IX.interval = null;
     } catch (e) {
