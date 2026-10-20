@@ -832,6 +832,16 @@ def test_a_real_length_first_cut_shows_five_rows_and_plays_on_l(browser, live_se
         assert first.bounding_box()["height"] > 1.5 * lh
         first.click()
         assert first.bounding_box()["height"] <= 1.05 * lh
+        # Each click also plays the check's shot (app.js playProposedShot): the first check's is
+        # the last shot (CLIP_A 0.42-1.42, 1 s), and L carries on from where that play is. On a
+        # loaded box, with under ~0.4 s of it left at L, the proposal played out before K, so
+        # `at` was its end and Space started it from the top, as designed (lane TESTS2, wave 17:
+        # "0.267 >= 16.73", 1 run in 20 at load 19-26; 3 of 3 with 0.7 s between the click and
+        # L). So the check's shot plays out first: L then plays the proposal from its top.
+        k = int(first.get_attribute("data-k"))
+        pg.wait_for_function(f"""(() => {{ const v = liveVideo(), g = tlLanes.ghost().ghosts[{k}];
+          return !!v && v.paused && tl.state.playhead >= g.start + tl.dur(g.seg) - 0.05; }})()""",
+                             timeout=8000)
 
         # L / K / Space play and pause the proposal on the empty sequence, as ▶ Play it does
         toasts: list[str] = []
