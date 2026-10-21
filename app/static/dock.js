@@ -704,7 +704,7 @@
                     read: false, failed: false, sort: sortOf(store.get(SORT_KEY, null)),
                     zoom: zoomOf(store.get(ZOOM_KEY, ZOOM.def)), open: openOf(store.get(OPEN_KEY, [])),
                     cuts: null, cutsSig: '', cutsSoon: null, proposal: null, propSig: '',
-                    subs: new Map(), subsSig: '', cols: '' };
+                    subs: new Map(), subsSig: '', cols: '', colList: null };
 
   async function loadClips() {
     clearTimeout(project.timer);
@@ -1235,16 +1235,63 @@
       rows.push(rowHtml(it, cols, tree));
       if (isOpenClip(it)) it.subs.forEach((s) => rows.push(rowHtml(subItem(s, it), cols, tree)));
     });
+    // the places a sideways scroll rests: each column's left edge but Name's (fitEnd)
+    const marks = [];
+    cols.reduce((x, c) => { if (c.k !== 'name') marks.push(`<i style="left:${x}px"></i>`); return x + c.w; }, 0);
     // the table is as wide as its columns: wider than the panel, it scrolls sideways
     // inside it (Name pinned), and a repaint (a sort, a poll) keeps where it was scrolled
     const sl = box.scrollLeft, st = box.scrollTop;
     box.innerHTML = `<table class="plist" style="width:${colsWidth(cols)}px">`
       + `<colgroup>${cols.map((c) => `<col style="width:${c.w}px">`).join('')}</colgroup>`
-      + `<thead><tr>${head}</tr></thead><tbody>${rows.join('')}</tbody></table>`;
+      + `<thead><tr>${head}</tr></thead><tbody>${rows.join('')}</tbody></table>`
+      + `<div class="colsnaps" aria-hidden="true">${marks.join('')}</div>`;
+    project.colList = cols;
+    box.classList.add('colsnap');
+    fitEnd(box);
     if (sl) box.scrollLeft = sl;
     if (st) box.scrollTop = st;
     box.classList.toggle('hscrolled', box.scrollLeft > 0);
     return all;
+  }
+
+  /* A sideways scroll rests on whole columns (verdict 15, punch 9: the List view scrolled
+   * sideways read "ıfo" for Audio Info's heading and "łz · Mono" for its cells, a column
+   * half under the pinned Name — journey 15 and 17). The list snaps (workspace.css
+   * `#projList.colsnap`) to a mark at each column's left edge (`.colsnaps`, painted with
+   * the table), past Name's width (scroll-padding); the far end is one of those places
+   * too: the last column takes the few pixels that put it where a column starts at Name's
+   * edge. Re-done when the panel's width changes without a repaint. */
+  function fitEnd(box) {
+    const t = box.querySelector('table.plist'), cols = project.colList;
+    if (!t || !cols || !cols.length) return;
+    const base = colsWidth(cols), name = cols[0].w;
+    box.style.scrollPaddingLeft = `${name}px`;
+    const over = base - box.clientWidth;
+    let extra = 0;
+    if (over > 0) {
+      let x = 0;
+      for (const c of cols) {
+        if (c.k !== 'name' && x - name >= over) { extra = x - name - over; break; }
+        x += c.w;
+      }
+    }
+    const last = t.querySelector('col:last-child');
+    if (last) last.style.width = `${cols[cols.length - 1].w + extra}px`;
+    t.style.width = `${base + extra}px`;
+  }
+
+  /* A List row into view up or down only, under the heading row: the sideways place is
+   * the editor's (an import's selection, the arrows). An Icon view tile as before. */
+  function rowIntoView(row) {
+    const box = $('#projList');
+    if (!box || !row) return;
+    if (row.tagName !== 'TR') { row.scrollIntoView({ block: 'nearest' }); return; }
+    const head = box.querySelector('thead');
+    const b = box.getBoundingClientRect(), r = row.getBoundingClientRect();
+    const top = b.top + box.clientTop + (head ? head.offsetHeight : 0);
+    const bottom = b.top + box.clientTop + box.clientHeight;
+    if (r.top < top) box.scrollTop -= top - r.top;
+    else if (r.bottom > bottom) box.scrollTop += r.bottom - bottom;
   }
 
   function tileHtml(it) {
@@ -1294,7 +1341,8 @@
     if (!box) return;
     project.dirty = false;
     stopScrub(true);
-    box.classList.remove('hscrolled');
+    box.classList.remove('hscrolled', 'colsnap');
+    box.style.scrollPaddingLeft = '';
     $$('#projView button').forEach((b) => b.classList.toggle('on', b.dataset.view === project.view));
     const zoom = $('#projZoom');
     if (zoom) { zoom.hidden = project.view !== 'icon'; zoom.value = String(project.zoom); }
@@ -1444,7 +1492,7 @@
     const row = $$('#projList [data-key]')[j];
     if (!row) return true;
     setSel(row.dataset.key);
-    row.scrollIntoView({ block: 'nearest' });
+    rowIntoView(row);
     return true;
   }
 
@@ -1784,6 +1832,7 @@
       new ResizeObserver(() => {
         if (project.view !== 'list' || !project.items || !project.items.size) return;
         if (colsSig(columns(box.clientWidth || 300, [...project.items.values()])) !== project.cols) paintProject();
+        else fitEnd(box);
       }).observe(box);
     }
     // footage added (Import, a drop, the Media Browser — lane IMPORT's contract): the bin
@@ -1795,7 +1844,7 @@
         if (!first) return;
         setSel(`c|${first}`);
         const row = $$('#projList [data-clip]').find((r) => r.dataset.clip === first);
-        if (row) row.scrollIntoView({ block: 'nearest' });
+        if (row) rowIntoView(row);
       });
     });
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') loadClips(); });

@@ -585,3 +585,14 @@ next judge runs, and the next judge rules it honest or lenient.
   1920 4/12), and its numbers stand. PLAY9b also found and fixed the real bug behind the merge's 4-in-4: a play's first frame
   missed the pacer's 2-frame margin whenever it was not the parked frame (a second play from one park; FRAME59's parks on
   sequence frames). FRAME59 measured slightly costlier for test_vfx_playback (5/10 vs 7/10 runs, small sample).
+- 2026-10-21 (wave 19, lane POLISH13, punch 9 and 10; logged by the lead): **the stale-read rule covers a read joining a
+  build in flight (stricter for dimension 10).** POLISH12's late answers tested across a real change in what the CLI says
+  during an import's settle (the real `_cli_facts_ask` against a stand-in `claude` answering only its two free questions)
+  found a stale read that bypassed the late path: a status read joined the snapshot build begun before a sign-out and
+  answered "signed in", unmarked. Now a read joins a running build only if it began under the same `_snap_lag_view`;
+  otherwise it builds its own (at most one extra concurrent build per change). Mutants ignoring the CLI's word in
+  `_snap_lag_view` or `_snap_key`, or restoring the old join, fail the test. **The Project List view's sideways scroll rests
+  on whole columns** (stricter for dimension 9: `test_workspace`'s overflow check fails on any List heading or cell under the
+  pinned Name after wheel, far-end, mid-column, import and arrow-key scrolls at 1440 and 1920; the rightmost column may
+  still be cut by the panel's right edge, as in Premiere). **The keeps lane under A2 is named** ("Keeps · N not in the cut",
+  with a hover). No screens-budget change (measured exact).
