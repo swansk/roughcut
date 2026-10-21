@@ -67,7 +67,8 @@ THE OPS (each maps to the human path named after the arrow)
                                                  (blurriness px, dimensions both|horizontal|
                                                  vertical), sharpen (amount: Sharpen Amount
                                                  0..500), mirror (ctrx / ctry px, angle °),
-                                                 horizontal_flip, vertical_flip (no values);
+                                                 horizontal_flip, vertical_flip,
+                                                 black_white (no values);
                                                  an on|off one also takes true / false
                                                  (wave 19, EFFECTS2)
   Lumetri Color

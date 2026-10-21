@@ -582,6 +582,9 @@
                { key: 'angle', label: 'Reflection Angle', lo: -3600, hi: 3600, dflt: 0, step: 0.1, digits: 1, unit: '°',
                  hover: 'the line\'s turn: 0° reflects the left side onto the right, 90° the top onto the bottom' }],
       choices: {}, rows: ['ctr', 'angle'] },
+    // Image Control › Black & White (wave 19, EFFECTS2): no parameters, as Premiere's
+    black_white: { name: 'Black & White', folder: 'Image Control', what: 'turns the picture to greys: each pixel its luma',
+      params: [], choices: {}, rows: [] },
     // Transform › Horizontal Flip and Vertical Flip (wave 19, EFFECTS2): no parameters, as Premiere's
     horizontal_flip: { name: 'Horizontal Flip', folder: 'Transform', what: 'mirrors the picture left to right',
       params: [], choices: {}, rows: [] },
@@ -896,6 +899,7 @@
    *    (factors), r, sk, sa: Rotation, Skew, Skew Axis (degrees), op: Opacity / 100}
    *   {k: 'flip', h, v: 1 for a Horizontal / Vertical Flip}
    *   {k: 'mirror', cx, cy: the Reflection Center (fractions), a: the Reflection Angle (degrees)}
+   *   {k: 'bw'}: Black & White
    * `transform`, `clip`, `mask`, `filter` and `opacity` are their CSS stand-in, for the
    * layers no grade canvas draws (`apply`: the videos while the canvas is off — no WebGL,
    * the grade toggled off with G — and the poster still): the compositor's transform and
@@ -961,6 +965,9 @@
         // (no CSS stand-in: where no grade canvas draws, the picture shows unmirrored)
         stages.push({ k: 'mirror', cx: r4(val(e, 'center_x') * 100) / 100, cy: r4(val(e, 'center_y') * 100) / 100,
                       a: r4(val(e, 'angle') * 100) / 100 });
+      } else if (e.kind === 'black_white') {
+        stages.push({ k: 'bw' });
+        if (css) filters.push('grayscale(1)');           // CSS's grayscale is Rec. 709's luma too
       } else if (e.kind === 'horizontal_flip' || e.kind === 'vertical_flip') {
         const hz = e.kind === 'horizontal_flip';
         stages.push({ k: 'flip', h: hz ? 1 : 0, v: hz ? 0 : 1 });

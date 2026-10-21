@@ -497,21 +497,24 @@ def test_video_effects_crop_zoom_and_the_transforms_anchor_and_skew(browser, liv
 
 def test_video_effects_the_flips(browser, live_server, project):
     """Wave 19, EFFECTS2: Transform › Horizontal Flip and Vertical Flip as `effect` ops (no
-    values: the bin's drop), one bypassed — the same EDL as the hand's drops and fx toggle."""
+    values: the bin's drop), one bypassed, and Image Control › Black & White after it — the
+    same EDL as the hand's drops and fx toggle."""
     ops = [{"op": "effect", "id": "shot-a", "kind": "horizontal_flip"},
            {"op": "effect", "id": "shot-b", "kind": "vertical_flip"},
-           {"op": "effect", "id": "shot-c", "kind": "horizontal_flip", "on": False}]
+           {"op": "effect", "id": "shot-c", "kind": "horizontal_flip", "on": False},
+           {"op": "effect", "id": "shot-c", "kind": "black_white"}]
     hand = """() => {
       effects.vfxAdd('horizontal_flip', ['shot-a']);                     // dropped from the bin
       effects.vfxAdd('vertical_flip', ['shot-b']);
       effects.vfxAdd('horizontal_flip', ['shot-c']);
       effects.vfxAct('off', 'horizontal_flip', tl.byId('shot-c'));       // its fx toggle
+      effects.vfxAdd('black_white', ['shot-c']);                         // Image Control › Black & White
     }"""
     ai, h, _ = ai_then_hand(browser, live_server, project, ops, hand)
     assert ai == h
     assert [ai["segments"][i]["controls"]["vfx"] for i in range(3)] == [
         [{"id": "horizontal_flip", "kind": "horizontal_flip"}], [{"id": "vertical_flip", "kind": "vertical_flip"}],
-        [{"id": "horizontal_flip", "kind": "horizontal_flip", "off": True}]]
+        [{"id": "horizontal_flip", "kind": "horizontal_flip", "off": True}, {"id": "black_white", "kind": "black_white"}]]
 
 
 def test_video_effects_mirror(browser, live_server, project):

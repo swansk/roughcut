@@ -593,7 +593,8 @@
      *            twin); Crop: the box l = Left·w/100 … with rx(x)·ry(y) of an Edge Feather f =
      *            Feather·w/1920 px at the pixel centres (f = 0 a hard edge), and with Zoom the
      *            box stretched to the frame (p = box corner + q·box / frame). Flip (wave 19): the
-     *            map x ↦ w − x or y ↦ h − y. Mirror (wave 19): p − 2·max((p − C)·n, 0)·n.
+     *            map x ↦ w − x or y ↦ h − y. Mirror (wave 19): p − 2·max((p − C)·n, 0)·n. Black &
+     *            White (wave 19): the read's Rec. 709 luma in all three channels.
      * On the frame's own pixel grid at the size the picture is drawn: Playback Resolution
      * while playing (≤ 640 px wide), the monitor's size parked — the grid the CSS filter had. */
     const STAGE_HEAD = `
@@ -629,6 +630,7 @@
       uniform vec2 u_fe;        // 1 / its Edge Feather (px⁻¹); 1 when it crops, else 0
       uniform float u_op;       // the Transform's Opacity / 100
       uniform vec4 u_mir;       // a Mirror's line: a point on it (px) and n = (cos α, sin α); n = 0: none
+      uniform float u_bw;       // Black & White: 1, else 0
       void main() {
         vec3 q = vec3(vec2(v_uv.x, 1.0 - v_uv.y) * u_wh, 1.0);
         vec2 p = vec2(dot(u_mx, q), dot(u_my, q));
@@ -637,6 +639,7 @@
         float m = u_op * mix(1.0, lo.x * lo.y * hi.x * hi.y, u_fe.y);
         vec2 c = clamp(p, vec2(-1.0), u_wh + 1.0);    // past the picture: its black PAD
         vec3 s = texture2D(u_src, u_map.xy + vec2(c.x, u_wh.y - c.y) / u_wh * u_map.zw).rgb;
+        s = mix(s, vec3(dot(s, vec3(0.2126, 0.7152, 0.0722))), u_bw);
         gl_FragColor = vec4(s * m, 1.0);
       }`,
       // one direction of the Gaussian, n bilinear pairs (u_tap: offset in texels, weight)
@@ -668,7 +671,7 @@
         if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
         gl.useProgram(p);
         const P = { p };
-        ['u_map', 'u_px', 'u_clip', 'u_amt', 'u_dir', 'u_w0', 'u_tap', 'u_wh', 'u_mx', 'u_my', 'u_box', 'u_fe', 'u_op', 'u_mir']
+        ['u_map', 'u_px', 'u_clip', 'u_amt', 'u_dir', 'u_w0', 'u_tap', 'u_wh', 'u_mx', 'u_my', 'u_box', 'u_fe', 'u_op', 'u_mir', 'u_bw']
           .forEach((k) => { P[k] = gl.getUniformLocation(p, k); });
         gl.uniform1i(gl.getUniformLocation(p, 'u_src'), 6);
         gl.useProgram(U.p);
@@ -820,13 +823,14 @@
       const Ax = v.ax * w, Ay = v.ay * h;
       return [a, b, cc, dd, v.x * w - (a * Ax + cc * Ay), v.y * h - (b * Ax + dd * Ay)];
     }
-    /* Crop, Transform, a Flip or Mirror (`geo`) from picture S (w × h) into D, or onto the canvas when D is null. */
+    /* Crop, Transform, a Flip, Mirror or Black & White (`geo`) from picture S (w × h) into D, or
+     * onto the canvas when D is null. */
     function geoStage(S, D, s, w, h) {
       const P = stageProg('geo');
       target(D, w, h);
       pass(P, S, [1, 1], w, h, 0, 0, true);
       gl.uniform2f(P.u_wh, w, h);
-      let mx = [1, 0, 0], my = [0, 1, 0], box = [0, 0, w, h], fe = [1, 0], op = 1, mir = [0, 0, 0, 0];
+      let mx = [1, 0, 0], my = [0, 1, 0], box = [0, 0, w, h], fe = [1, 0], op = 1, mir = [0, 0, 0, 0], bw = 0;
       if (s.k === 'xf') {
         const [a, b, c, d, e, f] = xfMap(s, w, h);
         const det = a * d - b * c;
@@ -836,6 +840,8 @@
           mx = [d / det, -c / det, (c * f - d * e) / det];
           my = [-b / det, a / det, (b * e - a * f) / det];
         }
+      } else if (s.k === 'bw') {
+        bw = 1;
       } else if (s.k === 'mirror') {
         const a = s.a * Math.PI / 180;
         mir = [s.cx * w, s.cy * h, Math.cos(a), Math.sin(a)];
@@ -855,9 +861,10 @@
       gl.uniform2f(P.u_fe, fe[0], fe[1]);
       gl.uniform1f(P.u_op, op);
       gl.uniform4f(P.u_mir, mir[0], mir[1], mir[2], mir[3]);
+      gl.uniform1f(P.u_bw, bw);
       draw4();
     }
-    const GEO = { crop: 1, xf: 1, flip: 1, mirror: 1 };
+    const GEO = { crop: 1, xf: 1, flip: 1, mirror: 1, bw: 1 };
     /* The stages of `a` for a w-wide picture (σ in its px), or null: none that changes it. */
     function stagesOf(a, w) {
       const st = a && Array.isArray(a.vfx) ? a.vfx : null;
@@ -990,6 +997,7 @@
           gl.uniform2f(P.u_fe, 1, 1);
           gl.uniform1f(P.u_op, 1);
           gl.uniform4f(P.u_mir, 0, 0, 0, 0);
+          gl.uniform1f(P.u_bw, 0);
         } else {
           gl.uniform2f(P.u_dir, 1 / S.W, 0);
           gl.uniform1f(P.u_w0, 1);
@@ -2287,7 +2295,7 @@ function release() {
    * Program is not playing — the build holds the worker for 10-30 ms (a software GL), which
    * at the cut into the shot, or while the shot before it played, was a held frame. */
   const VFX_STAGE = { sharpen: 'sharp', gaussian_blur: 'blur', crop: 'geo', transform: 'geo',
-                      horizontal_flip: 'geo', vertical_flip: 'geo', mirror: 'geo' };
+                      horizontal_flip: 'geo', vertical_flip: 'geo', mirror: 'geo', black_white: 'geo' };
   function warmCut() {
     if (!G.ok || playerPlaying()) return;
     const t = window.tl;

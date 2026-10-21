@@ -1565,6 +1565,9 @@ def vfx_graph(controls: dict | None, w: int, h: int, rate: Fraction, frames: int
             g = transform_graph(controls, e, w, h, rate, frames, cur, out, tag, cmd)
         elif e["kind"] == "mirror":
             g = mirror_graph(controls, e, w, h, rate, frames, cur, out, tag)
+        elif e["kind"] == "black_white":
+            # vfx.py's Black & White: the Y' plane kept, the chroma neutral (wave 19, EFFECTS2)
+            g = f"[{cur}]lutyuv=u=128:v=128[{out}]"
         elif e["kind"] in ("horizontal_flip", "vertical_flip"):
             # vfx.py's Flip: pixel for pixel (wave 19, EFFECTS2)
             g = f"[{cur}]{'hflip' if e['kind'] == 'horizontal_flip' else 'vflip'}[{out}]"

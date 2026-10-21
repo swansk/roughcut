@@ -9,6 +9,7 @@ Premiere's standard effects, in its folders and with its parameters:
                                    Scale Width, Skew, Skew Axis, Rotation, Opacity (its own,
                                    apart from Motion, as Premiere has both; Anchor Point, Skew
                                    and the Width wave 19, EFFECTS2)
+  Image Control › Black & White    (none) — wave 19, EFFECTS2
   Transform › Crop                 Left, Top, Right, Bottom (%), Zoom (wave 19), Edge Feather
   Transform › Horizontal Flip      (none) — wave 19, EFFECTS2
   Transform › Vertical Flip        (none)
@@ -70,6 +71,9 @@ research/tools/assemble.py `vfx_graph` are all these):
              the side n points to is the other side's reflection (α = 0°: the left half
              reflected onto the right; 90°: the top onto the bottom), and the picture is whole
              on the line (`mirror_affine` is the reflection, its own inverse).
+  Black &    each pixel its luma, Y' = 0.2126·R' + 0.7152·G' + 0.0722·B' (Rec. 709), in all
+  White      three channels: the export keeps the Y' plane and sets Cb, Cr neutral (the
+             same grey: Y' is that sum of the R'G'B' it came from).
   Blur       a Gaussian of σ = Blurriness·W/1920 px across, down or both (Blur
              Dimensions); outside the frame reads black (Premiere's default, Repeat Edge
              Pixels off: the edges soften toward black).
@@ -158,6 +162,8 @@ KINDS: dict[str, Kind] = {
          Param("center_y", "Reflection Center Y", -10.0, 10.0, 0.5, "", 6),
          Param("angle", "Reflection Angle", -3600.0, 3600.0, 0.0, "°", 3)),
         {}, "reflects one side of the picture onto the other, about a line through the Reflection Center"),
+    "black_white": Kind("black_white", "Black & White", "Image Control", (), {},
+                        "turns the picture to greys: each pixel its luma"),
     "horizontal_flip": Kind("horizontal_flip", "Horizontal Flip", "Transform", (), {},
                             "mirrors the picture left to right"),
     "vertical_flip": Kind("vertical_flip", "Vertical Flip", "Transform", (), {},

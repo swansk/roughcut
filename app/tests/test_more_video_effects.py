@@ -10,6 +10,7 @@ and the AI's `effect` op (test_actions_ui.py's AI-op == hand-op test):
   Transform › Horizontal Flip, Vertical Flip   no parameters; pixel for pixel
   Distort › Mirror                             Reflection Center (a pair in a 1920 × 1080 frame's
                                                px, one stopwatch), Reflection Angle
+  Image Control › Black & White                no parameters; each pixel its Rec. 709 luma
 
 roughcut/vfx.py has THE formulas. Measured here as test_crop_transform measures: the
 Program's parked picture at the frame's size against the export's frame, luma mean |Δ| under
@@ -47,7 +48,8 @@ SHOTS = [("plain", None, None),
                                         {"id": "vertical_flip", "kind": "vertical_flip"}], None),
          ("mirror", [{"id": "mirror", "kind": "mirror", "params": {"center_x": 0.4, "center_y": 0.55, "angle": 30}}], None),
          ("mirror keyed", [{"id": "mirror", "kind": "mirror", "params": {"center_x": 0.6}}],
-          {"angle@mirror": [[0.0, 0.0], [47 / 24, 90.0]]})]
+          {"angle@mirror": [[0.0, 0.0], [47 / 24, 90.0]]}),
+         ("black & white", [{"id": "black_white", "kind": "black_white"}], None)]
 SEGS = [{"id": f"s{i}", "clip": "STILL.MP4", "in": 1.0, "out": 3.0, "why": name,
          **({"controls": {"vfx": stack, **({"keys": keys} if keys else {})}} if stack else {})}
         for i, (name, stack, keys) in enumerate(SHOTS)]
@@ -151,6 +153,8 @@ def test_the_new_kinds_are_premieres_with_their_formulas():
     assert at(R, *at(R, 12.5, 77)) == pytest.approx((12.5, 77))
     assert vfx.clean_keys({"center_x@mirror": [[0, 0.1234567]]}, [{"id": "mirror", "kind": "mirror"}]) == \
         {"center_x@mirror": [[0.0, 0.123457]]}
+    K = vfx.KINDS["black_white"]
+    assert (K.name, K.folder, K.params) == ("Black & White", "Image Control", ())
 
 
 def test_the_programs_new_effects_are_the_exports_frame(page, proj):
@@ -188,6 +192,10 @@ def test_the_programs_new_effects_are_the_exports_frame(page, proj):
     m = shots["mirror"]
     assert np.abs(luma(m[:, :200]) - luma(plain[:, :200])).mean() < 1.0
     assert np.abs(luma(m)[200, 400:] - luma(plain)[200, 400:]).mean() > 10
+    # Black & White: greys, each the plain picture's luma
+    bw = shots["black & white"]
+    assert np.abs(bw[..., 0] - bw[..., 2]).mean() < 1.5 and np.abs(bw[..., 1] - bw[..., 2]).mean() < 1.5
+    assert np.abs(luma(bw) - luma(plain)).mean() < 1.5
 
 
 def test_mirror_in_effect_controls_reflection_center_and_its_stopwatch(page):
