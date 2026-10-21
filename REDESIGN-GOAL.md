@@ -573,3 +573,15 @@ next judge runs, and the next judge rules it honest or lenient.
   a keyframe every <= 0.5 s; test_range_proxy's fixture bar moves 16 px per source frame and its upright bound goes 12 -> 16
   (12.8 measured; a turned picture reads ~84). Stricter in effect (the 4K 59.94 fixtures play twice the frames under the same
   bars, under PLAY9's 30.5 fps draw cap while playing). Every bin re-proxies once.
+- 2026-10-20 (wave 18, the lead at the PLAY9b merge): **the half-speed test (test_cut_frames) is judged on the worker's
+  clock, with one held frame allowed across a case's two plays; the frame clock is a record only. LOOSER than PLAY9's own
+  bar** (no hold on either clock), which passed 3 runs in 10 after PLAY9b's fix (0 in 10 before it). Why: the picture is the
+  worker's OffscreenCanvas, so what is on screen follows the worker's commits; the frame clock is the page's rAF seeing
+  `grade.draws` move by a message back, and the page's animation frames run late (one failing 1920 play: 3 holds on the frame
+  clock, 0 on the worker's); and ~5-10 % of plays hold one frame on the worker's clock as well (the buffer's frames drifting
+  past the pacer's margin, or a 30-70 ms worker / page delay; PLAY9b 7/60 at load 1-4). Stricter than before wave 18 (no
+  half-speed test then; the base holds 3-12 times on every play on both clocks). 10/10 runs on `bfad8d3` + this bar at load
+  1.7-3.9. **Punch 3 is not done by this:** the judge's slow.py reads the frame clock (PLAY9: 1440 0/12 plays with a hold,
+  1920 4/12), and its numbers stand. PLAY9b also found and fixed the real bug behind the merge's 4-in-4: a play's first frame
+  missed the pacer's 2-frame margin whenever it was not the parked frame (a second play from one park; FRAME59's parks on
+  sequence frames). FRAME59 measured slightly costlier for test_vfx_playback (5/10 vs 7/10 runs, small sample).
