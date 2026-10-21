@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- Loop state: verdict 15 rulings and wave 19's five lanes; FOR-KARL names 5138865.
 - Verdict 15 committed (FAIL on 5138865: 15/16 at 8-9, playback at 7; the judge's gate GREEN). Wave 19 plan in judge/WAVE19.md.
 - Loop state: PLAY9b merged; gate RED only on perf after the suite; judge 15 launched as a disclosed deviation.
 - test_cut_frames' half-speed test is judged on the worker's clock (one held frame a case), the frame clock kept as its record; logged as looser in REDESIGN-GOAL.md. (Wave 18, lead.)

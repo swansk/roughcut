@@ -49,6 +49,15 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-21 ~00:00 (box clock): **VERDICT 15 FAIL on `5138865`** (1-5, 8-16 at 9; 7 at 8; 6 at 7; the judge's gate GREEN
+  in 3452 s, 1 flaky, both perf runs passed at load 6.7 / 7.2; Karl's ledger untouched at 2144 lines: punch 9 done).
+  Blockers: K2-K4 (Karl's), dimension 6 (a cut out of a 0.5x shot freezes 116-133 ms 4/4; dissolves with a slowed side hold
+  16/16; the 30.5 fps cap). Rulings: the cadence deviation acceptable once, not a precedent and not toward a PASS; INDEX2 x2,
+  UNDO5, POLISH12, REDO2, FRAME59 honest; PLAY9's dissolve half lenient but honestly logged; the 30.5 cap honest; the lead's
+  worker-clock half-speed bar honestly logged but lenient (fails even that at load 5-9). Verdict 14 punch 2, 5, 6, 7, 8, 9
+  done; 3 done on the judge's measure. **Wave 19** (judge/WAVE19.md) from `2600864`: PLAY10 (2, 3), WORKER (4, 5, 6),
+  LOOPHOLD (7), EFFECTS2 (8), POLISH13 (9, 10). Punch 1 (8766 from a frozen snapshot, v5 proxies prebuilt) waits for
+  Karl's yes; FOR-KARL names `5138865`.
 - 2026-10-20 ~21:30 (box clock): **PLAY9b merged** (`bfad8d3`: a play's first frame gets the pacer's margin when it is
   not the parked one: the real cause of the FRAME59 x PLAY9 half-speed failures; test_cut_frames 3/10 vs 0/10). The lead
   set the half-speed bar on the worker's clock, one held frame a case (`5138865`, logged LOOSER; 10/10 runs). **Lead full
