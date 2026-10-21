@@ -1845,10 +1845,10 @@
         ['sharpen', 'Sharpen', 'crispens the edges: Sharpen Amount (100 adds the fine detail once more)'],
       ] },
       { id: 'vdistort', name: 'Distort', items: [
-        ['transform', 'Transform', 'position, scale, rotation and opacity of its own, apart from Motion'],
+        ['transform', 'Transform', 'anchor point, position, scale, skew, rotation and opacity of its own, apart from Motion'],
       ] },
       { id: 'vtransform', name: 'Transform', items: [
-        ['crop', 'Crop', 'trims each edge to black by a percentage, with an Edge Feather'],
+        ['crop', 'Crop', 'trims each edge to black by a percentage, with an Edge Feather, or Zoom to fill the frame'],
       ] }] },
     { id: 'video', name: 'Video Transitions', folders: [
       { id: 'dissolve', name: 'Dissolve', items: [

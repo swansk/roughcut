@@ -5,8 +5,9 @@ Premiere's Effects panel › Video Effects: Blur & Sharpen › Gaussian Blur, Di
 Transform, Transform › Crop. Each is dragged from the bin onto a clip (or onto Effect
 Controls, or double-clicked with a clip selected) into that clip's Effect Controls stack,
 below Lumetri Color, with its fx toggle, order, reset, clear and a stopwatch on every
-number; the Program shows it at once (CSS on the picture's layers, effects.js `vfxLook`;
-Gaussian Blur and Sharpen in the grade canvas's shader since wave 16, test_vfx_playback.py)
+number; the Program shows it at once (the grade canvas's shader draws the stack: Gaussian Blur
+and Sharpen since wave 16, test_vfx_playback.py; Crop and Transform since wave 19,
+test_crop_transform.py; CSS only where no canvas draws, effects.js `vfxLook`)
 and the export draws the same (research/tools/assemble.py `vfx_graph`; roughcut/vfx.py
 has the schema and THE formulas; test_render_vfx.py the export's own measures). Done,
 verdict 10's words: a 10 % left Crop shows a black band in the Program and in the
@@ -191,8 +192,9 @@ def test_a_crop_dropped_on_a_clip_is_a_black_band_in_the_program_and_the_export(
     sec = pg.locator("#inspector .ec-vsec[data-kind=crop]")
     sec.wait_for()
     assert sec.locator(".ec-vname").inner_text() == "Crop"
-    assert sec.locator(".ec-row .ec-name").all_inner_texts() == ["Left", "Top", "Right", "Bottom", "Edge Feather"]
-    assert sec.locator(".ec-sw").count() == 5                  # a stopwatch each
+    # (Premiere's Zoom box between Bottom and Edge Feather: wave 19, EFFECTS2)
+    assert sec.locator(".ec-row .ec-name").all_inner_texts() == ["Left", "Top", "Right", "Bottom", "Zoom", "Edge Feather"]
+    assert sec.locator(".ec-sw").count() == 5                  # a stopwatch on each number
     type_value(pg, "left@crop", 10)
     assert pg.locator("#undo").get_attribute("title").startswith("undo: crop left")
     settle_program(pg, 0.5)
@@ -266,7 +268,9 @@ def test_a_transform_dropped_on_effect_controls_moves_the_picture_apart_from_mot
     drag(pg, "Transform", ec["x"] + ec["width"] / 2, ec["y"] + 60)
     assert pg.evaluate("effects.vfx(tl.byId('s3'))") == [{"id": "transform", "kind": "transform"}]
     sec = pg.locator("#inspector .ec-vsec[data-kind=transform]")
-    assert sec.locator(".ec-row .ec-name").all_inner_texts() == ["Position", "Scale", "Rotation", "Opacity"]
+    # (Premiere's Anchor Point, Uniform Scale, Skew and Skew Axis: wave 19, EFFECTS2)
+    assert sec.locator(".ec-row .ec-name").all_inner_texts() == ["Anchor Point", "Position", "Uniform Scale", "Scale",
+                                                                 "Skew", "Skew Axis", "Rotation", "Opacity"]
     type_value(pg, "scale@transform", 50)
     type_value(pg, "posx@transform", 1440)
     assert pg.evaluate("effects.value('scale')") == 100            # Motion untouched

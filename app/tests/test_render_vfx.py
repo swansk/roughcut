@@ -58,7 +58,8 @@ def test_the_schema_cleans_what_differs_and_refuses_what_is_not_an_effect():
     for bad, why in (
             ([{"id": "x", "kind": "wipe"}], "unknown video effect"),
             ([{"id": "crop", "kind": "crop", "params": {"left": 101}}], "Left must be 0..100"),
-            ([{"id": "crop", "kind": "crop", "params": {"zoom": 1}}], "no parameter 'zoom'"),
+            ([{"id": "crop", "kind": "crop", "params": {"angle": 1}}], "no parameter 'angle'"),
+            ([{"id": "crop", "kind": "crop", "params": {"zoom": 1}}], "zoom must be one of off, on"),
             ([{"id": "crop", "kind": "crop"}, {"id": "crop", "kind": "crop"}], "both 'crop'"),
             ([{"id": "Crop!", "kind": "crop"}], "needs an id"),
             ([{"id": "gaussian_blur", "kind": "gaussian_blur", "params": {"dimensions": "diagonal"}}], "one of"),

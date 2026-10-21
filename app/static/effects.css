@@ -234,6 +234,8 @@
 .ec-vsel .ec-vchoice { padding: 0 4px; font-size: 11.5px; color: var(--tc); background: transparent; border-color: transparent;
                        height: 20px; max-width: 100%; }
 .ec-vsel .ec-vchoice:hover { border-color: var(--line-hi); }
+/* an on / off parameter (Crop › Zoom, Transform › Uniform Scale): Premiere's checkbox */
+.ec-vsel .ec-vcheck { margin: 0 0 0 2px; width: 13px; height: 13px; accent-color: var(--tc, #4a9df8); cursor: pointer; }
 /* a video effect dragged over a clip on V1, or over Effect Controls */
 #tl .blk.vfx-drop { outline: 2px solid var(--accent, #4a9df8); outline-offset: -2px; z-index: 3; }
 #inspector.vfx-drop { outline: 2px solid var(--accent, #4a9df8); outline-offset: -2px; }
