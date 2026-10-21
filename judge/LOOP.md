@@ -49,6 +49,22 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-21 ~00:05 (box clock): **PAUSED by Karl** ("pause, turning off compute for night"). The tick cron is deleted;
+  every lane is stopped and its processes killed (no lane server, browser or port 9050-9104 left; LOOPHOLD's stress.bin and
+  STRESS.now deleted). **POLISH13 merged** (`redesign-w19-polish13` @ `50aaa08`) on its own green runs (124 passed), BUT on
+  the merged tree 3 tests failed at load 16-27 during LOOPHOLD's 4 GB stress: test_import_snap's
+  `…slow_snapshot_rebuild_never_holds_a_request` and `…clip_list_answers_from_what_is_known_during_an_import`, and
+  test_index_panel_ui's `…retunes_a_clip_and_reruns_a_selection`; the base-vs-merge A/B was stopped before it ran. **Resume
+  step 1: rerun those two files interleaved on a quiet box, merge vs `13b256b`.** Lanes at the pause (their worktrees
+  `roughcut-wt/w19-<lane>` keep everything; resume each with its brief + "continue from your branch"):
+  PLAY10 `880b072` (2 commits: a cut out of / into a slowed shot holds no frame; a dissolve out of a slowed shot plays
+  evenly; tree clean; it was finishing item 2: unverified, no report yet); WORKER: no commit, an uncommitted grade.js
+  prototype (a read-back path in the worker); LOOPHOLD: no commit, an uncommitted server.py memory-lock rewrite + a new
+  test_loop_hold.py; EFFECTS2 `5e7899a` (4 commits: Crop and Transform as Premiere has them, Horizontal / Vertical Flip,
+  Mirror, Black & White; it was A/B-ing one test_ui_flow music-duck failure). Karl still owes: the 8766 restart (frozen
+  snapshot of the judged rev, v5 proxies prebuilt into its /mnt/roughcut work copy) and whether to split the loop's
+  2026-10-14..20 rows out of his ledger. To resume: recreate the tick cron (prompt in this file's Cadence), then the steps
+  above; the next judge is verdict 16.
 - 2026-10-21 ~00:00 (box clock): **VERDICT 15 FAIL on `5138865`** (1-5, 8-16 at 9; 7 at 8; 6 at 7; the judge's gate GREEN
   in 3452 s, 1 flaky, both perf runs passed at load 6.7 / 7.2; Karl's ledger untouched at 2144 lines: punch 9 done).
   Blockers: K2-K4 (Karl's), dimension 6 (a cut out of a 0.5x shot freezes 116-133 ms 4/4; dissolves with a slowed side hold
