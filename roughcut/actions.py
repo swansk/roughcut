@@ -66,8 +66,10 @@ THE OPS (each maps to the human path named after the arrow)
                                                  rotation °, opacity %), gaussian_blur
                                                  (blurriness px, dimensions both|horizontal|
                                                  vertical), sharpen (amount: Sharpen Amount
-                                                 0..500); an on|off one also takes true /
-                                                 false (wave 19, EFFECTS2)
+                                                 0..500), mirror (ctrx / ctry px, angle °),
+                                                 horizontal_flip, vertical_flip (no values);
+                                                 an on|off one also takes true / false
+                                                 (wave 19, EFFECTS2)
   Lumetri Color
     curve         {id, channel, points}      → effects.curve  channel master|r|g|b;
                                                  points [[x, y], …] on 0..1, x increasing
@@ -190,7 +192,8 @@ CURVE_CHANNELS = {"master": "RGB master", "r": "red", "g": "green", "b": "blue"}
 
 # The Transform's pairs as its Effect Controls rows show them: pixels of a 1920×1080 frame
 VFX_PAIRS = {"position_x": ("posx", "Position X", FRAME_W), "position_y": ("posy", "Position Y", FRAME_H),
-             "anchor_x": ("ancx", "Anchor Point X", FRAME_W), "anchor_y": ("ancy", "Anchor Point Y", FRAME_H)}
+             "anchor_x": ("ancx", "Anchor Point X", FRAME_W), "anchor_y": ("ancy", "Anchor Point Y", FRAME_H),
+             "center_x": ("ctrx", "Reflection Center X", FRAME_W), "center_y": ("ctry", "Reflection Center Y", FRAME_H)}
 
 
 def vfx_params(kind: str) -> dict[str, tuple[str, float, float, str]]:

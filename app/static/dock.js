@@ -1845,6 +1845,7 @@
         ['sharpen', 'Sharpen', 'crispens the edges: Sharpen Amount (100 adds the fine detail once more)'],
       ] },
       { id: 'vdistort', name: 'Distort', items: [
+        ['mirror', 'Mirror', 'reflects one side of the picture onto the other, about a line'],
         ['transform', 'Transform', 'anchor point, position, scale, skew, rotation and opacity of its own, apart from Motion'],
       ] },
       { id: 'vtransform', name: 'Transform', items: [

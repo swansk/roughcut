@@ -155,8 +155,9 @@ def test_the_bin_lists_premieres_video_effects_and_finds_them(board):
                        "Transform", "Video Transitions", "Dissolve"], folders
     items = pg.eval_on_selector_all("#fxbin .fxb-item[data-vfx]", "els => els.map(e => [e.dataset.vfx, e.textContent.trim()])")
     # (Sharpen beside Gaussian Blur: wave 15, VIGNETTE; the flips beside Crop: wave 19, EFFECTS2)
-    assert items == [["gaussian_blur", "Gaussian Blur"], ["sharpen", "Sharpen"], ["transform", "Transform"],
-                     ["crop", "Crop"], ["horizontal_flip", "Horizontal Flip"], ["vertical_flip", "Vertical Flip"]]
+    assert items == [["gaussian_blur", "Gaussian Blur"], ["sharpen", "Sharpen"], ["mirror", "Mirror"],
+                     ["transform", "Transform"], ["crop", "Crop"], ["horizontal_flip", "Horizontal Flip"],
+                     ["vertical_flip", "Vertical Flip"]]
     q = pg.locator("#fxbinQ")
     q.fill("gaussian")
     assert [t.strip() for t in pg.locator("#fxbin .fxb-item .nm").all_inner_texts()] == ["Gaussian Blur"]

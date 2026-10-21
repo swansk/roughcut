@@ -4,6 +4,7 @@ Premiere's standard effects, in its folders and with its parameters:
 
   Blur & Sharpen › Gaussian Blur   Blurriness, Blur Dimensions
   Blur & Sharpen › Sharpen         Sharpen Amount (wave 15, VIGNETTE; verdict 11 punch 7)
+  Distort › Mirror                 Reflection Center, Reflection Angle — wave 19, EFFECTS2
   Distort › Transform              Anchor Point, Position, Uniform Scale, Scale (Height),
                                    Scale Width, Skew, Skew Axis, Rotation, Opacity (its own,
                                    apart from Motion, as Premiere has both; Anchor Point, Skew
@@ -63,6 +64,12 @@ research/tools/assemble.py `vfx_graph` are all these):
              Opacity % over black.
   Flip       Horizontal: a drawn point q = (x, y) shows the picture's (W − x, y); Vertical:
              (x, H − y) — pixel for pixel (the export's `hflip` / `vflip`).
+  Mirror     the line through C = (cx·W, cy·H), its Reflection Center, at the Reflection
+             Angle α: with n = (cos α, sin α) (y down) and d = (q − C)·n, a drawn point q
+             shows the picture's p = q − 2·max(d, 0)·n, bilinear, black outside the picture —
+             the side n points to is the other side's reflection (α = 0°: the left half
+             reflected onto the right; 90°: the top onto the bottom), and the picture is whole
+             on the line (`mirror_affine` is the reflection, its own inverse).
   Blur       a Gaussian of σ = Blurriness·W/1920 px across, down or both (Blur
              Dimensions); outside the frame reads black (Premiere's default, Repeat Edge
              Pixels off: the edges soften toward black).
@@ -145,6 +152,12 @@ KINDS: dict[str, Kind] = {
          Param("feather", "Edge Feather", 0.0, 1000.0, 0.0, " px", 3)),
         {"zoom": ("off", "on")},
         "trims the frame's edges to black, with a soft edge if you feather it, or Zoom to fill the frame"),
+    "mirror": Kind(
+        "mirror", "Mirror", "Distort",
+        (Param("center_x", "Reflection Center X", -10.0, 10.0, 0.5, "", 6),
+         Param("center_y", "Reflection Center Y", -10.0, 10.0, 0.5, "", 6),
+         Param("angle", "Reflection Angle", -3600.0, 3600.0, 0.0, "°", 3)),
+        {}, "reflects one side of the picture onto the other, about a line through the Reflection Center"),
     "horizontal_flip": Kind("horizontal_flip", "Horizontal Flip", "Transform", (), {},
                             "mirrors the picture left to right"),
     "vertical_flip": Kind("vertical_flip", "Vertical Flip", "Transform", (), {},
@@ -156,6 +169,8 @@ CHOICE_LABELS = {"dimensions": {"both": "Horizontal and Vertical", "horizontal":
                  "uniform": {"on": "Uniform Scale", "off": "Scale Height and Width apart"}}
 # the on / off ones (Premiere's checkboxes): the AI may say true / false for them
 SWITCHES = ("zoom", "uniform")
+# the x / y pairs (fractions of the frame, kept to 6 places as Motion's Position is)
+PAIRS = ("position", "anchor", "center")
 ID_RE = re.compile(r"^[a-z_]{1,24}(?:_\d{1,2})?$")
 
 
@@ -308,7 +323,7 @@ def clean_keys(raw: Any, effects: list[dict] | None) -> dict | None:
             t = round(t, 6)
             if clean_list and t <= clean_list[-1][0]:
                 raise ValueError(f"keys.{prop}: times must be sorted and distinct")
-            clean_list.append([t, round(min(p.hi, max(p.lo, v)), 6 if key.startswith(("position", "anchor")) else 3)])
+            clean_list.append([t, round(min(p.hi, max(p.lo, v)), 6 if key.startswith(PAIRS) else 3)])
         if clean_list:
             out[prop] = clean_list
     return out or None
@@ -395,3 +410,11 @@ def crop_zoom_affine(left: float, top: float, right: float, bottom: float,
         return None
     zx, zy = w / (x1 - x0), h / (y1 - y0)
     return (zx, 0.0, 0.0, zy, -x0 * zx, -y0 * zy)
+
+
+def mirror_affine(cx: float, cy: float, angle: float, w: float, h: float) -> tuple[float, float, float, float, float, float]:
+    """Mirror's reflection about its line (THE formula's), the whole of it: q ↦ q − 2((q − C)·n)n,
+    same order as `transform_affine` (it is its own inverse)."""
+    c, s = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+    k = 2.0 * (cx * w * c + cy * h * s)
+    return (1 - 2 * c * c, -2 * c * s, -2 * c * s, 1 - 2 * s * s, k * c, k * s)

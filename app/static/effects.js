@@ -243,8 +243,8 @@
     if (GROUPS[group]) return GROUPS[group];
     const a = atOf(group);
     if (!a) return null;
-    if (a[0] === 'pos') return [`position_x@${a[1]}`, `position_y@${a[1]}`];
-    return a[0] === 'anc' ? [`anchor_x@${a[1]}`, `anchor_y@${a[1]}`] : [group];
+    const pair = { pos: 'position', anc: 'anchor', ctr: 'center' }[a[0]];
+    return pair ? [`${pair}_x@${a[1]}`, `${pair}_y@${a[1]}`] : [group];
   }
   function groupName(group) {
     if (GROUP_NAME[group]) return GROUP_NAME[group];
@@ -280,7 +280,7 @@
     return keys[n - 1][1];
   }
   const valAt = (seg, kp, t) => { const k = keysOf(seg, kp); return k ? interp(k, t) : staticOf(seg, kp); };
-  const kround = (kp, v) => (/^(position|anchor)/.test(kp) ? Math.round(v * 1e6) / 1e6 : Math.round(v * 1000) / 1000);
+  const kround = (kp, v) => (/^(position|anchor|center)/.test(kp) ? Math.round(v * 1e6) / 1e6 : Math.round(v * 1000) / 1000);
   function setKeys(seg, kp, list) {
     const c = { ...ctl(seg) };
     const keys = { ...(c.keys || {}) };
@@ -347,7 +347,8 @@
     const t = keyT(seg);
     const a = atOf(kp);
     const grp = kp.startsWith('position') ? (a ? groupKps(`pos@${a[1]}`) : GROUPS.pos)
-      : a && kp.startsWith('anchor') ? groupKps(`anc@${a[1]}`) : [kp];
+      : a && kp.startsWith('anchor') ? groupKps(`anc@${a[1]}`)
+      : a && kp.startsWith('center') ? groupKps(`ctr@${a[1]}`) : [kp];
     const other = grp.filter((k) => k !== kp && keysOf(seg, k)).map((k) => [k, valAt(seg, k, t)]);
     putKey(seg, kp, t, v);
     other.forEach(([k, ov]) => { if (!keysOf(seg, k).some((x) => sameT(x[0], t))) putKey(seg, k, t, ov); });
@@ -572,6 +573,15 @@
       choices: { zoom: { label: 'Zoom', check: true, options: [['off', 'Off'], ['on', 'Zoom']],
                          hover: 'stretches what the crop keeps to fill the frame' } },
       rows: ['left', 'top', 'right', 'bottom', 'zoom', 'feather'] },
+    // Distort › Mirror (wave 19, EFFECTS2): a line through the Reflection Center at the Reflection Angle
+    mirror: { name: 'Mirror', folder: 'Distort',
+      what: 'reflects one side of the picture onto the other, about a line through the Reflection Center',
+      params: [{ key: 'center_x', label: 'Reflection Center', lo: -10, hi: 10, dflt: 0.5,
+                 hover: 'a point on the line the picture is reflected about' },
+               { key: 'center_y', label: 'Reflection Center', lo: -10, hi: 10, dflt: 0.5 },
+               { key: 'angle', label: 'Reflection Angle', lo: -3600, hi: 3600, dflt: 0, step: 0.1, digits: 1, unit: '°',
+                 hover: 'the line\'s turn: 0° reflects the left side onto the right, 90° the top onto the bottom' }],
+      choices: {}, rows: ['ctr', 'angle'] },
     // Transform › Horizontal Flip and Vertical Flip (wave 19, EFFECTS2): no parameters, as Premiere's
     horizontal_flip: { name: 'Horizontal Flip', folder: 'Transform', what: 'mirrors the picture left to right',
       params: [], choices: {}, rows: [] },
@@ -627,8 +637,9 @@
    * Position does: a pair row each (`posx` / `posy`, `ancx` / `ancy`; one stopwatch, the
    * group `pos@<id>` / `anc@<id>`). */
   const VFX_PAIRS = { posx: ['position', 'x', 'pos'], posy: ['position', 'y', 'pos'],
-                      ancx: ['anchor', 'x', 'anc'], ancy: ['anchor', 'y', 'anc'] };
-  const PAIR_LABEL = { pos: 'Position', anc: 'Anchor Point' };
+                      ancx: ['anchor', 'x', 'anc'], ancy: ['anchor', 'y', 'anc'],
+                      ctrx: ['center', 'x', 'ctr'], ctry: ['center', 'y', 'ctr'] };
+  const PAIR_LABEL = { pos: 'Position', anc: 'Anchor Point', ctr: 'Reflection Center' };
   const vfxProps = new Map();
   function vfxProp(ui, id, kind) {
     const ck = `${ui}@${id}|${kind}`;
@@ -884,6 +895,7 @@
    *   {k: 'xf', x, y, ax, ay: Position and Anchor Point (fractions), sx, sy: the scales
    *    (factors), r, sk, sa: Rotation, Skew, Skew Axis (degrees), op: Opacity / 100}
    *   {k: 'flip', h, v: 1 for a Horizontal / Vertical Flip}
+   *   {k: 'mirror', cx, cy: the Reflection Center (fractions), a: the Reflection Angle (degrees)}
    * `transform`, `clip`, `mask`, `filter` and `opacity` are their CSS stand-in, for the
    * layers no grade canvas draws (`apply`: the videos while the canvas is off — no WebGL,
    * the grade toggled off with G — and the poster still): the compositor's transform and
@@ -945,6 +957,10 @@
         }
         // Zoom: the kept box stretched to the frame
         if (z && !moveBy([FW / (x1 - x0), 0, 0, FH / (y1 - y0), -x0 * FW / (x1 - x0), -y0 * FH / (y1 - y0)])) break;
+      } else if (e.kind === 'mirror') {
+        // (no CSS stand-in: where no grade canvas draws, the picture shows unmirrored)
+        stages.push({ k: 'mirror', cx: r4(val(e, 'center_x') * 100) / 100, cy: r4(val(e, 'center_y') * 100) / 100,
+                      a: r4(val(e, 'angle') * 100) / 100 });
       } else if (e.kind === 'horizontal_flip' || e.kind === 'vertical_flip') {
         const hz = e.kind === 'horizontal_flip';
         stages.push({ k: 'flip', h: hz ? 1 : 0, v: hz ? 0 : 1 });

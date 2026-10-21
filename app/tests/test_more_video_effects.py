@@ -8,6 +8,8 @@ Program's grade canvas (a shader stage after the grade, in the stack's order: gr
 and the AI's `effect` op (test_actions_ui.py's AI-op == hand-op test):
 
   Transform › Horizontal Flip, Vertical Flip   no parameters; pixel for pixel
+  Distort › Mirror                             Reflection Center (a pair in a 1920 × 1080 frame's
+                                               px, one stopwatch), Reflection Angle
 
 roughcut/vfx.py has THE formulas. Measured here as test_crop_transform measures: the
 Program's parked picture at the frame's size against the export's frame, luma mean |Δ| under
@@ -42,7 +44,10 @@ SHOTS = [("plain", None, None),
          ("vflip", [{"id": "vertical_flip", "kind": "vertical_flip"}], None),
          ("transform then both flips", [{"id": "transform", "kind": "transform", "params": {"rotation": 10, "scale": 90}},
                                         {"id": "horizontal_flip", "kind": "horizontal_flip"},
-                                        {"id": "vertical_flip", "kind": "vertical_flip"}], None)]
+                                        {"id": "vertical_flip", "kind": "vertical_flip"}], None),
+         ("mirror", [{"id": "mirror", "kind": "mirror", "params": {"center_x": 0.4, "center_y": 0.55, "angle": 30}}], None),
+         ("mirror keyed", [{"id": "mirror", "kind": "mirror", "params": {"center_x": 0.6}}],
+          {"angle@mirror": [[0.0, 0.0], [47 / 24, 90.0]]})]
 SEGS = [{"id": f"s{i}", "clip": "STILL.MP4", "in": 1.0, "out": 3.0, "why": name,
          **({"controls": {"vfx": stack, **({"keys": keys} if keys else {})}} if stack else {})}
         for i, (name, stack, keys) in enumerate(SHOTS)]
@@ -131,6 +136,21 @@ def test_the_new_kinds_are_premieres_with_their_formulas():
         with pytest.raises(ValueError, match="has no parameter"):
             vfx.clean([{"id": kind, "kind": kind, "params": {"amount": 1}}])
     assert vfx.describe({"vfx": SHOTS[3][1]}) == "Transform scale 90, rotation 10; Horizontal Flip; Vertical Flip"
+    K = vfx.KINDS["mirror"]
+    assert (K.name, K.folder, [(p.key, p.label, p.default) for p in K.params]) == (
+        "Mirror", "Distort", [("center_x", "Reflection Center X", 0.5), ("center_y", "Reflection Center Y", 0.5),
+                              ("angle", "Reflection Angle", 0.0)])
+    # the reflection: 0° sends the right half's points to the left half's (its own inverse)
+    def at(F, x, y):
+        return F[0] * x + F[2] * y + F[4], F[1] * x + F[3] * y + F[5]
+    R = vfx.mirror_affine(0.5, 0.5, 0, 100, 100)
+    assert at(R, 80, 30) == pytest.approx((20, 30))
+    R = vfx.mirror_affine(0.5, 0.25, 90, 100, 100)
+    assert at(R, 10, 40) == pytest.approx((10, 10))
+    R = vfx.mirror_affine(0.3, 0.6, 37, 160, 90)
+    assert at(R, *at(R, 12.5, 77)) == pytest.approx((12.5, 77))
+    assert vfx.clean_keys({"center_x@mirror": [[0, 0.1234567]]}, [{"id": "mirror", "kind": "mirror"}]) == \
+        {"center_x@mirror": [[0.0, 0.123457]]}
 
 
 def test_the_programs_new_effects_are_the_exports_frame(page, proj):
@@ -163,6 +183,40 @@ def test_the_programs_new_effects_are_the_exports_frame(page, proj):
     # the flips are the picture mirrored, pixel for pixel (in the export: hflip / vflip)
     assert np.abs(shots["hflip"] - plain[:, ::-1]).mean() < 1.0
     assert np.abs(shots["vflip"] - plain[::-1]).mean() < 1.0
+    # Mirror: the kept side is the picture; the other its reflection (the keyed angle at 45°
+    # mid-shot is checked by the frame compare above)
+    m = shots["mirror"]
+    assert np.abs(luma(m[:, :200]) - luma(plain[:, :200])).mean() < 1.0
+    assert np.abs(luma(m)[200, 400:] - luma(plain)[200, 400:]).mean() > 10
+
+
+def test_mirror_in_effect_controls_reflection_center_and_its_stopwatch(page):
+    """Mirror's rows are Premiere's: Reflection Center (x and y in a 1920 × 1080 frame's
+    pixels, one stopwatch) and Reflection Angle; a typed value is one undo; the stopwatch keys
+    the centre's x and y together, and the canvas's stage follows the playhead."""
+    pg = page
+    pg.locator("#tl .blk[data-id=s0]").click()
+    pg.evaluate("effects.vfxAdd('mirror', ['s0'], { reveal: true })")
+    sec = pg.locator("#inspector .ec-vsec[data-kind=mirror]")
+    sec.wait_for()
+    assert [t.strip() for t in sec.locator(".ec-row .ec-name").all_inner_texts()] == ["Reflection Center", "Reflection Angle"]
+    assert sec.locator(".ec-sw").count() == 2
+    assert pg.evaluate("[effects.value('ctrx@mirror'), effects.value('ctry@mirror')]") == [960, 540]
+    pg.locator("#inspector .ec-v[data-k='angle@mirror']").click()
+    inp = pg.locator("#inspector .ec-v.editing[data-k='angle@mirror']")
+    inp.fill("90")
+    inp.press("Enter")
+    assert pg.locator("#undo").get_attribute("title").startswith("undo: mirror reflection angle")
+    pg.evaluate("tl.seek(tl.filmStart('s0'))")
+    pg.locator("#inspector .ec-sw[data-sw='ctr@mirror']").click()
+    assert pg.locator("#undo").get_attribute("title").startswith("undo: animate mirror reflection center")
+    pg.evaluate("tl.seek(tl.filmStart('s0') + 1)")
+    assert pg.evaluate("effects.set('ctry@mirror', 270)")
+    assert pg.evaluate("effects.keys('center_y@mirror')") == [[0, 0.5], [1, 0.25]]
+    assert pg.evaluate("effects.keys('center_x@mirror')") == [[0, 0.5], [1, 0.5]]
+    pg.evaluate("tl.seek(tl.filmStart('s0') + 0.5)")
+    pg.wait_for_function("grade.adjust && grade.adjust.vfx && grade.adjust.vfx[0].k === 'mirror'"
+                         " && Math.abs(grade.adjust.vfx[0].cy - 0.375) < 1e-3 && grade.adjust.vfx[0].a === 90")
 
 
 def test_a_flip_from_the_bin_is_one_undo_and_flips_the_program(page):

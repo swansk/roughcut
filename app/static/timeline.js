@@ -583,7 +583,7 @@
    * `b` Infinity: nothing is cut off the end. edits.py's `anchor_keys` is the twin. */
   const KEY_EPS = 1e-4;
   const kr6 = (x) => Math.round(x * 1e6) / 1e6;
-  const kval = (prop, v) => (/^(position|anchor)/.test(String(prop))   // (a Transform's Anchor Point too)
+  const kval = (prop, v) => (/^(position|anchor|center)/.test(String(prop))   // (the effects' pairs too)
     ? Math.round(v * 1e6) / 1e6 : Math.round(v * 1000) / 1000);
   function keyAt(list, t) {
     const n = list.length;

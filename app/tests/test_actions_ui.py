@@ -514,6 +514,30 @@ def test_video_effects_the_flips(browser, live_server, project):
         [{"id": "horizontal_flip", "kind": "horizontal_flip", "off": True}]]
 
 
+def test_video_effects_mirror(browser, live_server, project):
+    """Wave 19, EFFECTS2: Distort › Mirror as an `effect` op — its Reflection Center in a
+    1920×1080 frame's px and its Reflection Angle, and keyed (the centre's stopwatch keys x and
+    y together, as Position's does) — the same EDL as the hand's."""
+    ops = [{"op": "effect", "id": "shot-a", "kind": "mirror", "params": {"ctrx": 640, "angle": 90}},
+           {"op": "effect", "id": "shot-b", "kind": "mirror", "keys": {"ctry": [[0.0, 540], [1.5, 270]]}}]
+    hand = """() => {
+      const seg = (id) => tl.byId(id);
+      effects.vfxAdd('mirror', ['shot-a']);                              // dropped from the bin
+      effects.set('ctrx@mirror', 640, seg('shot-a'));                    // typed in its section
+      effects.set('angle@mirror', 90, seg('shot-a'));
+      effects.vfxAdd('mirror', ['shot-b']);
+      tl.select(['shot-b'], {source: 'click'});
+      const s = tl.filmStart('shot-b');
+      tl.seek(s + 0.0); effects.animate('ctr@mirror'); effects.set('ctry@mirror', 540, seg('shot-b'));
+      tl.seek(s + 1.5); effects.set('ctry@mirror', 270, seg('shot-b'));
+    }"""
+    ai, h, _ = ai_then_hand(browser, live_server, project, ops, hand)
+    assert ai == h
+    a, b = ai["segments"][0]["controls"], ai["segments"][1]["controls"]
+    assert a["vfx"] == [{"id": "mirror", "kind": "mirror", "params": {"center_x": 0.333333, "angle": 90.0}}]
+    assert b["keys"] == {"center_x@mirror": [[0.0, 0.5], [1.5, 0.5]], "center_y@mirror": [[0.0, 0.5], [1.5, 0.25]]}
+
+
 def test_a_video_effect_shows_on_the_program_before_accept_and_reject_writes_nothing(browser, live_server, project):
     """Dimension 15: an `effect` op under review is on the Program before it lands — the
     shot's stack in memory, the picture clipped (After) — ◐ shows it without (Before),

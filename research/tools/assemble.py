@@ -1427,6 +1427,49 @@ def transform_graph(controls: dict | None, e: dict, w: int, h: int, rate: Fracti
     return ";".join(graph) or None
 
 
+def mirror_graph(controls: dict | None, e: dict, w: int, h: int, rate: Fraction, frames: int,
+                 vin: str, vout: str, tag: str) -> str:
+    """Mirror (vfx.py THE formula): the reflection about its line is an affine map (its own
+    inverse, `mirror_affine`), so the picture reflected whole is one bilinear `affine_warp`;
+    it is laid over the picture through a mask of alpha = clip(d + 0.5, 0, 1), d the signed
+    distance past the line — a one-pixel row ramp of d (cheap at any size) turned onto the line
+    by a `perspective` warp. The mirror is continuous across its line (both sides are the same
+    picture there), so the mask's one-pixel edge never shows. Static: each warp evaluated
+    once; keyed (the centre, the angle): per frame."""
+    T = f"((in-1)*{float(1 / rate):.12g})"
+    vals = {k: _vfx_param(controls, e, k, frames, rate) for k in ("center_x", "center_y", "angle")}
+    keyed = any(ks for _, ks in vals.values())
+
+    def val(k: str):
+        v, ks = vals[k]
+        return float(v) if ks is None else lerp_expr(ks, T)
+    a = _mul(val("angle"), math.pi / 180.0)
+    co, si = _fn("cos", a), _fn("sin", a)
+    cx, cy = _mul(val("center_x"), float(w)), _mul(val("center_y"), float(h))
+    k = _mul(2.0, _add(_mul(cx, co), _mul(cy, si)))
+    R = (_add(1.0, _mul(-2.0, co, co)), _mul(-2.0, co, si), _mul(-2.0, co, si), _add(1.0, _mul(-2.0, si, si)),
+         _mul(k, co), _mul(k, si))
+    warp = affine_warp(R, w, h, f"{tag}b", f"{tag}r", keyed)
+    # the mask: output index o (point o + 0.5) reads the ramp at (w/2 + d, h/2 + t), index − 0.5;
+    # past the ramp's ends the warp holds its edge (0 kept, 255 reflected)
+    coords = []
+    for n, (ox, oy) in enumerate(((0, 0), (w, 0), (0, h), (w, h))):
+        dx, dy = _add(float(ox + 0.5), _neg(cx)), _add(float(oy + 0.5), _neg(cy))
+        d = _add(_mul(dx, co), _mul(dy, si))
+        t = _add(_mul(dy, co), _neg(_mul(dx, si)))
+        sx, sy = _add(d, w / 2.0 - 0.5), _add(t, h / 2.0 - 0.5)
+        coords.append(f"x{n}='{sx if isinstance(sx, str) else f'{sx:.9f}'}'"
+                      f":y{n}='{sy if isinstance(sy, str) else f'{sy:.9f}'}'")
+    t_ = tag
+    return (f"[{vin}]split=3[{t_}a][{t_}b][{t_}m];"
+            f"{warp};"
+            f"[{t_}m]crop={w}:2:0:0,format=gray,crop={w}:1:0:0,geq=lum='255*clip(X+1-{w / 2:g},0,1)',"
+            f"scale={w}:{h}:flags=neighbor,perspective={':'.join(coords)}:interpolation=linear:sense=source"
+            f":eval={'frame' if keyed else 'init'}[{t_}k];"
+            f"[{t_}r][{t_}k]alphamerge[{t_}f];"
+            f"[{t_}a][{t_}f]overlay=format=yuv420,format=yuv420p[{vout}]")
+
+
 def blur_graph(controls: dict | None, e: dict, w: int, h: int, rate: Fraction, frames: int,
                vin: str, vout: str, tag: str, cmd_file: Path) -> str | None:
     """Gaussian Blur: `gblur` of σ = Blurriness·W/1920 px across, down or both, on the
@@ -1520,6 +1563,8 @@ def vfx_graph(controls: dict | None, w: int, h: int, rate: Fraction, frames: int
             g = crop_graph(controls, e, w, h, rate, frames, cur, out, tag)
         elif e["kind"] == "transform":
             g = transform_graph(controls, e, w, h, rate, frames, cur, out, tag, cmd)
+        elif e["kind"] == "mirror":
+            g = mirror_graph(controls, e, w, h, rate, frames, cur, out, tag)
         elif e["kind"] in ("horizontal_flip", "vertical_flip"):
             # vfx.py's Flip: pixel for pixel (wave 19, EFFECTS2)
             g = f"[{cur}]{'hflip' if e['kind'] == 'horizontal_flip' else 'vflip'}[{out}]"
