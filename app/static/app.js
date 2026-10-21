@@ -3216,17 +3216,27 @@ function keepInFrame(v, md) {
   if (!r || !r.seg || v.classList.contains('live') || typeof VideoFrame !== 'function') return;
   const fd = frameDur(v);
   if (!(fd > 0) || txLeadIn(r.seg) > 0) return;
-  const k = Math.round(md.mediaTime / fd), kIn = Math.floor((r.seg.in + PARK_TOL_S) / fd + 1e-6);
+  const mt = md.mediaTime;
   if (v._inFrame && v._inFrame.seg !== r.seg) dropInFrame(v);
   const kept = v._inFrame ? v._inFrame.fs : [];
-  // from the in's frame on, each frame once, in turn (none before the in's; none after a gap)
-  if (k < kIn || kept.length >= IN_KEEP || (kept.length ? k !== kept[kept.length - 1].k + 1 : k !== kIn)) return;
+  // from the in's frame on, each frame once, in turn (none before the in's; none after a gap). (wave 19
+  // PLAY10) By media time, not frame number: the frame period trackFrames measures off media times
+  // (0.033367 s for 0.0333667) put the in's frame number one short past ~110 s into a clip, and from
+  // there nothing was ever kept (Killington's cut into CLIP_06, in 307.0067: in_kept never in the cutLog)
+  const last = kept.length ? kept[kept.length - 1].mt : null;
+  const turn = last == null ? isInFrame(mt, fd, r.seg) : Math.abs(mt - last - fd) < fd / 2;
+  if (kept.length >= IN_KEEP || !turn) return;
   try {
     const f = new VideoFrame(v);
-    if (Math.abs(f.timestamp / 1e6 - md.mediaTime) >= fd / 2) { f.close(); return; }
-    kept.push({ f, k });
+    if (Math.abs(f.timestamp / 1e6 - mt) >= fd / 2) { f.close(); return; }
+    kept.push({ f, mt, ed: md.expectedDisplayTime || 0 });   // (wave 19 PLAY10) when it was up (grade.cutFrame)
     v._inFrame = { fs: kept, seg: r.seg };
   } catch (e) { /* no frame to take: the cut draws the buffer's own */ }
+}
+/* Whether the frame starting at media time mt (period fd) is the one the shot's in falls in. */
+function isInFrame(mt, fd, seg) {
+  const at = seg.in + PARK_TOL_S;
+  return mt <= at + 1e-4 && mt + fd > at;
 }
 function dropInFrame(v) {
   if (!v || !v._inFrame) return;
@@ -3260,6 +3270,18 @@ window.rcPastShot = (v) => {
   const i = segs.indexOf(seg);
   if (i < 0 || !segs[i + 1] || txLeadIn(segs[i + 1]) > 0) return false;
   return p.mt >= shotEnd(seg) - 0.0005;
+};
+/* (wave 19 PLAY10, verdict 15 punch 2) For the grade's pacer (grade.js exitLeft): the clip time
+ * where buffer v's slowed shot stops being paced, playing into a plain cut: its end (shotEnd). The
+ * canvas runs a slowed shot up to two display frames behind the buffer (its pacer's margin) and gives
+ * them back over the frames before this point, so the next shot's first frame goes up on time after
+ * the shot's last. Null while not playing into a next shot, or into a dissolve. */
+window.rcPaceExit = (v) => {
+  const seg = v && v._plays;
+  if (!seg || !player.playing || player.single) return null;
+  const i = segs.indexOf(seg);
+  if (i < 0 || !segs[i + 1] || txLeadIn(segs[i + 1]) > 0) return null;
+  return shotEnd(seg);
 };
 function frameShownAt(v, t) {
   const at = shownAt(v, t);
@@ -3347,6 +3369,22 @@ function advance() {
   // grade's first picture of the shot at this cut
   const inKept = rolled && nv._inFrame && nv._inFrame.seg === nseg && txLeadIn(nseg) <= 0
     ? nv._inFrame.fs.map((x) => x.f) : null;
+  // (wave 19 PLAY10) into a slowed shot, when the in's frame is up in the buffer: kept (its frame
+  // callback's), else from the buffer's latest presented frame (trackFrames), the in's itself (keepInFrame
+  // takes none when its callback came a display frame early: the element still had the frame before) or
+  // the one before it (the in's next, a frame period on: a buffer rolled in on time, ahead_ms 0); the
+  // grade puts it up on the pacer's clock (grade.cutFrame)
+  const inRate = (nv.defaultPlaybackRate || 1) * speedOf(nseg);
+  let inAt = null;
+  if (rolled && txLeadIn(nseg) <= 0 && inRate < 0.99) {
+    const fd = frameDur(nv), p = nv._pf;
+    const pf = p && p.src === nv.dataset.src && p.moved && fd > 0 ? p : null;
+    if (inKept) inAt = { ed: nv._inFrame.fs[0].ed, mt: inKept[0].timestamp / 1e6, rate: inRate };
+    else if (pf && isInFrame(pf.mt, fd, nseg)) inAt = { ed: pf.ed, mt: pf.mt, rate: inRate };
+    else if (pf && isInFrame(pf.mt + fd, fd, nseg)) {
+      inAt = { ed: pf.ed + (fd / Math.max(0.05, nv.playbackRate)) * 1000, mt: pf.mt + fd, rate: inRate };
+    }
+  }
   if (inKept) nv._inFrame = null;
   dropInFrame(nv);
   if (rolled) {
@@ -3371,11 +3409,12 @@ function advance() {
   const short = tl.dur(nseg) < SHORT_S;
   // the last few cuts, for the judge and the perf test: prerolled or not, how long held
   const rec = { shot: next, rolled, parked, buf: nv.id, held_ms: 0, t: performance.now(),
-                kept: keep ? v.id : null, ...(player.cutAt || {}), ...(inKept ? { in_kept: inKept.length } : {}) };
-  if (inKept) {
+                kept: keep ? v.id : null, ...(player.cutAt || {}), ...(inKept ? { in_kept: inKept.length } : {}),
+                ...(inAt ? { paced_in: Math.round(inAt.ed * 10) / 10 } : {}) };
+  if (inKept || inAt) {
     const gk = gradeApi();
-    if (gk && typeof gk.cutFrame === 'function') gk.cutFrame(nv, inKept);
-    else inKept.forEach((f) => f.close());
+    if (gk && typeof gk.cutFrame === 'function') gk.cutFrame(nv, inKept || [], inAt);
+    else if (inKept) inKept.forEach((f) => f.close());
   }
   player.cutAt = null;
   player.cutLog = [...(player.cutLog || []).slice(-7), rec];

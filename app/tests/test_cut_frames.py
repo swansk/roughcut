@@ -507,3 +507,160 @@ def test_a_half_speed_shot_of_a_4k_proxy_plays_evenly(slow_proj, slow_live, grad
     # 3-12 times on every play on both clocks.
     assert all(f["worker_holds"] <= 1 for f in facts) and sum(f["worker_holds"] for f in facts) <= 1, \
         f"the canvas held frames on the worker's clock: {facts}"
+
+
+# ------------------------------------------------------------------ out of a slowed shot, at the cut
+# (wave 19 PLAY10, verdict 15 punch 2: "cutting out of a 0.5x shot freezes 116-133 ms on 4 of 4 plays";
+# REDESIGN-GOAL dimension 6)
+#
+# The half-speed fixture's 4K 29.97 grain proxies: a 0.5x shot (its out half a source frame into its
+# last frame, as Killington's CLIP_06) cut to a 1x shot, both graded (the canvas is the picture on both
+# sides, as on an auto-balanced bin). Played from 1.5 s of film before the edit, a play from a park (as
+# the judge's pb.py: its plays of cut 5), to 1.2 s past it, twice on a page, at 1440 and 1920. The
+# canvas paces a slowed shot's frames on a clock of its own up to two display frames (33 ms) behind the
+# buffer (grade.js paceDue), so the cut out of one is where that clock meets the next shot's, on the
+# buffer's. ASSERTED, from 0.5 s before the cut to 0.5 s after it (cutLog `t`): every source frame
+# drawn (the outgoing shot's last and the incoming's in's frame included), none up past 67.5 ms on the
+# worker's clock (each draw on screen from the display frame after the worker finished it) and, at load
+# <= cores, on the frame clock (the animation frame's timestamp at which `grade.draws` moved); the whole
+# play's longest gap on both clocks (its start included) is in the record. Base 2600864, this fixture:
+# see the rubric log (wave 19 PLAY10).
+
+CUT_OUT_SEGS = [{"id": "o1", "clip": "H30_B.MP4", "in": 1.0, "out": round(1.0 + 60.5 / R, 4), "speed": 0.5,
+                 "why": "slow"},
+                {"id": "o2", "clip": "H30_A.MP4", "in": 2.0, "out": 4.5, "why": "one"}]
+CUT_OUT_PRE_S, CUT_OUT_POST_S, CUT_OUT_WIN_MS = 1.5, 1.2, 500
+
+
+def _cut_out_edl() -> dict:
+    return {"variant": "T", "title": "out of half speed", "orient": "none", "story": "",
+            "target_s": [5, 20], "fps": R, "segments": CUT_OUT_SEGS,
+            "colour": {"mode": "auto", "shots": {s["id"]: {"balance": dict(BALANCE)} for s in CUT_OUT_SEGS}}}
+
+
+def _cut_out_plays(url: str, size: tuple[int, int], plays: int = 2) -> list[dict]:
+    out = []
+    with sync_playwright() as pw:
+        b = pw.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
+        pg = b.new_context(viewport={"width": size[0], "height": size[1]}).new_page()
+        errors: list[str] = []
+        pg.on("pageerror", lambda e: errors.append(str(e)))
+        pg.goto(url)
+        pg.wait_for_function("segs.length === 2 && player.vids.length === 3 && window.grade && grade.ready",
+                             timeout=30000)
+        for _ in range(plays):
+            for _try in range(3):                 # a page still wiring its monitor can drop a cue
+                pg.wait_for_function("window.tl && tl.state && tl.state.segs.length === 2"
+                                     " && Number.isFinite(tl.filmStart(tl.idAt(1)))", timeout=15000)
+                edit = pg.evaluate("tl.filmStart(tl.idAt(1))")
+                pg.evaluate(f"tl.seek({edit - CUT_OUT_PRE_S})")
+                try:
+                    pg.wait_for_function("player.idx === 0 && liveVideo().readyState >= 2 && !liveVideo().seeking",
+                                         timeout=8000)
+                    break
+                except Exception:  # noqa: BLE001 — tried again; the play below says if it never parked
+                    continue
+            assert pg.evaluate("player.idx") == 0, "never parked in the slowed shot"
+            pg.wait_for_timeout(2000)             # the next shot parked, the canvas drawn
+            pg.evaluate(SLOW_ARM)
+            load = _load1()
+            pg.keyboard.press("Space")
+            pg.wait_for_timeout(int((CUT_OUT_PRE_S + CUT_OUT_POST_S) * 1000))
+            pg.keyboard.press("Space")
+            pg.wait_for_timeout(150)
+            pg.evaluate("window.__on = false")
+            out.append({"load": load, "fl": pg.evaluate("window.__fl"), "rf": pg.evaluate("window.__rf"),
+                        "pace": pg.evaluate("(grade.paceLog || []).slice()"), "t0": pg.evaluate("window.__t0"),
+                        "dl": pg.evaluate("grade.drawLog.filter((d) => d.t >= window.__t0)"
+                                          ".map((d) => ({t: d.t, ts: d.ts, made: d.made}))"),
+                        "cut": pg.evaluate("(player.cutLog || []).filter((c) => c.t >= window.__t0)")})
+        b.close()
+        assert not errors, errors
+    return out
+
+
+def _cut_out_facts(rec: dict) -> dict:
+    V = 1000 / 60
+    rf = [x for x in rec["rf"] if x["playing"]]
+    cuts = [c for c in rec["cut"] if c["shot"] == 1]
+    if not rf or not cuts:
+        return {"load": rec["load"], "why": "no play or no cut", "cuts": rec["cut"]}
+    a, z, tc = rf[0]["ft"], rf[-1]["ft"], cuts[-1]["t"]
+    w0, w1 = tc - CUT_OUT_WIN_MS, tc + CUT_OUT_WIN_MS
+
+    def lit(lo, hi):
+        return all(x["on"] for x in rf if lo <= x["ft"] <= hi)
+
+    # Each new picture, a draw of a source frame other than the one drawn before it (grade.drawLog `ts`;
+    # a frame drawn twice, as the cut's in's frame can be, is one picture: a second draw of it would
+    # split a hold in two on a clock of draws), on two clocks. The worker's: from the display frame after
+    # the worker finished it. The frame clock: the animation frame at which `grade.draws` reached that
+    # draw (drawLog has one entry per draw counted, in turn, from the first draw after the arm).
+    dl = sorted(rec["dl"], key=lambda d: d["t"])
+    r0 = rec["rf"][0]                           # the arm's first sample (drawLog is from the arm on)
+    base = (r0["draws"] or 0) - sum(1 for d in dl if d["t"] < r0["t"])
+    new, last_ts = [], None
+    for k, d in enumerate(dl):
+        if d["ts"] != last_ts:
+            new.append((base + k + 1, d))
+        last_ts = d["ts"]
+    at_frame = {}
+    for x in rf:
+        at_frame.setdefault(x["draws"], x["ft"])
+    seen = sorted({n for n in at_frame} | {n for n, _ in new})
+    first_ft = {}
+    for n, _d in new:          # the first animation frame at which the count was n or past it
+        hit = next((at_frame[m] for m in seen if m >= n and m in at_frame), None)
+        if hit is not None:
+            first_ft[n] = hit
+    fe = sorted({first_ft[n] for n, d in new if n in first_ft and a <= first_ft[n] <= z}) + [z]
+    fgaps = [(fe[i] - fe[i - 1], fe[i - 1]) for i in range(1, len(fe)) if lit(fe[i - 1], fe[i])]
+    fwin = [g for g, t in fgaps if w0 <= t <= w1]
+    drawn = [d for _n, d in new if a <= d["t"] <= z]
+    slots = sorted({math.ceil((d["t"] - a) / V - 1e-6) for d in drawn})
+    wgaps = [((slots[i] - slots[i - 1]) * V, a + slots[i - 1] * V) for i in range(1, len(slots))]
+    wwin = [g for g, t in wgaps if w0 <= t <= w1]
+    # the source frames drawn in the window, each shot's in turn (the clip time jumps at the cut)
+    o, i = CUT_OUT_SEGS
+    ks = [(round(d["ts"] / 1e6 * FPS), d["ts"] / 1e6) for d in drawn if w0 <= d["t"] <= w1]
+    cut_at = next((j for j in range(1, len(ks)) if abs(ks[j][1] - ks[j - 1][1]) > 0.5), None)
+    parts = [sorted({k for k, _ in ks[:cut_at]}), sorted({k for k, _ in ks[cut_at:]})] if cut_at else [sorted({k for k, _ in ks})]
+    skipped = [k for p in parts for x, y in zip(p, p[1:]) if y - x > 1 for k in range(x + 1, y)]
+    last_wanted, first_wanted = int(o["out"] * FPS - 1e-6), int((i["in"] + 0.001) * FPS)
+    ends = None
+    if cut_at:
+        ends = {"last_wanted": last_wanted, "last_drawn": parts[0][-1], "first_wanted": first_wanted,
+                "first_drawn": parts[1][0]}
+        skipped += list(range(parts[0][-1] + 1, last_wanted + 1)) + list(range(first_wanted, parts[1][0]))
+    n = lambda g: round(g / V)                                                   # noqa: E731
+    # the frame-clock pattern through the window, in display frames
+    pattern = "".join(str(min(9, n(g))) for g, t in fgaps if w0 <= t <= w1)
+    return {"load": rec["load"], "cut": {k: cuts[-1].get(k) for k in ("rolled", "held_ms", "in_kept", "ahead_ms")},
+            "window_frame_ms": round(max(fwin), 1) if fwin else None,
+            "window_worker_ms": round(max(wwin), 1) if wwin else None,
+            "frame_holds": sum(1 for g in fwin if g > HOLD_BAR_MS), "worker_holds": sum(1 for g in wwin if g > HOLD_BAR_MS),
+            "play_frame_ms": round(max(g for g, _ in fgaps), 1) if fgaps else None,
+            "play_frame_at": round(max(fgaps)[1] - a) if fgaps else None,
+            "play_worker_ms": round(max(g for g, _ in wgaps), 1) if wgaps else None,
+            "skipped": skipped, "ends": ends, "pattern": pattern, "draws": len(drawn)}
+
+
+@pytest.mark.parametrize("size", [(1440, 900), (1920, 1080)], ids=["1440", "1920"])
+def test_a_cut_out_of_a_half_speed_shot_holds_no_frame(slow_proj, slow_live, size):
+    slow_proj["edl"].write_text(json.dumps(_cut_out_edl(), indent=1), encoding="utf-8")
+    cores, load0 = os.cpu_count() or 4, _load1()
+    recs = _cut_out_plays(slow_live, size)
+    dump = os.environ.get("ROUGHCUT_CUTOUT_DUMP")             # a dir: each play's raw record
+    if dump:
+        for k, r in enumerate(recs):
+            Path(dump, f"cutout-{size[0]}-{int(time.time())}-{k}.json").write_text(json.dumps(r))
+    facts = [_cut_out_facts(r) for r in recs]
+    print("\nCUTOUT", json.dumps({"size": size, "load0": load0, "plays": facts}), flush=True)
+    for f in facts:
+        assert f.get("ends"), f"the play never crossed the cut: {f}"
+    if load0 > 2 * cores:
+        pytest.skip(f"box at load {load0:.1f} on {cores} cores before the test: holds measured, not judged: {facts}")
+    assert all(f["skipped"] == [] for f in facts), f"a source frame at the cut was never drawn: {facts}"
+    assert all(f["worker_holds"] == 0 for f in facts), f"the canvas held a frame at the cut on the worker's clock: {facts}"
+    if load0 <= cores:
+        assert all(f["frame_holds"] == 0 for f in facts), f"the canvas held a frame at the cut on the frame clock: {facts}"

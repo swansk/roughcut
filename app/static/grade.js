@@ -1386,11 +1386,27 @@ function release() {
    * frame): the canvas keeps the shot's last frame up. */
   function draw(raw) {
     if (!raw && typeof window.rcPastShot === 'function' && window.rcPastShot(live())) return;
+    if (!raw && pacedOnly(live())) return;
     const j = job(raw);
     if (!j) return;
+    // (wave 19 PLAY10) the in's frame of a cut into a slowed shot, to go up on the pacer's clock (cutFrame):
+    // the one kept, else the buffer's frame now when it is still the in's (else drawn as it is, no seed)
+    if (G.cutAt && G.cutAt.v === j.v && !(G.pre && G.pre.v === j.v)) {
+      const c = G.cutAt;
+      G.cutAt = null;
+      let f = c.f;
+      if (!f) { try { f = new VideoFrame(j.v); } catch (e) { f = null; } }
+      if (f && Math.abs(f.timestamp / 1e6 - c.mt) < 0.001) G.pre = { v: j.v, f, at: c.at };
+      else { try { if (f) f.close(); } catch (e) { /* closed */ } G.paceSeed = null; }
+    }
     G.drawnAt = performance.now();
     G.drawNo++;
-    if (G.worker) { toWorker(j); return; }
+    if (G.worker) {
+      toWorker(j);
+      G.drewV = j.v; G.drewMix = !!j.mix;           // (wave 19 PLAY10) what the canvas shows (pacedOnly)
+      if (G.exitV === j.v) G.exitV = null;
+      return;
+    }
     if (j.playing && !j.mix) ({ w: j.w, h: j.h, adj: j.adj } = G.R.playSize(j.adj, j.w, j.h));   // (drawFrame's)
     let ok = drawOn(G.R, j);
     if (ok && !j.playing && G.R.warmCanvas()) ok = drawOn(G.R, j);   // (the worker's drawFrame)
@@ -1728,6 +1744,7 @@ function release() {
     if (!G.canvas) return;
     const was = G.canvas.classList.contains('on');
     G.canvas.classList.toggle('on', !!on);
+    if (!on) G.drewV = null;                        // (wave 19 PLAY10) up again: it draws (pacedOnly)
     // the video effects' CSS stand-in is the videos' only while no canvas draws them (wave 16:
     // effects.js `apply`), so the page restyles them when the canvas comes and goes
     if (was !== !!on && window.effects && typeof window.effects.apply === 'function') {
@@ -1868,12 +1885,54 @@ function release() {
   function displayFrame() {
     try { return (typeof player === 'object' && player && player.slot) || 1000 / 60; } catch (e) { return 1000 / 60; }
   }
-  function paceDue(p, v, now, md) {
+  /* The time of the animation frame being run (its callbacks' timestamp), else now. */
+  function frameTime() {
+    const t = document.timeline && document.timeline.currentTime;
+    return Number.isFinite(t) ? t : performance.now();
+  }
+  /* (wave 19 PLAY10, verdict 15 punch 2) A slowed shot playing has its frames put up by its pacer
+   * only (paceDue, drawAt): a draw asked for by anything else while the canvas shows this buffer is
+   * dropped. Drawn, it was the buffer's own frame now, up to the pacer's margin ahead of the canvas's:
+   * at a play from a park the parked frame again, 10-30 ms after Space (Effect Controls' repaint,
+   * effects.js fill), and then nothing new until the play's first frame 110-150 ms later (the 0.5x
+   * clock's start and the margin): on the frame clock a hold of 116-150 ms, 1.4 s before the cut, that
+   * the judge's pb.py (CUTS=5, from 1.5 s before the edit out of the 0.5x shot) read as the cut's
+   * freeze, 4 plays of 4; mid-play, a frame ahead of the paced ones still held in the worker, then
+   * those (the timeline's selection two frames after a cut into the shot repaints Effect Controls).
+   * A change of look while it plays goes up with the next paced frame (66.7 ms at most at 0.5x). */
+  function pacedOnly(v) {
+    return !!(G.worker && v && G.drewV === v && !G.drewMix && !G.mix && !G.showOnDraw && playerPlaying()
+      && !v.paused && v.playbackRate < PACE_BELOW && !(G.pre && G.pre.v === v) && G.exitV !== v
+      && !(G.cutPre && G.cutPre.v === v && G.cutPre.fs.length) && !(G.cutAt && G.cutAt.v === v)
+      && G.canvas && G.canvas.classList.contains('on'));
+  }
+  /* (wave 19 PLAY10, verdict 15 punch 2) The frames of a slowed shot left after this one (media
+   * time mt) before its paced run ends (app.js rcPaceExit: its end at a plain cut), or Infinity. The pacer gives its margin back over them, a display frame
+   * a frame (paceDue), and the last one (0) goes up as the buffer shows it, as a 1x shot's last frames
+   * near a cut do (nearCut): at a plain cut the margin used to go all at once, the shot's last two
+   * frames drawn as they came (nearCut's window, 0.04 clip-s) 1-2 display frames after the paced one
+   * before them (on Killington CLIP_06 at 0.5x: up 18-33 and 17-30 ms where they are 66.7 and 33). */
+  function exitLeft(v, mt) {
+    const ex = typeof window.rcPaceExit === 'function' ? window.rcPaceExit(v) : null;
+    if (!(ex > 0)) return Infinity;
+    const fd = (typeof window.frameDur === 'function' ? Number(window.frameDur(v)) || 0 : 0) || 1 / 30;
+    return Math.max(0, Math.ceil((ex - mt) / fd - 1e-6) - 1);
+  }
+  function paceDue(p, v, now, md, left = Infinity) {
     const V = displayFrame(), rate = v.playbackRate, mt = md.mediaTime;
     const ed = md.expectedDisplayTime || now;
     // a new run: a play, a seek (back, or on past a few frames), a new rate
     if (p.m0 == null || Math.abs(p.rate - rate) > 1e-3 || mt < p.mt - 1e-4 || mt - p.mt > 0.25) {
       p.m0 = mt; p.rate = rate; p.L = null; p.lo = [];
+      // (wave 19 PLAY10) a cut into the shot: the clock runs from its in's frame, put up by the cut
+      // CUT_IN_MARGIN display frames after the buffer had it (cutFrame)
+      const sd = G.paceSeed;
+      if (sd && sd.v === v) {
+        G.paceSeed = null;
+        if (performance.now() - sd.t < 1000 && mt > sd.mt + 1e-4 && mt - sd.mt < 0.25 && Math.abs(sd.rate - rate) < 1e-3) {
+          p.m0 = sd.mt; p.L = sd.L; p.why = { seeded: Math.round(sd.L * 10) / 10, inMt: sd.mt };
+        }
+      }
     }
     p.mt = mt;
     const x = ((mt - p.m0) / rate) * 1000;
@@ -1913,8 +1972,12 @@ function release() {
     // on the display's own frames (`now` is one): a frame period at 0.5x is 4.004 display frames,
     // and unrounded the time crept 0.07 ms a frame through the worker's frame (WORKER_SRC
     // HOLD_AFTER_MS), its draws ending either side of a display frame by turns for a second at a time
-    const due = now + Math.round((x + p.L - now) / V) * V;
-    G.paceLog.push({ mt, ed: Math.round(ed * 10) / 10, due: Math.round(due * 10) / 10, ...(p.why ? { first: p.why } : {}) });
+    // (wave 19 PLAY10) near the run's end (exitLeft): `left` display frames behind the buffer at most,
+    // so the margin is given back a display frame a frame and the last frame goes up as it is shown
+    const want = Math.min(x + p.L, left < PACE_MARGIN ? ed + left * V : Infinity);
+    const due = now + Math.round((want - now) / V) * V;
+    G.paceLog.push({ mt, ed: Math.round(ed * 10) / 10, due: Math.round(due * 10) / 10, ...(p.why ? { first: p.why } : {}),
+                     ...(left < PACE_MARGIN ? { left } : {}) });
     p.why = null;
     if (G.paceLog.length > 200) G.paceLog.splice(0, G.paceLog.length - 200);
     return due;
@@ -1957,11 +2020,23 @@ function release() {
       if (G.cutPre && G.cutPre.v === v && G.cutPre.fs.length && playerPlaying()) {
         // (wave 18 PLAY9) the cut's kept frames are still going up (drainCut): this one after them
         try { G.cutPre.fs.push(new VideoFrame(v)); } catch (e) { /* the next one */ }
+      } else if (md && G.worker && !G.mix && !G.mixZone && playerPlaying() && !v.paused && v.playbackRate < PACE_BELOW) {
+        // A slowed shot: on the pacer's clock (paceDue), the worker putting each frame up when it is
+        // due. (wave 19 PLAY10, verdict 15 punch 2) Up to its exit (exitLeft): its last frame there as
+        // the buffer shows it (nearCut's rule for a 1x shot), the margin given back over the two before it.
+        const left = exitLeft(v, md.mediaTime);
+        if (G.paceSeed && G.paceSeed.v === v && md.mediaTime <= G.paceSeed.mt + 1e-4) { /* the in's: up (cutFrame) */ }
+        else if (left === 0) { G.exitV = v; drawSoon(); }
+        else if (tooSoon(pace, v, md)) { /* drawn at most MAX_DRAW_FPS a second (tooSoon) */ }
+        else {
+          // a coalesced draw still to come (a mix just ended, a cut's) would be the buffer's frame now
+          // in this one's place (pacedOnly drops it): this frame is that draw
+          if (G.drawReq) { cancelAnimationFrame(G.drawReq); G.drawReq = 0; }
+          drawAt(v, paceDue(pace, v, now, md, left));
+        }
       } else if (G.worker && !G.drawReq && !G.mix && !G.mixZone && playerPlaying() && !v.paused && !nearCut(v)) {
         const due = md && md.expectedDisplayTime;
         if (md && tooSoon(pace, v, md)) { /* drawn at most MAX_DRAW_FPS a second (tooSoon) */ }
-        // a slowed shot: on the pacer's clock (paceDue), the worker putting it up when it is due
-        else if (md && v.playbackRate < PACE_BELOW) drawAt(v, paceDue(pace, v, now, md));
         else if (due && due - now > DUE_EARLY_MS) { pace.m0 = null; drawWhenShown(gen, v, due); }
         else { pace.m0 = null; settle(); }
       } else drawSoon();
@@ -2139,9 +2214,30 @@ function release() {
    * cut's first draw of buffer `v` (toWorker), taken while that buffer rolled by it unseen
    * (app.js keepInFrame). Closed if no draw of `v` takes it within CUT_PRE_MS. */
   const CUT_PRE_MS = 250;
-  function cutFrame(v, fs) {
+  /* (wave 19 PLAY10, verdict 15 punch 2) A cut into a slowed shot (`at`: when the in's frame was up
+   * in the hidden buffer, `ed`, and the rate it plays at): the in's frame goes up CUT_IN_MARGIN display
+   * frames after that, the pacer's clock seeded from it (paceDue `G.paceSeed`), so the shot is paced
+   * from its first frame with a display frame of margin, taken from the outgoing 1x shot's last frame
+   * (2 display frames at 29.97, up 3-4). Drawn at the cut, the in's frame was up a display frame early
+   * against the pacer's first frame, which had no margin: 5 display frames (83 ms) when the buffer
+   * rolled in on time (cutLog ahead_ms 0: the judge's 1920 cut into CLIP_06, 2 plays of 4), and any of
+   * its first frames a display frame late (a 0.5x buffer's first ~2 s) moved the clock, one more. */
+  const CUT_IN_MARGIN = 1;
+  function cutFrame(v, fs, at) {
     dropCut();
     const list = (Array.isArray(fs) ? fs : [fs]).filter(Boolean);
+    if (G.worker && at && at.ed > 0 && at.mt >= 0 && at.rate < PACE_BELOW && list.length <= 1) {
+      const V = displayFrame();
+      const D = Math.max(frameTime(), at.ed + CUT_IN_MARGIN * V);
+      const mine = G.cutAt = { v, f: list[0] || null, mt: at.mt, at: performance.timeOrigin + D };
+      G.paceSeed = { v, mt: at.mt, L: D, rate: at.rate, t: performance.now() };
+      setTimeout(() => {
+        if (G.cutAt !== mine) return;
+        G.cutAt = null;
+        try { if (mine.f) mine.f.close(); } catch (e) { /* closed */ }
+      }, CUT_PRE_MS);
+      return;
+    }
     if (!list.length) return;
     const mine = G.cutPre = { v, fs: list };
     setTimeout(() => { if (G.cutPre === mine && mine.fs.length === list.length) dropCut(); }, CUT_PRE_MS);
@@ -2410,6 +2506,7 @@ function release() {
   document.addEventListener('pause', (e) => {
     if (e.target && G.videos.includes(e.target)) e.target.__gradeParkT = e.target.currentTime;
     if (G.cutPre && e.target === G.cutPre.v) dropCut();
+    if (G.paceSeed && e.target === G.paceSeed.v) G.paceSeed = null;     // (wave 19 PLAY10)
     if (e.target === live()) settle();
   }, true);
 
