@@ -4131,12 +4131,18 @@ def _snap_build(name: str, fn: Callable[[], dict], live: Callable[[], object]) -
 
 def _snap_rebuild(name: str, fn: Callable[[], dict], live: Callable[[], object]):
     """The rebuild of `name`'s answer running now, or a new one: one at a time, unless
-    the running one began before a client's write (that request reads its write back)."""
+    the running one began before a client's write (that request reads its write back) or
+    before a change in what a late answer must share (`_snap_lag_view`: the CLI's word, the
+    first pass, the code, the backend, the settings, the bin). Wave 19 (verdict 15 punch
+    10): a status read that began after the CLI signed out joined the build begun while it
+    was signed in and answered "signed in", unmarked — a late answer by another door."""
     fut = SNAP["builds"].get(name)
     writes = SNAP["writes"]
-    if fut is None or fut.done() or getattr(fut, "writes", None) != writes:
+    view = _snap_lag_view(_snap_key())
+    if fut is None or fut.done() or getattr(fut, "writes", None) != writes \
+            or getattr(fut, "view", None) != view:
         fut = SNAP["builds"][name] = _snap_pool().submit(_snap_build, name, fn, live)
-        fut.writes = writes
+        fut.writes, fut.view = writes, view
     return fut
 
 
