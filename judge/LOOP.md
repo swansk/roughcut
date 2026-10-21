@@ -49,6 +49,14 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-10-20 ~21:30 (box clock): **PLAY9b merged** (`bfad8d3`: a play's first frame gets the pacer's margin when it is
+  not the parked one: the real cause of the FRAME59 x PLAY9 half-speed failures; test_cut_frames 3/10 vs 0/10). The lead
+  set the half-speed bar on the worker's clock, one held frame a case (`5138865`, logged LOOSER; 10/10 runs). **Lead full
+  gate on `5138865`: RED only on perf after the suite** (load 7.7: 1920 worker clock 76.3 ms vs 67); perf before the suite
+  passed; suite 1869 passed, 0 flaky, 0 other broken; journey 24 steps 52 s, loop hold 5 ms; boot 0.64 s. **Judge 15
+  launched on `5138865` anyway: a deviation from cadence (3)**, told to the judge to rule on: the fault is the known one
+  (frames posted to the grade worker wait 30-70 ms with the worker idle; FRAME59's 59.94 proxies may make it worse), and
+  six lanes of changes need a verdict. Wave 19 starts with it.
 - 2026-10-20 ~16:00 (box clock; the entry below stamped ~13:00 was written at ~12:00): **wave 18 fully merged**: PLAY9
   `3cd784a` (half speed paced on the canvas: slow.py plays with a hold 24/24 -> 4/24, 1440 0/12; a plain cut keeps the
   incoming's in-frames: frame lost at the cut 26/100 -> 0/40; test_tx_playback on the frame + worker clocks in frames; a 30.5
