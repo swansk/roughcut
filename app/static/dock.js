@@ -1849,6 +1849,8 @@
       ] },
       { id: 'vtransform', name: 'Transform', items: [
         ['crop', 'Crop', 'trims each edge to black by a percentage, with an Edge Feather, or Zoom to fill the frame'],
+        ['horizontal_flip', 'Horizontal Flip', 'mirrors the picture left to right'],
+        ['vertical_flip', 'Vertical Flip', 'turns the picture upside down'],
       ] }] },
     { id: 'video', name: 'Video Transitions', folders: [
       { id: 'dissolve', name: 'Dissolve', items: [

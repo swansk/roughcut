@@ -817,7 +817,7 @@
       const Ax = v.ax * w, Ay = v.ay * h;
       return [a, b, cc, dd, v.x * w - (a * Ax + cc * Ay), v.y * h - (b * Ax + dd * Ay)];
     }
-    /* Crop or Transform (`geo`) from picture S (w × h) into D, or onto the canvas when D is null. */
+    /* Crop, Transform or a Flip (`geo`) from picture S (w × h) into D, or onto the canvas when D is null. */
     function geoStage(S, D, s, w, h) {
       const P = stageProg('geo');
       target(D, w, h);
@@ -833,6 +833,9 @@
           mx = [d / det, -c / det, (c * f - d * e) / det];
           my = [-b / det, a / det, (b * e - a * f) / det];
         }
+      } else if (s.k === 'flip') {                   // pixel for pixel: a centre lands on a centre
+        if (s.h) mx = [-1, 0, w];
+        if (s.v) my = [0, -1, h];
       } else {
         const L = s.l * w, T = s.t * h, R = w - s.r * w, B = h - s.b * h;
         fe = [1 / Math.max(1e-3, (s.f || 0) * w / 1920), 1];
@@ -847,7 +850,7 @@
       gl.uniform1f(P.u_op, op);
       draw4();
     }
-    const GEO = { crop: 1, xf: 1 };
+    const GEO = { crop: 1, xf: 1, flip: 1 };
     /* The stages of `a` for a w-wide picture (σ in its px), or null: none that changes it. */
     function stagesOf(a, w) {
       const st = a && Array.isArray(a.vfx) ? a.vfx : null;
@@ -2275,7 +2278,8 @@ function release() {
    * a shot of the cut uses, once a renderer (Renderer `warmStages`), and only while the
    * Program is not playing — the build holds the worker for 10-30 ms (a software GL), which
    * at the cut into the shot, or while the shot before it played, was a held frame. */
-  const VFX_STAGE = { sharpen: 'sharp', gaussian_blur: 'blur', crop: 'geo', transform: 'geo' };
+  const VFX_STAGE = { sharpen: 'sharp', gaussian_blur: 'blur', crop: 'geo', transform: 'geo',
+                      horizontal_flip: 'geo', vertical_flip: 'geo' };
   function warmCut() {
     if (!G.ok || playerPlaying()) return;
     const t = window.tl;

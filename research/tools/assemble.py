@@ -1520,6 +1520,9 @@ def vfx_graph(controls: dict | None, w: int, h: int, rate: Fraction, frames: int
             g = crop_graph(controls, e, w, h, rate, frames, cur, out, tag)
         elif e["kind"] == "transform":
             g = transform_graph(controls, e, w, h, rate, frames, cur, out, tag, cmd)
+        elif e["kind"] in ("horizontal_flip", "vertical_flip"):
+            # vfx.py's Flip: pixel for pixel (wave 19, EFFECTS2)
+            g = f"[{cur}]{'hflip' if e['kind'] == 'horizontal_flip' else 'vflip'}[{out}]"
         elif e["kind"] == "sharpen":
             g = sharpen_graph(controls, e, w, h, rate, frames, cur, out, tag, cmd)
         else:

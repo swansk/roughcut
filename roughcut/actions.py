@@ -231,11 +231,11 @@ def schema_text() -> str:
     props = ", ".join(f"{k} ({v[1]:g}..{v[2]:g}{v[3].strip() and ' ' + v[3].strip()})"
                       for k, v in SET_PROPS.items())
     kinds = ", ".join(f"{k} ({v})" for k, v in TRANSITION_KINDS.items())
-    vfx = "; ".join(
-        f"{k} ({K.folder} › {K.name}: "
-        + ", ".join(f"{u} {lo:g}..{hi:g}{unit.rstrip()}" for u, (_, lo, hi, unit) in vfx_params(k).items())
-        + "".join(f", {c} {'|'.join(opts)}" for c, opts in K.choices.items()) + ")"
-        for k, K in vfxmod.KINDS.items())
+    def _vfx_line(k: str, K) -> str:
+        bits = [f"{u} {lo:g}..{hi:g}{unit.rstrip()}" for u, (_, lo, hi, unit) in vfx_params(k).items()]
+        bits += [f"{c} {'|'.join(opts)}" for c, opts in K.choices.items()]
+        return f"{k} ({K.folder} › {K.name}" + (f": {', '.join(bits)}" if bits else ", no values") + ")"
+    vfx = "; ".join(_vfx_line(k, K) for k, K in vfxmod.KINDS.items())
     sizes = "|".join(f'"{k}"' for k in EXPORT_SIZES)
     rates = "|".join(f'"{k}"' for k in EXPORT_RATES)
     return f"""\

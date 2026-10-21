@@ -9,6 +9,8 @@ Premiere's standard effects, in its folders and with its parameters:
                                    apart from Motion, as Premiere has both; Anchor Point, Skew
                                    and the Width wave 19, EFFECTS2)
   Transform › Crop                 Left, Top, Right, Bottom (%), Zoom (wave 19), Edge Feather
+  Transform › Horizontal Flip      (none) — wave 19, EFFECTS2
+  Transform › Vertical Flip        (none)
 
 A shot carries them in its `controls` (validated by app/server.py `clean_controls`, which
 calls `clean` and `clean_keys` here):
@@ -59,6 +61,8 @@ research/tools/assemble.py `vfx_graph` are all these):
              the picture at the source point that lands there, bilinear (Premiere's Transform
              samples bilinear); outside the moved picture is black, and the picture is
              Opacity % over black.
+  Flip       Horizontal: a drawn point q = (x, y) shows the picture's (W − x, y); Vertical:
+             (x, H − y) — pixel for pixel (the export's `hflip` / `vflip`).
   Blur       a Gaussian of σ = Blurriness·W/1920 px across, down or both (Blur
              Dimensions); outside the frame reads black (Premiere's default, Repeat Edge
              Pixels off: the edges soften toward black).
@@ -141,6 +145,10 @@ KINDS: dict[str, Kind] = {
          Param("feather", "Edge Feather", 0.0, 1000.0, 0.0, " px", 3)),
         {"zoom": ("off", "on")},
         "trims the frame's edges to black, with a soft edge if you feather it, or Zoom to fill the frame"),
+    "horizontal_flip": Kind("horizontal_flip", "Horizontal Flip", "Transform", (), {},
+                            "mirrors the picture left to right"),
+    "vertical_flip": Kind("vertical_flip", "Vertical Flip", "Transform", (), {},
+                          "turns the picture upside down (top to bottom)"),
 }
 CHOICE_LABELS = {"dimensions": {"both": "Horizontal and Vertical", "horizontal": "Horizontal",
                                 "vertical": "Vertical"},

@@ -572,6 +572,11 @@
       choices: { zoom: { label: 'Zoom', check: true, options: [['off', 'Off'], ['on', 'Zoom']],
                          hover: 'stretches what the crop keeps to fill the frame' } },
       rows: ['left', 'top', 'right', 'bottom', 'zoom', 'feather'] },
+    // Transform › Horizontal Flip and Vertical Flip (wave 19, EFFECTS2): no parameters, as Premiere's
+    horizontal_flip: { name: 'Horizontal Flip', folder: 'Transform', what: 'mirrors the picture left to right',
+      params: [], choices: {}, rows: [] },
+    vertical_flip: { name: 'Vertical Flip', folder: 'Transform', what: 'turns the picture upside down (top to bottom)',
+      params: [], choices: {}, rows: [] },
   };
   const VFX_MAX = 16;
   const vfxList = (seg) => (Array.isArray(ctl(seg).vfx) ? ctl(seg).vfx.filter((e) => e && VFX[e.kind]) : []);
@@ -878,6 +883,7 @@
    *    1920-wide frame, z: 1 when Zoom stretches the kept box to the frame}
    *   {k: 'xf', x, y, ax, ay: Position and Anchor Point (fractions), sx, sy: the scales
    *    (factors), r, sk, sa: Rotation, Skew, Skew Axis (degrees), op: Opacity / 100}
+   *   {k: 'flip', h, v: 1 for a Horizontal / Vertical Flip}
    * `transform`, `clip`, `mask`, `filter` and `opacity` are their CSS stand-in, for the
    * layers no grade canvas draws (`apply`: the videos while the canvas is off — no WebGL,
    * the grade toggled off with G — and the poster still): the compositor's transform and
@@ -939,6 +945,10 @@
         }
         // Zoom: the kept box stretched to the frame
         if (z && !moveBy([FW / (x1 - x0), 0, 0, FH / (y1 - y0), -x0 * FW / (x1 - x0), -y0 * FH / (y1 - y0)])) break;
+      } else if (e.kind === 'horizontal_flip' || e.kind === 'vertical_flip') {
+        const hz = e.kind === 'horizontal_flip';
+        stages.push({ k: 'flip', h: hz ? 1 : 0, v: hz ? 0 : 1 });
+        if (!moveBy(hz ? [-1, 0, 0, 1, FW, 0] : [1, 0, 0, -1, 0, FH])) break;
       } else if (e.kind === 'sharpen') {
         const amt = Math.max(0, val(e, 'amount'));
         if (amt <= 0.05) continue;

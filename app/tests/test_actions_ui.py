@@ -495,6 +495,25 @@ def test_video_effects_crop_zoom_and_the_transforms_anchor_and_skew(browser, liv
                          "anchor_y@transform": [[0.0, 0.5], [2.0, 0.5]]}
 
 
+def test_video_effects_the_flips(browser, live_server, project):
+    """Wave 19, EFFECTS2: Transform › Horizontal Flip and Vertical Flip as `effect` ops (no
+    values: the bin's drop), one bypassed — the same EDL as the hand's drops and fx toggle."""
+    ops = [{"op": "effect", "id": "shot-a", "kind": "horizontal_flip"},
+           {"op": "effect", "id": "shot-b", "kind": "vertical_flip"},
+           {"op": "effect", "id": "shot-c", "kind": "horizontal_flip", "on": False}]
+    hand = """() => {
+      effects.vfxAdd('horizontal_flip', ['shot-a']);                     // dropped from the bin
+      effects.vfxAdd('vertical_flip', ['shot-b']);
+      effects.vfxAdd('horizontal_flip', ['shot-c']);
+      effects.vfxAct('off', 'horizontal_flip', tl.byId('shot-c'));       // its fx toggle
+    }"""
+    ai, h, _ = ai_then_hand(browser, live_server, project, ops, hand)
+    assert ai == h
+    assert [ai["segments"][i]["controls"]["vfx"] for i in range(3)] == [
+        [{"id": "horizontal_flip", "kind": "horizontal_flip"}], [{"id": "vertical_flip", "kind": "vertical_flip"}],
+        [{"id": "horizontal_flip", "kind": "horizontal_flip", "off": True}]]
+
+
 def test_a_video_effect_shows_on_the_program_before_accept_and_reject_writes_nothing(browser, live_server, project):
     """Dimension 15: an `effect` op under review is on the Program before it lands — the
     shot's stack in memory, the picture clipped (After) — ◐ shows it without (Before),
