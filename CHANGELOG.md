@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- Verdict 15 committed (FAIL on 5138865: 15/16 at 8-9, playback at 7; the judge's gate GREEN). Wave 19 plan in judge/WAVE19.md.
 - Loop state: PLAY9b merged; gate RED only on perf after the suite; judge 15 launched as a disclosed deviation.
 - test_cut_frames' half-speed test is judged on the worker's clock (one held frame a case), the frame clock kept as its record; logged as looser in REDESIGN-GOAL.md. (Wave 18, lead.)
 - **A play's first paced frame knows the play started (redesign wave 18, lane PLAY9b).** The margin rule of the commit before still missed: a page's first play could hand the pacer the frame after the parked one before the element's `play` event fired (its park at the frame's end), so it had neither the parked frame nor a `play` to go by. app.js `playFrom` now marks the buffer it starts (`_playStart`), the canvas's parked draw records its frame's exact media time, and the pacer's first frame takes the margin from any of the three; dumps of 24 plays: every one started with the margin. `grade.paceLog`'s first entry of a run says why (`first`). `test_cut_frames` records each worker-clock hold as the canvas's or the buffer's (`canvas_holds`, `buffer_late_holds`: the frame came after the pacer's time) and the page's lateness in its samples; its bar is unchanged.
