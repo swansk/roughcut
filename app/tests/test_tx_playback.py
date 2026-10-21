@@ -69,7 +69,10 @@ def _too_busy() -> str | None:
 
 CLIP_S = 8.0
 DUR = 1.0                      # the dissolve: 0.5 s of handle each side
-STEMS = [("TX_A", "red"), ("TX_B", "blue"), ("TX_C", "green")]
+STEMS = [("TX_A", "red"), ("TX_B", "blue"), ("TX_C", "green"), ("TX_D", "yellow")]
+# (wave 19 PLAY10) TX_D is 29.97 (its proxy too): the half-speed dissolve's outgoing shot, a new frame
+# every 66.7 ms of film at 0.5x, as Killington's CLIP_06; the others are 59.94
+RATES = {"TX_D": "30000/1001"}
 SEGS = [
     {"clip": "TX_A.MP4", "in": 1.0, "out": 4.0, "why": "one", "id": "s1"},
     {"clip": "TX_B.MP4", "in": 2.0, "out": 5.0, "why": "two", "id": "s2"},
@@ -81,15 +84,15 @@ BALANCE = {"gain": [1.06, 1.0, 0.94], "exposure": 1.05, "knee": 0.8, "lift": 0.0
 PRE_S, POST_S = 1.6, 1.3       # played from 1.6 s before the edit to 1.3 s after it
 
 
-def _make_source(path: Path, colour: str) -> None:
+def _make_source(path: Path, colour: str, rate: str = FPS) -> None:
     """A 3840x2160 59.94 H.264 source with a keyframe every second, one flat colour under
     test_perf_latency's grain (so its proxy runs at a real proxy's bitrate and the mean of
-    the picture is the colour's)."""
-    gop = "60"
+    the picture is the colour's); `rate` another frame rate (a keyframe a second still)."""
+    gop = "60" if rate == FPS else "30"
     subprocess.run(
         ["ffmpeg", "-v", "error", "-y", "-nostdin",
          "-f", "lavfi", "-i",
-         f"color=c={colour}:size=1280x720:rate={FPS}:duration={CLIP_S},"
+         f"color=c={colour}:size=1280x720:rate={rate}:duration={CLIP_S},"
          f"noise=alls={GRAIN}:allf=t,scale={SRC_W}:{SRC_H}",
          "-f", "lavfi", "-i", f"sine=frequency=440:duration={CLIP_S}",
          "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
@@ -114,7 +117,7 @@ def tx_project(tmp_path_factory):
     for d in (footage, sidecars, work):
         d.mkdir()
     with ThreadPoolExecutor(len(STEMS)) as ex:
-        list(ex.map(lambda sc: _make_source(footage / f"{sc[0]}.MP4", sc[1]), STEMS))
+        list(ex.map(lambda sc: _make_source(footage / f"{sc[0]}.MP4", sc[1], RATES.get(sc[0], FPS)), STEMS))
     for stem, _c in STEMS:
         side = _sidecar(stem)
         side["duration_s"] = CLIP_S
@@ -560,6 +563,68 @@ def _canvas_check(plain):
             assert plain["canvas"]["frame_ok"], \
                 f"the graded canvas skipped or held a frame across the plain cut: {plain['canvas']} {plain}"
     return canvas
+
+
+# ------------------------------------------------------------------ a slowed side
+# (wave 19 PLAY10, verdict 15 punch 3: "dissolves out of a 0.5x shot hold on 16 of 16 plays, 83-100 ms,
+# even at load 1.5-3.3"; REDESIGN-GOAL dimension 6)
+
+SLOW_SEGS = [
+    {"clip": "TX_D.MP4", "in": 1.0, "out": 3.0, "speed": 0.5, "why": "slow", "id": "s1"},   # 4 s of film
+    {"clip": "TX_B.MP4", "in": 2.0, "out": 5.0, "why": "two", "id": "s2"},
+    {"clip": "TX_C.MP4", "in": 2.0, "out": 4.0, "why": "three", "id": "s3"},
+]
+
+
+def _slow_edl(dur: float) -> dict:
+    return {"variant": "T", "title": "tx slow", "orient": "none", "story": "", "target_s": [5, 20],
+            "segments": SLOW_SEGS, "transitions": [{**DISSOLVE, "dur": dur}],
+            "colour": {"mode": "auto", "shots": {s["id"]: {"balance": dict(BALANCE)} for s in SLOW_SEGS}}}
+
+
+@pytest.mark.parametrize("dur", [1.0, 0.4], ids=["1s", "0.4s"])
+def test_a_graded_dissolve_out_of_a_half_speed_shot_holds_no_frame(tx_project, tx_server, dur):
+    """A Cross Dissolve out of a 0.5x shot (TX_D, a 29.97 proxy: a new frame every 66.7 ms of film,
+    four display frames) into a 1x 59.94 shot, both graded, 1 s and 0.4 s: the judge's Killington
+    case (CLIP_06 at 0.5x into CLIP_07). Played from 1.6 s of film before the edit (inside the slowed
+    shot, from a park; the dissolve's zone, where the grade draws at the mix's size, starts 1.2 s
+    before its window) to 1.3 s after it. The canvas paces a slowed shot's frames (grade.js paceDue)
+    through the zone up to where the mix begins (app.js rcPaceExit), giving its two display frames
+    of margin back over the frames before it; through the mix the faster half's frames draw it (armMix)
+    with the slowed half as its buffer has it. The bar in frames, as the 1 s graded dissolve's
+    (canvas_frames, PLAY9): through the window no gap over two source frames' cadence (four display
+    frames, 66.7 ms: what pb.py's 67.5 ms bar is) on the frame clock or the worker's; and the buffers
+    and both halves parked and running before it, no follower seeking. The live buffer's and the
+    followers' own frames are in the record only: a 0.5x buffer's frames are 66.7 ms apart, 50-83 by
+    turns for its first ~2 s, which the canvas no longer shows. Base 2600864, this fixture: see the
+    rubric log (wave 19 PLAY10)."""
+    tx_project["edl"].write_text(json.dumps(_slow_edl(dur), indent=1), encoding="utf-8")
+    with sync_playwright() as pw:
+        browser, page, errors = _open(pw, tx_server)
+        try:
+            page.wait_for_function("segs[0].speed === 0.5", timeout=10000)
+            page.evaluate(f"cueAt(0, segs[0].out - {PRE_S} * tl.speedOf(segs[0]))")
+            page.wait_for_function("document.querySelector('#gradeCanvas.on')", timeout=15000)
+            busy = _too_busy()
+            with Burners(_burners()) as b:
+                rec = measure_dissolve(page)
+                rec.update(burners=b.n, graded=True, dur=dur, busy=busy, slow=True)
+            page.evaluate("pauseCut()")
+            assert errors == [], errors
+        finally:
+            browser.close()
+    print("\nTXSLOW", json.dumps(rec), flush=True)
+    log = os.environ.get("ROUGHCUT_TX_LOG")
+    if log:
+        with open(log, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(rec) + "\n")
+    assert rec["parked"], f"the buffers and both followers did not park before the window: {rec}"
+    assert rec["cut_log"] and rec["cut_log"][-1].get("rolled"), rec["cut_log"]
+    assert not [x for x in rec["seeks"] if x["v"].startswith("pvTx")] and not rec["tx_seeks"], (rec["seeks"], rec["tx_seeks"])
+    cf = rec["canvas"]
+    if not cf["frame_ok"] and busy:
+        pytest.skip(f"{busy}; measured anyway at load {rec['load_start']}: frames held {cf}")
+    assert cf["frame_ok"], f"the graded canvas held a frame through a dissolve out of a 0.5x shot: {cf} {rec}"
 
 
 # ------------------------------------------------------------------ the picture

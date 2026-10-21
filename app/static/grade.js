@@ -1906,12 +1906,14 @@ function release() {
       && !(G.cutPre && G.cutPre.v === v && G.cutPre.fs.length) && !(G.cutAt && G.cutAt.v === v)
       && G.canvas && G.canvas.classList.contains('on'));
   }
-  /* (wave 19 PLAY10, verdict 15 punch 2) The frames of a slowed shot left after this one (media
-   * time mt) before its paced run ends (app.js rcPaceExit: its end at a plain cut), or Infinity. The pacer gives its margin back over them, a display frame
+  /* (wave 19 PLAY10, verdict 15 punch 2 + 3) The frames of a slowed shot left after this one (media
+   * time mt) before its paced run ends (app.js rcPaceExit: its end at a plain cut, the start of a
+   * dissolve's mix out of it), or Infinity. The pacer gives its margin back over them, a display frame
    * a frame (paceDue), and the last one (0) goes up as the buffer shows it, as a 1x shot's last frames
    * near a cut do (nearCut): at a plain cut the margin used to go all at once, the shot's last two
    * frames drawn as they came (nearCut's window, 0.04 clip-s) 1-2 display frames after the paced one
-   * before them (on Killington CLIP_06 at 0.5x: up 18-33 and 17-30 ms where they are 66.7 and 33). */
+   * before them (on Killington CLIP_06 at 0.5x: up 18-33 and 17-30 ms where they are 66.7 and 33).
+   * Through a mix the slowed half is the buffer's own frame, drawn at the faster half's cadence. */
   function exitLeft(v, mt) {
     const ex = typeof window.rcPaceExit === 'function' ? window.rcPaceExit(v) : null;
     if (!(ex > 0)) return Infinity;
@@ -2020,10 +2022,13 @@ function release() {
       if (G.cutPre && G.cutPre.v === v && G.cutPre.fs.length && playerPlaying()) {
         // (wave 18 PLAY9) the cut's kept frames are still going up (drainCut): this one after them
         try { G.cutPre.fs.push(new VideoFrame(v)); } catch (e) { /* the next one */ }
-      } else if (md && G.worker && !G.mix && !G.mixZone && playerPlaying() && !v.paused && v.playbackRate < PACE_BELOW) {
+      } else if (md && G.worker && !G.mix && playerPlaying() && !v.paused && v.playbackRate < PACE_BELOW) {
         // A slowed shot: on the pacer's clock (paceDue), the worker putting each frame up when it is
-        // due. (wave 19 PLAY10, verdict 15 punch 2) Up to its exit (exitLeft): its last frame there as
-        // the buffer shows it (nearCut's rule for a 1x shot), the margin given back over the two before it.
+        // due. (wave 19 PLAY10, verdict 15 punch 3) Near a dissolve too (G.mixZone): drawn as they came
+        // there, from 1.2 s before the window, the buffer's early-and-late first frames were on screen
+        // (Killington, 0.4 / 1.0 s out of the 0.5x CLIP_06: 16 plays of 16 held 83-100 ms, all but two
+        // of the holds before the mix began). And up to its exit (exitLeft): its last frame there as the
+        // buffer shows it (nearCut's rule for a 1x shot), the margin given back over the two before it.
         const left = exitLeft(v, md.mediaTime);
         if (G.paceSeed && G.paceSeed.v === v && md.mediaTime <= G.paceSeed.mt + 1e-4) { /* the in's: up (cutFrame) */ }
         else if (left === 0) { G.exitV = v; drawSoon(); }
@@ -2039,6 +2044,10 @@ function release() {
         if (md && tooSoon(pace, v, md)) { /* drawn at most MAX_DRAW_FPS a second (tooSoon) */ }
         else if (due && due - now > DUE_EARLY_MS) { pace.m0 = null; drawWhenShown(gen, v, due); }
         else { pace.m0 = null; settle(); }
+      } else if (playerPlaying() && mixFaster(v) && mixDrawn() && performance.now() - G.drawnAt < MIX_LATE_MS) {
+        // (wave 19 PLAY10, verdict 15 punch 3) a dissolve whose live half is the slower (a 0.5x shot's):
+        // the faster half's frames draw the mix (armMix), the slowed half as its buffer has it then;
+        // this half's new frame draws it only when the other's are late (MIX_LATE_MS, armMix's rule)
       } else drawSoon();
       if ('requestVideoFrameCallback' in v) v.requestVideoFrameCallback(again);
       else requestAnimationFrame(again);
@@ -2070,12 +2079,24 @@ function release() {
    * frame. On time, the live buffer's callback draws and this one finds the draw recent: no
    * second draw a frame (both late together, as after a main-thread stall, drawSoon makes one). */
   const MIX_LATE_MS = 40;
+  /* (wave 19 PLAY10, verdict 15 punch 3) When this half plays faster than the live one (a dissolve
+   * into or out of a 0.5x shot: the live half's frames come every 66.7 ms, unevenly), its frames draw
+   * the mix, each one (a 29.97 half's every frame, a 59.94 one's every other, as the canvas's 30.5 a
+   * second while playing): the live half's callbacks do not (armFrames), so the mix moves at the faster
+   * half's even cadence, the slowed half as its buffer has it. Drawn by the live half's frames and this
+   * one's late rule, the mix held whenever a 0.5x frame came late. */
+  const MIX_FAST_MS = 28;
+  function mixFaster(lv) {
+    const m = G.mix && G.mix.video;
+    return !!(m && lv && m !== lv && !m.paused && m.playbackRate > lv.playbackRate + 0.01);
+  }
   function armMix(v) {
     const gen = ++G.mixGen;
     if (!v || !('requestVideoFrameCallback' in v)) return;
     const again = () => {
       if (gen !== G.mixGen || !G.mix || G.mix.video !== v) return;
-      if (playerPlaying() && mixDrawn() && performance.now() - G.drawnAt >= MIX_LATE_MS) drawSoon();
+      const late = mixFaster(live()) ? MIX_FAST_MS : MIX_LATE_MS;
+      if (playerPlaying() && mixDrawn() && performance.now() - G.drawnAt >= late) drawSoon();
       v.requestVideoFrameCallback(again);
     };
     v.requestVideoFrameCallback(again);

@@ -3271,17 +3271,24 @@ window.rcPastShot = (v) => {
   if (i < 0 || !segs[i + 1] || txLeadIn(segs[i + 1]) > 0) return false;
   return p.mt >= shotEnd(seg) - 0.0005;
 };
-/* (wave 19 PLAY10, verdict 15 punch 2) For the grade's pacer (grade.js exitLeft): the clip time
- * where buffer v's slowed shot stops being paced, playing into a plain cut: its end (shotEnd). The
- * canvas runs a slowed shot up to two display frames behind the buffer (its pacer's margin) and gives
- * them back over the frames before this point, so the next shot's first frame goes up on time after
- * the shot's last. Null while not playing into a next shot, or into a dissolve. */
+/* (wave 19 PLAY10, verdict 15 punch 2 + 3) For the grade's pacer (grade.js exitLeft): the clip time
+ * where buffer v's slowed shot stops being paced, playing: its end at a plain cut (shotEnd), or where a
+ * Cross Dissolve out of it starts to mix (its outgoing half: the out less the half, at its speed), as
+ * programMix draws it. The canvas runs a slowed shot up to two display frames behind the buffer (its
+ * pacer's margin) and gives them back over the frames before this point, so the next shot's first frame,
+ * or the mix's, goes up on time after the shot's last. Null while not playing into a next shot. */
 window.rcPaceExit = (v) => {
   const seg = v && v._plays;
   if (!seg || !player.playing || player.single) return null;
   const i = segs.indexOf(seg);
-  if (i < 0 || !segs[i + 1] || txLeadIn(segs[i + 1]) > 0) return null;
-  return shotEnd(seg);
+  if (i < 0 || !segs[i + 1]) return null;
+  const now = performance.now();
+  if (now - txHalvesMemo.at > 4) {
+    txHalvesMemo = { at: now, v: window.tl && typeof tl.transitionHalves === 'function' ? tl.transitionHalves() : [] };
+  }
+  const c = txHalvesMemo.v[i];
+  const vh = c && !TX_DIPS.has(c.vkind) ? (c.video || 0) : 0;
+  return vh > 0 ? seg.out - vh * speedOf(seg) : shotEnd(seg);
 };
 function frameShownAt(v, t) {
   const at = shownAt(v, t);
