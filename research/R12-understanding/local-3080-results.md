@@ -84,3 +84,15 @@ Strict IoU is nearly unreachable because results are fixed 2 s windows vs 0.5-4 
 - `tail ~/roughcut-loop/understand/bench/logs/run_all.log` ; finished when `~/roughcut-loop/understand/bench/out/ALL_DONE` exists (log line `=== ALL_DONE`). Dense results: out/results/<model>_<raw|lev>_dense_CLIP_NN.json (events + raw text). Check results: ..._check_...json.
 - Re-score any time: `cd ~/roughcut-loop/understand/bench && source .venv/bin/activate && python score.py` -> out/score.json (keys: telemetry_only_baseline_check, dense, check, find). The dense block is empty/partial until the runs finish; re-run this RESULTS.md table for dense after ALL_DONE (dense recall/false-alarm numbers are in score.json -> dense).
 - To restart if killed: `nohup ./run_all.sh &` (idempotent, skips finished files).
+
+## Addendum 2026-11-07 13:45: DENSE scored on all 12 clips (25.3 labelled footage-min)
+
+| variant | recall (high, n=9) | airs (n=7) | falls (n=5) | false alarms / negative-min | GPU-s per footage-min | VRAM peak |
+|---|---|---|---|---|---|---|
+| Qwen3-VL-8B raw | 0.00 | 0.00 | 0.00 | 0.78 | 56 | 9.0 GB |
+| Qwen3-VL-8B levelled | 0.11 | 0.14 | 0.00 | 0.00 | 51 | 9.0 GB |
+| Qwen3.5-4B raw | 0.22 | 0.00 | 0.40 | 0.39 | 57 | 4.9 GB |
+| Qwen3.5-4B levelled | 0.22 | 0.14 | 0.20 | 0.00 | 52 | 4.9 GB |
+
+Confirms the wave 20 plan: a dense local pass is not an event detector (telemetry alone: 0.78); keep it for captions
+inside triggered windows at most. Levelling removes its false alarms entirely on both models.
