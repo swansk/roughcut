@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- Research R12: footage-understanding bake-off (local RTX 3080 vs Claude) on Karl's checked Killington test set, and the wave 20 plan that builds the hybrid it picked.
 - Goal: Karl's K6 recorded (local 3080 + Claude hybrid footage understanding, picked on a test set).
 - Goal: Karl's K5 recorded (the first pass does not say what it is doing or at what granularity).
 - Loop state: RESUMED by Karl; POLISH13's three load-time failures rechecked (load, not a regression); EFFECTS2 ready to merge, LOOPHOLD committed short of its bar, PLAY10 and WORKER held for a quieter box.
