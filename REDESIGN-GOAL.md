@@ -144,6 +144,15 @@ tools. The bar is a Premiere editor who has never seen Roughcut and never reads 
 
 ## K. Karl's notes (verbatim, newest first; only Karl adds here, the builder may only mark one resolved with evidence)
 
+- **K6 (2026-11-07, after the footage-understanding review):** "We should enable this to use both 3080 approach and the
+  claude approach in the app. And then I need you to pull latest VLM research to see what the best approach is for us to
+  build this here. Go with the best approach and deploy it. I agree that the 3080 is free, so it is ok to spend some time
+  there, using that." **Karl's answers (2026-11-07):** deploy = the redesign branch on his 8766 preview (main / 8765 stay
+  his); default = **Hybrid**: the local RTX 3080 looks at everything densely for free, Claude double-checks only the
+  moments the cut will use, and a per-bin setting picks Local only / Claude only / Hybrid; the test set (~25 labelled
+  Killington moments + ~20 Find searches) is drafted by the builder and checked by Karl; research and 3080 trials now,
+  build lanes after the weekly usage reset. → dimensions 2, 3, 11, 13, 14 (the index), measured on the test set: the
+  approach that wins is the one that scores best on it, not the one that sounds best.
 - **K5 (2026-11-07, after clicking Run first pass on Killington on his 8766 preview, `389df7e`):** "when I click run first
   pass for killington, I am not really sure what it is doing, or what level of indexing is being done e.g level of
   granularity." → while it runs and after, the first pass says in plain words what each step is doing and did, and at
