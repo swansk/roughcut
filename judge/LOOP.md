@@ -49,6 +49,29 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-06 ~22:20 (box clock): **RESUMED by Karl** ("let's resume that work ... continue the work against the goals"). Tick
+  cron recreated (session-only, :13/:43). Karl opened 8766 via the launcher at 21:43: it now serves THIS worktree live
+  (`389df7e`, server and pages agree; v5 proxies rebuilding into /mnt/roughcut/work/app-redesign), so **no merges into
+  this worktree until Karl says he is done looking** (or a frozen snapshot serves 8766). Box load 40-55 all evening
+  (Wandfall tourney/bossbench/alive tests), weekly usage 67% with 2 days left: lanes run fewer at a time.
+  - **POLISH13 recheck: LOAD, not a regression.** Frozen copies `~/roughcut-loop/recheck-w19/{base=13b256b,merge=389df7e}`,
+    5 interleaved runs a side at load 22-62: test_import_snap's two cases 10/10 green both sides; test_index_panel_ui
+    `…retunes_a_clip…` failed base 3/5, merge 1/5 (a fixed 10 s `wait_for_selector('#progress .job[data-kind="index"]')`
+    timeout at load > ~50). Resume step 1 closed. Follow-up: that 10 s wait.
+  - **EFFECTS2 (punch 8): DONE on its branch, ready to merge** (`5e7899a`, 4 commits, tree clean). Crop (+Zoom), Transform
+    (Anchor, Uniform Scale/Width, Skew/Axis), H/V Flip, Mirror, Black & White in the bin + Effect Controls with keyframes;
+    Program == export (test_crop_transform frame compare, mean luma diff 0.97-1.43 vs plain 1.20); AI op EDL == hand op
+    (test_actions_ui 36/36). The test_ui_flow music-duck failure: 1 in a 67-test file run; alone 4/4 branch, 3/3 base at
+    load 45-47 = load flake (small sample; watch in the full gate). Proposed log: dims 7 and 15, bar unchanged.
+  - **LOOPHOLD (punch 7): committed `96c3b5d`, Done= NOT met.** lock_resident now locks every private anon map (Python
+    arenas merged into 4-8 MiB maps were skipped), relocks every 5 s, the loop never writes the log (writer thread),
+    `/api/debug/pageout` behind ROUGHCUT_DEBUG_PAGEOUT=1; test_loop_hold.py 2 tests, mutant fails both. First pass + 4 GB
+    dd + reclaim, 3 pairs at load 42-55: base slowest hold 37-46 s, fix 0.26-1.3 s; the residue reads as scheduler
+    starvation (idle select, 2-24 faults). Its PROPOSED bar change (judge by faults-per-hold, not raw slowest_loop on a
+    loaded box) is the judge's to rule on in verdict 16: NOT adopted by the lead. Owed: ~17 more pairs, a quiet-box run,
+    gate boot-check integration.
+  - **PLAY10 (`880b072`) and WORKER (uncommitted grade.js prototype): HELD** until load <= 8; their Done= bars are timing at
+    load <= 4.
 - 2026-10-21 ~00:05 (box clock): **PAUSED by Karl** ("pause, turning off compute for night"). The tick cron is deleted;
   every lane is stopped and its processes killed (no lane server, browser or port 9050-9104 left; LOOPHOLD's stress.bin and
   STRESS.now deleted). **POLISH13 merged** (`redesign-w19-polish13` @ `50aaa08`) on its own green runs (124 passed), BUT on
