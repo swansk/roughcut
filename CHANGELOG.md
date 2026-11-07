@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- Goal: Karl's K5 recorded (the first pass does not say what it is doing or at what granularity).
 - Loop state: RESUMED by Karl; POLISH13's three load-time failures rechecked (load, not a regression); EFFECTS2 ready to merge, LOOPHOLD committed short of its bar, PLAY10 and WORKER held for a quieter box.
 - Loop state: PAUSED by Karl for the night; POLISH13 merged with three load-time failures to recheck; each wave 19 lane's state recorded.
 - Loop state: verdict 15 rulings and wave 19's five lanes; FOR-KARL names 5138865.

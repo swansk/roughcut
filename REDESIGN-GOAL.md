@@ -144,6 +144,13 @@ tools. The bar is a Premiere editor who has never seen Roughcut and never reads 
 
 ## K. Karl's notes (verbatim, newest first; only Karl adds here, the builder may only mark one resolved with evidence)
 
+- **K5 (2026-11-07, after clicking Run first pass on Killington on his 8766 preview, `389df7e`):** "when I click run first
+  pass for killington, I am not really sure what it is doing, or what level of indexing is being done e.g level of
+  granularity." → while it runs and after, the first pass says in plain words what each step is doing and did, and at
+  what granularity, with the numbers for this bin: what was heard (speech-to-text, word timing, the model), what was
+  looked at (one frame every N s, how many frames, at what size, by which model), which windows got close looks and
+  what share of the footage that is, and how sure each moment the cut rests on is (confirmed / seen once / unchecked /
+  contradicted). A run that only re-ranks and re-cuts on an existing index says so. Dimensions 2, 13, 16 (and K4 (a)).
 - **K4 (2026-10-19, after trying `b12b979` on his 8766 preview):** "1. it is still not clear to me what indexing was run over
   the existing footage, or how to re run / tune that 2. The previous parts where you click on the top and can get to the
   "pass" and stuff is still here... odd" → (a) the index is visible and controllable from inside the editor: which stages
