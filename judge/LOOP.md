@@ -49,6 +49,11 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-08 ~19:00: **WORKER's cap piece merged (`d31fb52`, branch redesign-w19-worker-cap 65a9035)** after its own A/B vs
+  the tip: Full 52.5-56.2 fps on the 59.94 fixture (tip 28-29; the >= 55 bar met 3 of 6 at load 2-4), Auto unchanged for
+  the first 700 ms then draws every frame once `behind` clears; half-speed identical (59/60 plays 0 holds both); graded
+  dissolve 7/10 vs 8/10 (noise; same plain-cut 50 ms hold on both arms, load 8-13). Gates GREEN 2/2; **8766 deployed on
+  `d31fb52`**. Read-back branch stays unmerged. PLAY10's final A/B still running.
 - 2026-11-08 ~18:00: **WORKER's read-back path NOT merged, on its own A/B** (hd = its head 06e8f1b vs tip 3b697a8,
   interleaved with PLAY10): graded dissolve 16/20 vs 14/20 (noise; same 50-60 ms plain-cut hold in both, load 9-15);
   test_vfx_playback identical (sharpen 83 ms holds both); half-speed REGRESSED: 50/60 plays with 0 worker-clock holds vs the
