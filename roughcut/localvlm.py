@@ -480,3 +480,61 @@ def search_ex(text, k: int = 3, clips: list[str] | None = None, ctx: Context | N
 def search(text: str, k: int = 3, clips: list[str] | None = None, ctx: Context | None = None) -> list[dict]:
     """Top-k windows {clip (stem), start, end, score} for a text query across the embedded clips."""
     return search_ex(text, k, clips, ctx)["results"].get(text, [])
+
+
+# ------------------------------------------------------------------ Find from the vectors (numpy only)
+
+def encode_texts(texts: list[str]) -> dict:
+    """{"ok", "why", "model", "vectors": {text: [floats]}} — PE-Core text vectors via the
+    subprocess (GPU lock held there). Small; the model load dominates."""
+    a = available()
+    if not a["ok"]:
+        return {"ok": False, "why": a["why"], "vectors": {}}
+    args = ["encode"]
+    for t in texts:
+        args += ["--text", t]
+    try:
+        r = _run_json(args, timeout=300)
+    except (RuntimeError, OSError, subprocess.TimeoutExpired) as exc:
+        return {"ok": False, "why": str(exc)[:200], "vectors": {}}
+    return {"ok": True, "why": "", **r}
+
+
+def load_items(directory: Path, clips: list[str] | None = None) -> list[tuple[str, np.ndarray, np.ndarray]]:
+    """[(clip stem, frame times, N x D embeddings)] from a bin's `<stem>.embed.json/.npy`."""
+    want = {Path(c).stem for c in clips} if clips else None
+    items = []
+    for j in sorted(Path(directory).glob("*.embed.json")):
+        try:
+            meta = json.loads(j.read_text(encoding="utf-8"))
+            npy = j.with_name(j.name.replace(".embed.json", ".embed.npy"))
+            if not npy.exists() or (want and meta["clip"] not in want):
+                continue
+            items.append((meta["clip"], np.array(meta["times"], dtype=float), np.load(npy)))
+        except (OSError, ValueError, KeyError):
+            continue
+    return items
+
+
+def rank_windows(q, items, k: int = 3, win: float = 2.0, nms: float = 3.0, fps: float = 2.0) -> list[dict]:
+    """The search the subprocess does (localgpu/rcgpu/embed.py search_windows), from a text vector:
+    2 s smoothing, NMS 3 s, top-k `{clip, start, end, score, t}`; `t` is the scoring frame."""
+    q = np.asarray(q, dtype=np.float32)
+    cands = []
+    for clip, t, e in items:
+        if len(t) == 0:
+            continue
+        s = e.astype(np.float32) @ q
+        w = max(1, int(round(win * fps)))
+        sm = np.convolve(s, np.ones(w) / w, mode="same")
+        cands += [(float(sm[i]), clip, float(t[i])) for i in range(len(t))]
+    cands.sort(reverse=True)
+    out: list[dict] = []
+    for sc, clip, t in cands:
+        if any(clip == o["clip"] and abs(t - o["t"]) < nms for o in out):
+            continue
+        out.append({"clip": clip, "start": round(max(0.0, t - win / 2), 2),
+                    "end": round(t + win / 2, 2), "score": round(sc, 4), "t": round(t, 2)})
+        if len(out) >= k:
+            break
+    return out

@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import tempfile
 import base64
 import contextvars
 import ctypes
@@ -3240,6 +3241,28 @@ def _find_job(job: str, query: str, clips: dict, ranked: list[dict]) -> None:
     entry.finish("done", detail=f"{n} match{'es' if n != 1 else ''} found")
 
 
+def _rerank_job(job: str, query: str, rows: list[dict]) -> None:
+    """The Claude rerank of the union's top rows (wave 20 FIND3): one call, run off the event
+    loop in its own thread, same job shape as the model Find so the client polls it alike."""
+    entry = FINDS[job]
+    try:
+        thumbs = find.thumb_maker(_verify_video, Path(tempfile.gettempdir()) / "roughcut-find-thumbs")
+        entry.note("looking at the top candidates")
+        got = find.rerank(query, rows, thumbs)
+    except inference.BudgetExceeded as exc:
+        entry.update(code=429)
+        entry.finish("failed", detail=str(exc))
+        return
+    except (inference.InferenceError, ValueError) as exc:
+        entry.update(code=502)
+        entry.finish("failed", detail=str(exc))
+        return
+    entry["found"] = {"matches": _match_rows(got["matches"]), "notes": got.get("notes", ""),
+                      "usage": got.get("usage", {})}
+    entry.complete("write")
+    entry.finish("done", detail="reranked")
+
+
 @app.get("/api/find/price")
 def api_find_price() -> JSONResponse:
     """What *Ask the model* costs on this bin, before anything is typed (INTAKE I16.0f:
@@ -3251,7 +3274,9 @@ def api_find_price() -> JSONResponse:
         return JSONResponse({"usd": None,
                              "why": "no analysed clips yet — run the audio pass first",
                              **config.cost_terms()})
-    return JSONResponse({"usd": find.projected_usd(clips), **config.cost_terms()})
+    return JSONResponse({"usd": find.projected_usd(clips),
+                         "rerank_usd": find.rerank_projected_usd(),
+                         "rerank": find.rerank_policy(verify_state()["mode"]), **config.cost_terms()})
 
 
 @app.post("/api/find")
@@ -3274,9 +3299,37 @@ async def api_find(request: Request) -> JSONResponse:
     clips, payload = _ask_clips(drop_junk=True)
     if not clips:
         raise HTTPException(400, "no analysed clips yet — run the audio pass first")
-    matches = find.lexical(query, clips)
-    resp: dict = {"matches": _match_rows(matches), "job": None,
-                  "deep_projected_usd": find.projected_usd(clips), **config.cost_terms()}
+    # The free layers: words, plus the 3080's frame search when it is installed. The latter is
+    # a subprocess that waits for the GPU lock, so it runs off the event loop.
+    ctx = local_context()
+    found = await asyncio.to_thread(
+        find.search, query, clips, local=body.get("local", True) is not False,
+        local_search=lambda t, k=3, **_: localvlm.search_ex(t, k, ctx=ctx))
+    policy = find.rerank_policy(verify_state()["mode"])
+    resp: dict = {"matches": _match_rows(found["matches"]), "job": None, "local": found["local"],
+                  "deep_projected_usd": find.projected_usd(clips),
+                  "rerank": {**policy, "usd": find.rerank_projected_usd()}, **config.cost_terms()}
+    if body.get("rerank") and body.get("deep"):
+        raise HTTPException(400, "pick one: the rerank or the whole-bin model search")
+    if body.get("rerank"):
+        if not policy["allowed"]:
+            raise HTTPException(409, "Local only never spends a Claude call - switch the bin to "
+                                     "Hybrid or Claude only to rerank")
+        if not found["matches"]:
+            raise HTTPException(400, "nothing to rerank")
+        running = next((f for f in FINDS.values() if f["state"] not in progress.TERMINAL), None)
+        if running is not None:
+            raise HTTPException(409, "a model search is already running - "
+                                     f"{running.get('detail') or running['label']}")
+        refuse_past_cap("the rerank", resp["rerank"]["usd"])
+        job = uuid.uuid4().hex[:8]
+        FINDS[job] = progress.Job(
+            "find", f"Ranking - {query[:48]}", id=job, state="running", found=None,
+            code=0, query=query, detail="looking at the top candidates")
+        FINDS[job].set_estimate(20.0, [progress.milestone("write", "judging the candidates", 1.0)],
+                                source="measured")
+        threading.Thread(target=_rerank_job, args=(job, query, found["matches"]), daemon=True).start()
+        resp["job"] = job
     if body.get("deep"):
         running = next((f for f in FINDS.values()
                         if f["state"] not in progress.TERMINAL), None)
