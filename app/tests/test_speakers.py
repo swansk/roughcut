@@ -141,3 +141,15 @@ def test_find_says_who_said_it():
     plain = find.lexical("goodbye", {"Y.MP4": {"clip": "Y.MP4", "duration": 6.0, "summary": {},
                                                "visual": {}, "transcript": [_utt(5.0, "goodbye")]}})
     assert plain[0]["why"] == "said here"
+
+
+def test_a_bystander_burst_louder_than_the_wearers_monologue_does_not_win():
+    sc = {"frame_hz": 10, "tracks": {"speech_band_db": [-26.0] * 200 + [-20.0] * 100,
+                                     "wind_dominant": [0] * 300},
+          "transcript": [_utt(1.0, " ".join(["word"] * 40)), _utt(25.0, "hey look out there")]}
+    d = {"exclusive": [{"start": 0.9, "end": 13.5, "speaker": "A"},
+                       {"start": 24.9, "end": 26.5, "speaker": "B"}]}
+    out = speakers.apply(sc, d)
+    by = {s["id"]: s for s in out["speakers"]}
+    assert by["S2"]["loudness_db"] > by["S1"]["loudness_db"]
+    assert by["S1"]["wearer"] and not by["S2"]["wearer"]

@@ -19,6 +19,9 @@ from statistics import median
 # Speakers who talk less than this cannot be trusted to be "the loudest voice": one
 # shouted word from a stranger would beat the wearer's sentence.
 MIN_TALK_S = 1.0
+# ...nor can one who talks under this share of the main talker's time: on Killington CLIP_01
+# a 2.7 s burst from a bystander was 3.5 dB louder than the wearer's 23 s monologue.
+MIN_SHARE = 0.2
 # A word with no turn under it takes the nearest turn within this many seconds.
 NEAR_S = 0.5
 # Wearer margin under which the pick is flagged as a close call.
@@ -75,7 +78,9 @@ def pick_wearer(speakers: list[dict]) -> str | None:
         s["wearer"] = False
     if not speakers:
         return None
-    pool = [s for s in speakers if s["talk_s"] >= MIN_TALK_S] or speakers
+    top = max(s["talk_s"] for s in speakers)
+    pool = [s for s in speakers
+            if s["talk_s"] >= max(MIN_TALK_S, MIN_SHARE * top)] or speakers
     ranked = sorted((s for s in pool if s.get("loudness_db") is not None),
                     key=lambda s: -s["loudness_db"])
     if not ranked:

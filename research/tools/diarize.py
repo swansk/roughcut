@@ -45,6 +45,7 @@ SR = 16000
 MODEL = "pyannote/speaker-diarization-community-1"
 NOT_AVAILABLE = 3
 BATCH = 8
+CAP_GB = 3.0            # VRAM ceiling for this process, GB
 TOKEN_FILE = Path.home() / ".config" / "roughcut" / "hf-token"
 
 
@@ -126,6 +127,11 @@ def run(path: Path, device: str, num: int | None, mx: int | None, batch: int) ->
     pipe.embedding_batch_size = batch
     load_s = time.time() - t0
     if use == "cuda":
+        # A hard ceiling on this process (the card is shared): some conv shapes make cuDNN
+        # reserve a ~9 GB autotune workspace; with a cap it picks an algorithm that fits.
+        cap = float(os.environ.get("ROUGHCUT_DIARIZE_VRAM_GB") or CAP_GB)
+        total = torch.cuda.get_device_properties(0).total_memory / 2**30
+        torch.cuda.set_per_process_memory_fraction(min(1.0, cap / total))
         torch.cuda.reset_peak_memory_stats()
     wave = torch.from_numpy(x).unsqueeze(0)
     kw = {k: v for k, v in (("num_speakers", num), ("max_speakers", mx)) if v}
