@@ -22,8 +22,13 @@ against Karl's checked test set (`research/R12-understanding/eval/*.checked.json
             the high-confidence rows and on the rows Karl confirmed (`karl: ok`)
   negatives how many of the 19 labelled negatives an event is asserted over, and false
             events per labelled-negative minute (the only minutes where precision is known)
-  find      hit@3 for the non-low queries through the app's own `find.lexical` (model
-            reranks are skipped): any overlap, and IoU >= 0.3
+  find      hit@3 for the non-low queries through the app's own `find.lexical` (the
+            `find_*` lines), and through the app's own union of lexical + the 3080's PE-Core
+            frame search (`find_union_*`, wave 20 FIND3): any overlap, and IoU >= 0.3. The union
+            is scored from `<work>/local/<bin>/*.embed.npy` and the text vectors cached in
+            `<eval>/query-vectors.json` (made once by `--refresh-vectors` on the 3080), so it
+            needs no GPU; with either missing that line says "skipped". The Claude rerank is
+            never in the gate: `--rerank` runs it (about one call per query) and reports it apart
   certainty counts by certainty of the events and held claims
 
 Scoring rules are the bake-off's (`eval/README.md`, `bench/score.py`): camera-toss is a
@@ -65,6 +70,7 @@ TOLERANCE = {
     "recall_air": ("higher", 0.05), "recall_fall": ("higher", 0.05),
     "negatives_asserted": ("lower", 1), "fa_per_neg_min": ("lower", 0.5),
     "find_overlap": ("higher", 0.05), "find_iou": ("higher", 0.05),
+    "find_union_overlap": ("higher", 0.05), "find_union_iou": ("higher", 0.05),
 }
 
 
@@ -236,6 +242,37 @@ def score_find(queries: list[dict], search) -> dict:
             "misses": misses}
 
 
+def score_rerank(queries: list[dict], usearch, work: Path, bin_name: str, cache: Path | None = None) -> dict:
+    """The Claude rerank over the union's top rows, one call per non-low query (never in the gate).
+    Thumbnails come from the bin's proxies; verdicts are cached in `cache` so a re-score is free."""
+    import tempfile
+
+    from roughcut import find as findmod
+    hi = [q for q in queries if q["confidence"] != "low"]
+    store = json.loads(cache.read_text()) if cache and cache.exists() else {}
+    proxies = work / "proxies"
+    thumbs = findmod.thumb_maker(lambda c: next((p for p in (proxies / bin_name / f"{stem(c)}.mp4", proxies / f"{stem(c)}.mp4")
+                                                 if p.is_file()), proxies / f"{stem(c)}.mp4"),
+                                 Path(tempfile.mkdtemp(prefix="find3-thumbs-")))
+    calls, usd, ranked = 0, 0.0, {}
+    for q in hi:
+        base = usearch(q["query"])
+        if q["query"] in store:
+            order = store[q["query"]]
+            ranked[q["query"]] = [base[i] for i in order if i < len(base)]
+            continue
+        got = findmod.rerank(q["query"], base, thumbs)
+        calls += 1
+        usd += got["usage"].get("projected_usd") or 0.0
+        key = {(r["clip"], r["start"], r["end"]): i for i, r in enumerate(base)}
+        store[q["query"]] = [key[(r["clip"], r["start"], r["end"])] for r in got["matches"]]
+        ranked[q["query"]] = got["matches"]
+        if cache:
+            cache.write_text(json.dumps(store))
+    res = score_find(hi, lambda qq: ranked[qq])
+    return {**res, "calls": calls, "usd": round(usd, 3)}
+
+
 # ------------------------------------------------------------------ building the predictions
 
 def _verdict_kind(row: dict) -> str | None:
@@ -320,7 +357,7 @@ def collect(work: Path, bin_name: str) -> dict:
                 "felt": preds_from_felt(felt_all),
                 "confirmed": (preds_from_felt([e for e in confirmed if e.get("source") == "telemetry"])
                               + preds_from_ranked([e for e in confirmed if e.get("source") != "telemetry"])),
-                "search": search, "state": state, "held": held, "annotated": annotated,
+                "search": search, "clips": clips, "state": state, "held": held, "annotated": annotated,
                 "ranked_raw": ranked_raw, "asserted_rows": asserted}
     finally:
         verify.set_providers()
@@ -344,21 +381,78 @@ def certainty_counts(data: dict) -> dict:
             "verdicts": len(data["state"].get("verdicts", {})), "mode": data["state"].get("mode")}
 
 
-def evaluate(work: Path, bin_name: str, eval_dir: Path) -> dict:
+VECTORS = "query-vectors.json"
+
+
+def load_vectors(eval_dir: Path) -> dict:
+    p = Path(eval_dir) / VECTORS
+    try:
+        return json.loads(p.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def refresh_vectors(eval_dir: Path, queries: list[dict]) -> str:
+    """Encode every query on the 3080 and cache the vectors next to the test set."""
+    from roughcut import localvlm
+    r = localvlm.encode_texts([q["query"] for q in queries])
+    if not r.get("ok"):
+        return f"skipped: no local stack ({r.get('why')})"
+    (Path(eval_dir) / VECTORS).write_text(json.dumps(
+        {"model": r["model"], "vectors": {t: [round(x, 4) for x in v] for t, v in r["vectors"].items()}}) + "\n")
+    return f"wrote {Path(eval_dir) / VECTORS}"
+
+
+def local_search_from(local_dir: Path, eval_dir: Path, queries: list[dict], clips: dict | None = None):
+    """(`local_search(text, k)` for `find.search`, '') built from the embeddings and the cached text
+    vectors, or (None, why) when either is missing. Pure numpy, no GPU."""
+    from roughcut import localvlm
+    items = localvlm.load_items(local_dir) if Path(local_dir).is_dir() else []
+    if not items:
+        return None, f"skipped: no frame embeddings in {local_dir} (the 3080 stage has not run)"
+    left = sorted({stem(c) for c in clips or {}} - {c for c, _, _ in items})
+    if left:
+        return None, f"skipped: the 3080 stage has embedded {len(items)} of {len(items) + len(left)} clips so far"
+    vecs = load_vectors(eval_dir).get("vectors") or {}
+    missing = [q["query"] for q in queries if q["query"] not in vecs]
+    if missing:
+        return None, f"skipped: no cached text vectors for {len(missing)} queries (run --refresh-vectors on the 3080)"
+
+    def local_search(text, k=3, **_):
+        return {"ok": True, "why": "", "results": {text: localvlm.rank_windows(vecs[text], items, k)}}
+    return local_search, ""
+
+
+def union_find(data: dict, queries: list[dict], local_dir: Path, eval_dir: Path):
+    """-> (search(query) -> ranked rows | None, skipped-why). The app's own `find.search`."""
+    from roughcut import find
+    ls, why = local_search_from(local_dir, eval_dir, queries, data.get("clips"))
+    if ls is None:
+        return None, why
+    return (lambda q: find.search(q, data["clips"], local_search=ls)["matches"]), ""
+
+
+def evaluate(work: Path, bin_name: str, eval_dir: Path, local_dir: Path | None = None,
+             rerank: bool = False, rerank_cache: Path | None = None) -> dict:
     moments, queries = load_set(eval_dir)
     data = collect(work, bin_name)
     layers = {k: score_events(moments, data[k]) for k in LAYERS}
     find = score_find(queries, data["search"])
-    return {"bin": bin_name, "work": str(work), "layers": layers, "find": find,
+    usearch, why = union_find(data, queries, local_dir or (work / "local" / bin_name), eval_dir)
+    find_union = score_find(queries, usearch) if usearch else {"skipped": why}
+    if usearch and rerank:
+        find_union["rerank"] = score_rerank(queries, usearch, work, bin_name, rerank_cache)
+    return {"bin": bin_name, "work": str(work), "layers": layers, "find": find, "find_union": find_union,
             "certainty": certainty_counts(data),
             "set": {"positives": sum(1 for m in moments if m["polarity"] == "positive"),
                     "negatives": len(negatives(moments)), "queries": len(queries)},
-            "headline": headline(layers["asserted"], find)}
+            "headline": headline(layers["asserted"], find, find_union)}
 
 
 # ------------------------------------------------------------------ headline, baseline, gate
 
-def headline(asserted: dict, find: dict) -> dict:
+def headline(asserted: dict, find: dict, find_union: dict | None = None) -> dict:
+    fu = find_union if find_union and "skipped" not in find_union else None
     r = asserted["recall"]
     pick = lambda k: (r.get(k) or [None, 0])[0]                      # noqa: E731
     return {"recall_high": pick("conf:high"), "recall_karl": pick("karl_ok"),
@@ -366,7 +460,9 @@ def headline(asserted: dict, find: dict) -> dict:
             "negatives_asserted": asserted["negatives_asserted"][0],
             "negatives_total": asserted["negatives_asserted"][1],
             "fa_per_neg_min": asserted["fa_per_neg_min"],
-            "find_overlap": find["hit3_overlap"][0], "find_iou": find["hit3_iou03"][0]}
+            "find_overlap": find["hit3_overlap"][0], "find_iou": find["hit3_iou03"][0],
+            "find_union_overlap": fu["hit3_overlap"][0] if fu else None,
+            "find_union_iou": fu["hit3_iou03"][0] if fu else None}
 
 
 def compare(base: dict, cur: dict, tol: dict | None = None) -> tuple[list[str], list[str]]:
@@ -391,7 +487,9 @@ def gate_line(res: dict, base: dict | None) -> tuple[bool, str]:
     line = (f"recall {h['recall_high']:.2f} (karl-confirmed {h['recall_karl']:.2f}; air {h['recall_air']:.2f}, "
             f"fall {h['recall_fall']:.2f}) · {h['negatives_asserted']} of {h['negatives_total']} negatives asserted · "
             f"{h['fa_per_neg_min']:.2f} false events/negative-min · Find hit@3 {h['find_overlap']:.2f} "
-            f"(IoU>=0.3 {h['find_iou']:.2f})")
+            f"(IoU>=0.3 {h['find_iou']:.2f}) · Find + 3080 "
+            + (f"{h['find_union_overlap']:.2f} (IoU>=0.3 {h['find_union_iou']:.2f})"
+               if h.get("find_union_overlap") is not None else "skipped: no local stack here"))
     if base is None:
         return True, line + " · no baseline to compare"
     bad, good = compare(base["headline"], h)
@@ -423,7 +521,18 @@ def markdown(res: dict) -> str:
     f = res["find"]
     out += ["", f"Find hit@3 (non-low queries): overlap {f['hit3_overlap'][0]} (n={f['hit3_overlap'][1]}), "
             f"IoU>=0.3 {f['hit3_iou03'][0]}; low-confidence queries: overlap {f['low_hit3_overlap'][0]} (n={f['low_hit3_overlap'][1]}). "
-            f"Misses: {', '.join(f['misses']) or 'none'}.", "",
+            f"Misses: {', '.join(f['misses']) or 'none'}."]
+    fu = res.get("find_union") or {}
+    if "skipped" in fu:
+        out += ["", f"Find + 3080: {fu['skipped']}"]
+    elif fu:
+        out += ["", f"Find + 3080 (lexical + PE-Core union): overlap {fu['hit3_overlap'][0]}, IoU>=0.3 {fu['hit3_iou03'][0]}; "
+                f"low-confidence: overlap {fu['low_hit3_overlap'][0]}. Misses: {', '.join(fu['misses']) or 'none'}."]
+        if fu.get("rerank"):
+            rr = fu["rerank"]
+            out += ["", f"Find + 3080 + Claude rerank ({rr['calls']} calls, ${rr['usd']}): overlap {rr['hit3_overlap'][0]}, "
+                    f"IoU>=0.3 {rr['hit3_iou03'][0]}. Misses: {', '.join(rr['misses']) or 'none'}."]
+    out += ["",
             f"Certainty: {json.dumps(res['certainty'])}"]
     ex = {k: v for k, v in L["asserted"]["recall"].items() if k.startswith(("extra:", "air_who:"))}
     if ex:
@@ -441,6 +550,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--eval", type=Path, default=DEFAULT_EVAL)
     ap.add_argument("--out", type=Path, default=None, help="where understanding.json / .md go (default: not written)")
     ap.add_argument("--baseline", type=Path, default=None)
+    ap.add_argument("--local", type=Path, default=None, help="where the .embed.npy files are (default <work>/local/<bin>)")
+    ap.add_argument("--refresh-vectors", action="store_true", help="encode the Find queries on the 3080 into <eval>/query-vectors.json")
+    ap.add_argument("--rerank", action="store_true", help="also score the Claude rerank (one call per non-low query; not for the gate)")
+    ap.add_argument("--rerank-cache", type=Path, default=None)
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--write-baseline", action="store_true")
     a = ap.parse_args(argv)
@@ -448,7 +561,9 @@ def main(argv: list[str] | None = None) -> int:
     if not (a.work / "telemetry" / a.bin).is_dir() and not (a.work / "visual" / a.bin).is_dir():
         print(f"understanding: skipped, no work dir for {a.bin} at {a.work}")
         return 3
-    res = evaluate(a.work, a.bin, a.eval)
+    if a.refresh_vectors:
+        print(refresh_vectors(a.eval, load_set(a.eval)[1]))
+    res = evaluate(a.work, a.bin, a.eval, a.local, rerank=a.rerank, rerank_cache=a.rerank_cache)
     if a.out:
         a.out.mkdir(parents=True, exist_ok=True)
         (a.out / "understanding.json").write_text(json.dumps(res, indent=1))
@@ -457,7 +572,8 @@ def main(argv: list[str] | None = None) -> int:
         baseline.write_text(json.dumps({"bin": res["bin"], "note": "written by tools/eval_understanding.py --write-baseline",
                                         "headline": res["headline"], "layers": {k: {kk: v for kk, v in x.items() if kk != "negatives_hit"}
                                                                                   for k, x in res["layers"].items()},
-                                        "find": {k: v for k, v in res["find"].items() if k != "misses"}}, indent=1) + "\n")
+                                        "find": {k: v for k, v in res["find"].items() if k != "misses"},
+                                        "find_union": {k: v for k, v in res["find_union"].items() if k not in ("misses", "rerank")}}, indent=1) + "\n")
         print(f"wrote {baseline}")
     base = json.loads(baseline.read_text()) if baseline.exists() else None
     ok, line = gate_line(res, base)

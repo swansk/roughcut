@@ -27,3 +27,7 @@ Ski patrol (CLIP_09 110-123) is speech only; no patroller is on screen.
 - Because precision can only be measured where I looked, quote false alarms per minute over the labelled-negative minutes, not over the whole bin (unlabelled footage may contain real events I missed).
 - Find: hit@3 if any of the top 3 results overlaps any answer window with IoU >= 0.3 (clip must match; compute IoU on seconds). Skip queries with confidence `low` in the headline and report separately.  Answer entries without a `moment` key are windows I added by hand (word queries, or places I viewed but did not label).
 - Never score a model against the `fall-10-31`, `fall-02-10`, `other-04-87`, `laugh-02-tall` rows as required finds; they are for review.
+
+## Find with the 3080 (wave 20, FIND3)
+- `query-vectors.json`: PE-Core text vectors (4 decimals) for the 22 Find queries, written by `python3 tools/eval_understanding.py --refresh-vectors` on the 3080 (re-run it whenever a query changes). With it and the bin's `<work>/local/<bin>/*.embed.npy` the gate scores the lexical + frame-search union offline, no GPU; with either missing (or the embeddings not yet covering every clip) that line says "skipped" and cannot fail the gate.
+- `baseline.json` `find_union_*`: 0.789 any-overlap hit@3, 0.474 IoU>=0.3 on the 19 non-low queries (lexical alone 0.632 / 0.421). The Claude rerank is never in the gate: `--rerank [--rerank-cache FILE]` runs it, one call per non-low query.

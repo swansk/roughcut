@@ -10,7 +10,9 @@
   "negatives_total": 19,
   "fa_per_neg_min": 2.35,
   "find_overlap": 0.632,
-  "find_iou": 0.421
+  "find_iou": 0.421,
+  "find_union_overlap": 0.789,
+  "find_union_iou": 0.474
  },
  "layers": {
   "index_raw": {
@@ -233,6 +235,24 @@
   ],
   "hit3_iou03": [
    0.421,
+   19
+  ],
+  "low_hit3_overlap": [
+   0.333,
+   3
+  ],
+  "low_hit3_iou03": [
+   0.0,
+   3
+  ]
+ },
+ "find_union": {
+  "hit3_overlap": [
+   0.789,
+   19
+  ],
+  "hit3_iou03": [
+   0.474,
    19
   ],
   "low_hit3_overlap": [
