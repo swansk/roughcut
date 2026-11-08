@@ -215,6 +215,16 @@ def _default_levelling(clip: str, times: Sequence[float]) -> list[float]:
         return [0.0] * len(times)
 
 
+def _default_local(clip: str) -> list[dict]:
+    """The 3080's checks for a clip (LOCALGPU's sidecar), [] when there is none."""
+    try:
+        from . import localvlm
+        return list(localvlm.checks(clip))
+    except Exception:                                      # noqa: BLE001
+        return []
+
+
+_LOCAL: Callable[[str], list[dict]] = _default_local
 _TELEMETRY: Callable[[str], list[dict]] = _default_telemetry
 _LEVELLING: Callable[[str, Sequence[float]], list[float]] = _default_levelling
 _FRAMES: Callable[..., Any] | None = None       # None: localvlm if there, else ffmpeg
@@ -222,9 +232,11 @@ _FRAMES: Callable[..., Any] | None = None       # None: localvlm if there, else 
 
 def set_providers(*, telemetry: Callable[[str], list[dict]] | None = None,
                   levelling: Callable[[str, Sequence[float]], list[float]] | None = None,
-                  frames: Callable[..., Any] | None = None) -> None:
+                  frames: Callable[..., Any] | None = None,
+                  local: Callable[[str], list[dict]] | None = None) -> None:
     """Replace a provider; None puts the default back. Tests and the eval script use it."""
-    global _TELEMETRY, _LEVELLING, _FRAMES
+    global _TELEMETRY, _LEVELLING, _FRAMES, _LOCAL
+    _LOCAL = local or _default_local
     _TELEMETRY = telemetry or _default_telemetry
     _LEVELLING = levelling or _default_levelling
     _FRAMES = frames
@@ -238,7 +250,7 @@ def local_available() -> bool:
     """Whether a local model stack (GPU) is installed and usable here."""
     try:
         from . import localvlm
-        return bool(localvlm.available())
+        return bool(localvlm.available().get("ok"))
     except Exception:                                      # noqa: BLE001
         return False
 
@@ -358,14 +370,76 @@ def telemetry_events_for(clips: Iterable[str]) -> list[dict]:
     default fields a row always has."""
     out = []
     for clip in clips:
+        rows = []
         for e in telemetry_for(clip):
             row = dict(e)
             row.setdefault("clip", clip)
             row.setdefault("who", "wearer")
             row.setdefault("t", (float(row["start"]) + float(row["end"])) / 2)
             row["event_id"] = event_id(row)
-            out.append(row)
+            rows.append(row)
+        attach_local(rows)
+        out += rows
     return out
+
+
+LOCAL_MATCH_S = 0.5
+_LOCAL_FAMILY = {"air": "air", "impact": "down", "speed_drop": "down", "stopped": "down",
+                 "fall": "down", "crash": "down", "jump": "air"}
+
+
+def find_local(clip: str, event: dict, checks: Sequence[dict]) -> dict | None:
+    """The 3080's check of this same candidate: same kind family, `t` within 0.5 s."""
+    fam = _LOCAL_FAMILY.get(str(event.get("kind")))
+    t = float(event.get("t", event.get("start", 0.0)))
+    best, gap = None, LOCAL_MATCH_S + 1e-9
+    for c in checks:
+        cand = c.get("cand") or {}
+        if _LOCAL_FAMILY.get(str(cand.get("kind"))) != fam:
+            continue
+        d = abs(float(cand.get("t", c.get("t", 0.0))) - t)
+        if d < gap:
+            best, gap = c, d
+    return best
+
+
+def local_of(check: dict) -> dict:
+    return {"p_yes": check.get("p_yes"), "verdict": check.get("verdict"),
+            "model": check.get("model") or "", "frames": check.get("frames"),
+            "threshold": check.get("threshold"), "question": check.get("q")}
+
+
+def attach_local(rows: list[dict], checks: Sequence[dict] | None = None) -> None:
+    """Set row["local"] = {p_yes, verdict, model, frames} on every row the 3080 checked. An
+    air's is advisory only (R12: the local model cannot settle an air)."""
+    if not rows:
+        return
+    checks = list(checks) if checks is not None else list(_LOCAL(rows[0]["clip"]))
+    if not checks:
+        return
+    for r in rows:
+        c = find_local(r["clip"], r, checks)
+        if c is not None and c.get("p_yes") is not None:
+            r["local"] = {**local_of(c), "advisory": r.get("kind") == "air",
+                          "corroborated": corroborated(r, rows)}
+
+
+CORROBORATE_S = 3.0
+
+
+def corroborated(e: dict, rows: Sequence[dict]) -> bool:
+    """Another, different kind of sensor event of the fall family within 3 s (a speed drop
+    then a stop, a drop then a jolt): evidence the local model's "no" does not overrule."""
+    if e.get("kind") not in DOWN_TELEMETRY:
+        return False
+    for o in rows:
+        if o is e or o.get("kind") == e.get("kind") or o.get("kind") not in DOWN_TELEMETRY \
+                or o.get("handling"):
+            continue
+        if _overlaps(float(e["start"]), float(e["end"]), float(o["start"]), float(o["end"]),
+                     CORROBORATE_S):
+            return True
+    return False
 
 
 def is_checkable(e: dict) -> bool:
@@ -382,6 +456,20 @@ def local_p(e: dict) -> float | None:
         return None if v is None else float(v)
     except (TypeError, ValueError):
         return None
+
+
+def local_settles(e: dict) -> bool | None:
+    """What the 3080 settles for a fall-like event: False (not a fall: P(yes) under the
+    threshold), True (P(yes) over 0.9), None (the 0.2-0.9 band, no check, or an air: the
+    local model never settles an air)."""
+    p = local_p(e)
+    if p is None or e.get("kind") not in DOWN_TELEMETRY | {"fall", "crash"}:
+        return None
+    if p < BAND[0]:
+        return None if (e.get("local") or {}).get("corroborated") else False
+    if p > BAND[1]:
+        return True
+    return None
 
 
 def _telemetry_says_down(e: dict) -> bool:
@@ -432,8 +520,11 @@ def route(events: Sequence[dict], *, mode: str, local_ok: bool, used: Iterable[s
                 if p is not None and BAND[0] <= p <= BAND[1]:
                     reasons.append(f"the local model is unsure ({p:.2f})")
                     prio = min(prio, 3)
-                elif p is not None and (p >= LOCAL_YES) != _telemetry_says_down(e):
-                    reasons.append("the local model and the sensor disagree")
+                elif p is not None and p < BAND[0] and (e.get("local") or {}).get("corroborated"):
+                    reasons.append("the local model says no but the sensor has two signals")
+                    prio = min(prio, 3)
+                elif p is not None and p > BAND[1] and not _telemetry_says_down(e):
+                    reasons.append("the local model says fall and the sensor does not")
                     prio = min(prio, 3)
                 elif p is None and is_checkable(e):
                     reasons.append("not yet looked at by the local model")
@@ -788,11 +879,10 @@ def annotate_event(e: dict, state: dict, *, mode: str, local_ok: bool) -> dict:
             row["kind_checked"] = v["kind"]
         if v.get("who") in ("wearer", "other"):
             row["who"] = v["who"]
+    elif local_settles(row) is not None:
+        row["certainty"], row["asserted"] = "local", bool(local_settles(row))
     elif mode == "local":
         row["certainty"], row["asserted"] = "unchecked", True
-    elif (p is not None and local_ok and not (BAND[0] <= p <= BAND[1])
-          and row.get("kind") != "air"):
-        row["certainty"], row["asserted"] = "local", True
     else:
         row["certainty"], row["asserted"] = "telemetry", True
     row["evidence"] = evidence
@@ -854,6 +944,11 @@ def claim_support(m: dict, clip: str, tel: Sequence[dict], state: dict) -> dict:
     return {"claim_status": "unsupported", "supported_by": [], "claim_id": cid, "verdict": v}
 
 
+def _checker_confirmed(state: dict, clip: str, e: dict) -> bool:
+    v = state.get("verdicts", {}).get(e.get("event_id") or event_id({**e, "clip": clip}))
+    return bool(v and v["verdict"] in ("confirm", "retime"))
+
+
 def demote(moments: Sequence[dict], clip: str, state: dict,
            tel: Sequence[dict] | None = None) -> tuple[list[dict], list[dict]]:
     """Split one clip's index moments into (asserted, not asserted). Non-claims (talk,
@@ -864,6 +959,17 @@ def demote(moments: Sequence[dict], clip: str, state: dict,
     tel = list(tel) if tel is not None else telemetry_events_for([clip])
     asserted, held = [], []
     for m in moments:
+        if m.get("source") == "telemetry" and isinstance(m.get("felt"), dict):
+            f = {**m["felt"], "clip": clip}
+            same = next((t for t in tel if t.get("kind") == f.get("kind")
+                         and abs(float(t["start"]) - float(f["start"])) < 0.06), None)
+            if same is not None:
+                f = same
+            if f.get("kind") != "air" and local_settles(f) is False \
+                    and not _checker_confirmed(state, clip, f):
+                held.append({**m, "claim_status": "settled-local", "supported_by": [],
+                             "certainty": "local", "asserted": False, "local": f.get("local")})
+                continue
         if not is_claim(m):
             asserted.append(m)
             continue

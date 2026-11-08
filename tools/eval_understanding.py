@@ -321,7 +321,16 @@ def collect(work: Path, bin_name: str) -> dict:
     state = verify.load_state(verify.state_path(work, bin_name))
     prev_dir = te._DIR
     te.use_telemetry_dir(tel)
-    verify.set_providers(telemetry=lambda c: te.telemetry_events(c, tel))
+    local_dir = work / "local" / bin_name
+
+    def local_checks(clip: str) -> list[dict]:
+        try:
+            sc = json.loads((local_dir / f"{Path(clip).stem}.local.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        return [{**c, "model": sc.get("model", "")} for c in sc.get("checks") or []]
+
+    verify.set_providers(telemetry=lambda c: te.telemetry_events(c, tel), local=local_checks)
     try:
         per_clip = events.gather(vis, aud)
         raw_clips = {c: {**d, "felt": None} for c, d in per_clip.items()}

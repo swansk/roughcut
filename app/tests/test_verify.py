@@ -48,7 +48,7 @@ def test_hybrid_routes_every_air_and_only_doubtful_falls():
     sure_no = impact(t=10, local={"p_yes": 0.05}, handling=True)       # local+sensor agree: no
     band = impact(t=20, local={"p_yes": 0.5})                           # in the 0.2-0.9 band
     agree = impact(t=30, local={"p_yes": 0.95})                         # settled yes, sensor yes
-    disagree = impact(t=40, local={"p_yes": 0.05})                      # local no, sensor yes
+    disagree = impact(t=40, local={"p_yes": 0.97}, handling=True)        # local yes, sensor: handling
     rows = verify.route([a, sure_no, band, agree, disagree, riding()], mode="hybrid",
                         local_ok=True, heroes=[])
     ids = [r["event_id"] for r in rows]
@@ -434,3 +434,76 @@ def test_a_deep_looks_own_events_are_not_claims_to_demote():
     deep = {"start": 3.0, "end": 4.0, "kind": "fall", "deep": True, "what": "deep look: fell"}
     asserted, held = verify.demote([deep], "CLIP_A.MP4", {"verdicts": {}}, [])
     assert asserted == [deep] and held == []
+
+
+# ------------------------------------------------- the 3080's checks join the events
+
+def lc(kind, t, p, **kw):
+    return {"t": t, "cand": {"kind": kind, "start": t, "end": t + 0.1, "t": t}, "q": "fall",
+            "p_yes": p, "verdict": "x", "threshold": 0.2, "frames": {"n": 30}, **kw}
+
+
+def test_local_checks_join_by_kind_family_and_time_and_settle_falls():
+    no, band, yes = impact(t=10.0), impact(t=20.0), impact(t=30.0)
+    a = air(t=40.0)
+    checks = [lc("impact", 10.2, 0.04), lc("speed_drop", 20.0, 0.5), lc("impact", 30.0, 0.95),
+              lc("air", 40.0, 0.02), lc("impact", 50.0, 0.9)]
+    verify.set_providers(telemetry=lambda c: [dict(no), dict(band), dict(yes), dict(a)],
+                         local=lambda c: checks)
+    try:
+        rows = {r["event_id"]: r for r in verify.telemetry_events_for(["CLIP_A.MP4"])}
+    finally:
+        verify.set_providers()
+    assert rows[no["event_id"]]["local"]["p_yes"] == 0.04
+    assert rows[band["event_id"]]["local"]["p_yes"] == 0.5     # impact joins a speed_drop (same family)
+    assert rows[a["event_id"]]["local"]["advisory"] is True
+    st = {"verdicts": {}}
+    cert = {k: verify.annotate_event(r, st, mode="hybrid", local_ok=True) for k, r in rows.items()}
+    n, b, y, ai = (cert[x["event_id"]] for x in (no, band, yes, a))
+    assert (n["certainty"], n["asserted"]) == ("local", False)         # not a fall
+    assert (y["certainty"], y["asserted"]) == ("local", True)
+    assert b["certainty"] == "telemetry"                               # goes to Claude
+    assert ai["certainty"] == "telemetry"                              # an air is never settled locally
+    routed = verify.route(list(rows.values()), mode="hybrid", local_ok=True, heroes=[])
+    ids = {r["event_id"] for r in routed}
+    assert band["event_id"] in ids and a["event_id"] in ids
+    assert no["event_id"] not in ids and yes["event_id"] not in ids
+
+
+def test_a_local_no_does_not_overrule_two_sensor_signals():
+    drop = {"clip": "CLIP_A.MP4", "kind": "speed_drop", "start": 8.0, "end": 10.0, "t": 10.0,
+            "check": True, "source": "telemetry", "from_ms": 11.0, "to_ms": 2.0}
+    stop = {"clip": "CLIP_A.MP4", "kind": "stopped", "start": 10.0, "end": 14.0, "t": 10.0,
+            "check": True, "source": "telemetry"}
+    verify.set_providers(telemetry=lambda c: [dict(drop), dict(stop)],
+                         local=lambda c: [lc("speed_drop", 10.0, 0.04)])
+    try:
+        rows = verify.telemetry_events_for(["CLIP_A.MP4"])
+    finally:
+        verify.set_providers()
+    r = verify.annotate_event(rows[0], {"verdicts": {}}, mode="hybrid", local_ok=True)
+    assert r["certainty"] == "telemetry" and r["asserted"]
+    assert verify.route(rows, mode="hybrid", local_ok=True, heroes=[])
+
+
+def test_demote_holds_a_telemetry_row_the_local_model_settled_as_no():
+    f = impact(t=10.0)
+    row = {"clip": "CLIP_A.MP4", "start": 10.0, "end": 10.1, "kind": "crash", "source": "telemetry",
+           "status": "felt", "felt": f}
+    verify.set_providers(telemetry=lambda c: [dict(f)], local=lambda c: [lc("impact", 10.0, 0.05)])
+    try:
+        asserted, held = verify.demote([row], "CLIP_A.MP4", {"verdicts": {}})
+        ok, _ = verify.demote([row], "CLIP_A.MP4",
+                              {"verdicts": {f["event_id"]: {"verdict": "confirm"}}})
+    finally:
+        verify.set_providers()
+    assert asserted == [] and held[0]["certainty"] == "local" and not held[0]["asserted"]
+    assert len(ok) == 1 and ok[0]['asserted']                           # Claude overrules the local no
+
+
+def test_local_available_reads_the_dict(monkeypatch):
+    from roughcut import localvlm
+    monkeypatch.setattr(localvlm, "available", lambda *a, **k: {"ok": False, "why": "x"})
+    assert verify.local_available() is False
+    monkeypatch.setattr(localvlm, "available", lambda *a, **k: {"ok": True})
+    assert verify.local_available() is True
