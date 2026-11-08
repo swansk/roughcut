@@ -151,7 +151,7 @@ tools. The bar is a Premiere editor who has never seen Roughcut and never reads 
   his); default = **Hybrid**: the local RTX 3080 looks at everything densely for free, Claude double-checks only the
   moments the cut will use, and a per-bin setting picks Local only / Claude only / Hybrid; the test set (~25 labelled
   Killington moments + ~20 Find searches) is drafted by the builder and checked by Karl; research and 3080 trials now,
-  build lanes after the weekly usage reset. → dimensions 2, 3, 11, 13, 14 (the index), measured on the test set: the
+  build lanes after the weekly usage reset. **(2026-11-08):** other riders' airs count as events ("Yes, count them"). → dimensions 2, 3, 11, 13, 14 (the index), measured on the test set: the
   approach that wins is the one that scores best on it, not the one that sounds best.
 - **K5 (2026-11-07, after clicking Run first pass on Killington on his 8766 preview, `389df7e`):** "when I click run first
   pass for killington, I am not really sure what it is doing, or what level of indexing is being done e.g level of

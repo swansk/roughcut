@@ -47,6 +47,7 @@ costs ~1 GPU-hour per footage-hour (bnb nf4, no vLLM) and never reported an air:
 | K5UI | `firstpass.js`, `indexpanel.js`, flow words | while running and after: each step's what / granularity / numbers; each moment's certainty (telemetry / local / Claude / unchecked); a run on an existing index says it re-ranked only |
 | EVAL | `tools/eval_understanding.py` + `research/R12-understanding/eval` as the gate's understanding check (scored offline from sidecars, no model calls) | the gate prints recall / false alarms / Find hit@3; a regression fails it |
 
-Open for Karl: do other riders' airs count as events (CLIP_10 25 s: a skier flies over the camera; the checker said
-"not the wearer")? The speaker-label model (pyannote community-1) needs his HuggingFace token: deferred.
+**Karl 2026-11-08: other riders' airs count** ("Yes, count them"): an air is anyone in frame airborne, the wearer or
+another rider (CLIP_10 25 s: a skier flies over the camera). Events carry `who: wearer | other`; telemetry finds the
+wearer's, the frames (local check / Claude) find others'; the checker prompt says so. The speaker-label model (pyannote community-1) needs his HuggingFace token: deferred.
 Audio tags (EfficientAT) need wind masking first: deferred to a later wave.

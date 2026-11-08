@@ -18,7 +18,8 @@
     "thumbs/air-05-18_1_17.35s.png",
     "thumbs/air-05-18_2_18s.png",
     "thumbs/air-05-18_3_18.6s.png"
-   ]
+   ],
+   "who": "wearer"
   },
   {
    "id": "air-12-46",
@@ -35,7 +36,8 @@
     "thumbs/air-12-46_1_46.6s.png",
     "thumbs/air-12-46_2_47.1s.png",
     "thumbs/air-12-46_3_47.35s.png"
-   ]
+   ],
+   "who": "wearer"
   },
   {
    "id": "air-12-50",
@@ -52,7 +54,8 @@
     "thumbs/air-12-50_1_50.35s.png",
     "thumbs/air-12-50_2_50.85s.png",
     "thumbs/air-12-50_3_51.1s.png"
-   ]
+   ],
+   "who": "wearer"
   },
   {
    "id": "air-02-102",
@@ -70,7 +73,8 @@
     "thumbs/air-02-102_2_102.5s.png",
     "thumbs/air-02-102_3_103s.png"
    ],
-   "karl": "ok"
+   "karl": "ok",
+   "who": "wearer"
   },
   {
    "id": "air-04-224",
@@ -87,7 +91,8 @@
     "thumbs/air-04-224_1_224.4s.png",
     "thumbs/air-04-224_2_224.65s.png",
     "thumbs/air-04-224_3_225.45s.png"
-   ]
+   ],
+   "who": "wearer"
   },
   {
    "id": "air-06-30",
@@ -104,7 +109,8 @@
     "thumbs/air-06-30_1_29.75s.png",
     "thumbs/air-06-30_2_30.25s.png",
     "thumbs/air-06-30_3_30.75s.png"
-   ]
+   ],
+   "who": "wearer"
   },
   {
    "id": "air-10-25",
@@ -121,7 +127,10 @@
     "thumbs/air-10-25_1_25.15s.png",
     "thumbs/air-10-25_2_25.4s.png",
     "thumbs/air-10-25_3_25.6s.png"
-   ]
+   ],
+   "who": "other",
+   "karl": "ok",
+   "karl_note": "other riders' airs count (Karl 2026-11-08)"
   },
   {
    "id": "fall-01-68",
