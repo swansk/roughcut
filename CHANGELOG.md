@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- test_k5_ui's "no local stage" case strips the stage from the server's report: since LOCALGPU merged, the server always reports `local` (n/a with its reason when there is no GPU), so the column shows.
 - Loop state: TELEM, K5UI and VERIFY merged and on the 8766 preview; EVAL launched.
 - Wave 20 EVAL: `tools/eval_understanding.py` scores, offline from a bin's sidecars (no model, no GPU, read-only, ~1 s), what the planner and the board assert (raw index, asserted after telemetry merge + demotion, felt, checker-confirmed) against Karl's checked Killington set: recall by kind on high-confidence and Karl-confirmed rows, negatives still asserted, false events per negative minute, Find hit@3 through `find.lexical`, counts by certainty; writes JSON + markdown. The gate gets an `understanding` check against the committed `research/R12-understanding/eval/baseline.json` (a regression fails, an improvement suggests updating it; skipped with a reason when the Killington preview work dir is absent). Tests on a synthetic bin.
 - test_verify.py imports the package itself (it only collected when another test file had put the repo on `sys.path` first).

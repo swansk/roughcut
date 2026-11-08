@@ -370,6 +370,11 @@ def _clips_with_local(pg, local, stage=None):
         if LOCAL["stage"] is not None:
             for r in d["rows"]:
                 r["stages"]["local"] = LOCAL["stage"]
+        elif LOCAL["local"] is None:
+            # a report with no local stage at all (a server before wave 20's LOCALGPU)
+            d.pop("local", None)
+            for r in d["rows"]:
+                r["stages"].pop("local", None)
         route.fulfill(response=resp, body=json.dumps(d))
     return handler
 
