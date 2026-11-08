@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from . import config
+from . import config, speakers
 from .inference import complete
 from .revise import _clip_block, events_section
 
@@ -106,7 +106,9 @@ def lexical(query: str, clips: dict[str, dict]) -> list[dict]:
                             float(u["end"]) + PAD_TAIL_S)
             hits.append({"clip": clip, "start": lo, "end": hi,
                          "what": u.get("text", "").strip(),
-                         "why": "said here", "source": "heard",
+                         "why": ("said here" if not speakers.who(u)
+                                 else f"said here by {speakers.who(u)}"),
+                         "source": "heard", "speaker": u.get("speaker"),
                          "score": len(got) / len(q), "tokens": got})
         for m in (c.get("visual") or {}).get("moments") or []:
             got = _matched(q, f"{m.get('kind', '')} {m.get('what', '')}")
@@ -134,7 +136,8 @@ def lexical(query: str, clips: dict[str, dict]) -> list[dict]:
                 last["what"] = f"{last['what']} · {h['what']}"
             if h["source"] not in last["source"]:
                 last["source"] = f"{last['source']}+{h['source']}"
-                last["why"] = "said here, and seen in the frames"
+                said = last["why"] if last["why"].startswith("said here") else h["why"]
+                last["why"] = f"{said}, and seen in the frames"
             combined = last["tokens"] | h["tokens"]
             # A window whose halves answer *different* words of the query is a better
             # match than either half claims alone — "hit" said here, "rocks" seen here.
