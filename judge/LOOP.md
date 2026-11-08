@@ -49,6 +49,12 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-08 ~17:30: **EVAL merged (`9d38376`; the gate's understanding line: recall 0.89, 4 of 19 negatives asserted, Find
+  0.63) and LOCALGPU merged (`012a42c`, gates GREEN 3 of 4 — one 246 ms "idle (select)" hold during a 0.28 s GET
+  /api/firstpass: watch — base 2 of 2)**; 8766 deployed on `012a42c`: Hybrid effective = hybrid, the 3080 available. The
+  free local stage is running on Karl's bin (job 11ec3474, $0). DIARIZE finished but conflicts in 7 files (journal stages,
+  server): its lane is merging redesign into its branch. FIND3 launched from `012a42c`. Pending Karl: the Claude checker
+  run on his bin (~40 calls; suggested after the weekly reset).
 - 2026-11-08 ~16:00: **TELEM (fixed), K5UI (+ live-data fixes) and VERIFY merged; 8766 deployed on `4d5267e`** after quick
   gates GREEN 2/2 (holds 21-64 ms; one RED on `50ac50a` was journey step 24's export-size estimate, -37 %, unrelated: watch).
   Lead fixes: `clip_coverage` now ranks with the felt sidecar (the board saw 0 felt moments); test_verify imports the package.
