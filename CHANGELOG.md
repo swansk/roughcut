@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- Tests: the journal and Index panel expectations count the `speakers` stage beside `local`.
 - Wave 20 DIARIZE: merged with TELEM, K5UI, VERIFY, EVAL and LOCALGPU; `speakers` shares the `gpu` worker pool with `local`, is a background stage beside it, and the Index panel lists it ("Speakers", re-runnable as speakers/diarize).
 - Wave 20 DIARIZE: nobody is the wearer when the best candidate is quieter than -36 dB in the speech band (Killington CLIP_10's lone 2.9 s voice at -41.7 dB is not the camera's owner).
 - Wave 20 DIARIZE: diarize.py caps its own VRAM at 3 GB (a cuDNN autotune workspace took 8.9 GB and 40 s on some clips; capped it takes 0.4 GB and 5 s), and the wearer pick ignores speakers who talk under a fifth of the main talker's time (a bystander's 2.7 s burst out-shouted the wearer's 23 s monologue on CLIP_01).

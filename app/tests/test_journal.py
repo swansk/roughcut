@@ -452,7 +452,7 @@ def test_progress_counts_cost_and_a_rolling_mean_eta(tmp_path):
     p = j.progress(now=0.0)
     assert p["clips"] == 3 and p["released"] == 0 and p["pct"] == 0.0
     assert p["eta_s"] is None and p["eta_source"] == "none"
-    assert p["total_stages"] == 24 and p["stages"]["probe"]["queued"] == 3
+    assert p["total_stages"] == 27 and p["stages"]["probe"]["queued"] == 3
 
     for c in ("A.MP4", "B.MP4", "C.MP4"):
         _listen(j, c, facts={"candidates": 3})
@@ -475,7 +475,7 @@ def test_progress_counts_cost_and_a_rolling_mean_eta(tmp_path):
     assert p["eta_by_kind"]["picks"] == pytest.approx(4.0)
     assert p["eta_s"] == pytest.approx(100.0), "the busiest pool is the ETA"
     assert p["eta_source"] == "measured" and p["eta_unmeasured"] == []
-    assert p["pct"] == pytest.approx(round(100 * 19 / 24, 1))
+    assert p["pct"] == pytest.approx(round(100 * 22 / 27, 1))
     rows = {r["clip"]: r for r in p["rows"]}
     assert rows["A.MP4"]["state"] == "released"
     assert rows["B.MP4"]["state"] == "indexing"
@@ -526,6 +526,7 @@ def test_speakers_is_a_background_stage_offered_last_and_never_holds_a_clip_back
     j = _journal(tmp_path, "A.MP4")
     for s in ("probe", "telemetry", "asr"):
         _run(j, "A.MP4", s, t=1.0)
+    j.skip("A.MP4", "local", "not available")
     # the proxy (foreground) comes before the speakers (background) although speakers is ready
     assert j.next(now=5.0) == ("A.MP4", "proxy")
     j.start("A.MP4", "proxy", now=5.0)
