@@ -49,6 +49,11 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-08 ~14:50: **TELEM merged (`a85300b`) but NOT deployed**: quick gate journey RED 2 of 3 (loop hold 852 / 216 ms,
+  "nothing in the server ran") vs base `0fef473` GREEN 2 of 2 (27 ms): the felt build is pure Python on a stage thread and
+  holds the GIL (the reconcile "reopen once" rebuilds every bin at boot). TELEM is moving the build out of process; deploy
+  8766 only after its fix is merged and 3 quick gates are GREEN. 8766 still serves `0fef473`'s server. Lane DIARIZE launched
+  (pyannote community-1; Karl's HF token in ~/.config/roughcut/hf-token, access confirmed).
 - 2026-11-08 ~14:30 (box clock): Karl: "merge deploy for now and then keep working". **EFFECTS2 + LOOPHOLD merged**
   (`9773355`, `0fef473`; CHANGELOG by union). Quick gate `0fef473` **GREEN** in 100 s (screens, journey 24 steps 53 s, boot
   0.66 s, hygiene; ~/roughcut-loop/gate-0fef473-20261108T1422). **8766 restarted on `0fef473`** (v5 proxies already built).
