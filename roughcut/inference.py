@@ -214,6 +214,10 @@ class Request:
     # the scripted test backends working. See ClaudeCliBackend.
     on_partial: Callable[[str, str], None] | None = field(default=None, compare=False,
                                                           repr=False)
+    # Run the CLI with nothing but what the call needs: no MCP servers (Karl's setup
+    # carries several; each one is startup time and tokens on a call that reads one
+    # image), no slash commands, no saved session. Opt-in so no existing call changes.
+    isolated: bool = False
 
 
 @dataclass
@@ -358,6 +362,18 @@ class Backend(Protocol):
     def complete(self, request: Request) -> Result: ...
 
 
+def _isolation_flags(request: Request) -> list[str]:
+    """The CLI flags of an `isolated` request (see `Request.isolated`): only the Read
+    tool, and only when the call carries images."""
+    if not request.isolated:
+        return []
+    flags = ["--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}',
+             "--disable-slash-commands", "--no-session-persistence"]
+    if request.images:
+        flags += ["--tools", "Read"]
+    return flags
+
+
 class ClaudeCliBackend:
     """Claude Code CLI — bills against the Max subscription, no marginal cost.
 
@@ -406,6 +422,7 @@ class ClaudeCliBackend:
             cmd += ["--allowedTools", "Read"]
         if request.system:
             cmd += ["--append-system-prompt", request.system]
+        cmd += _isolation_flags(request)
 
         timeout = request.timeout_s or config.call_timeout_s()
         t0 = time.time()
@@ -448,6 +465,7 @@ class ClaudeCliBackend:
             cmd += ["--allowedTools", "Read"]
         if request.system:
             cmd += ["--append-system-prompt", request.system]
+        cmd += _isolation_flags(request)
 
         timeout = request.timeout_s or config.call_timeout_s()
         t0 = time.time()
@@ -662,7 +680,8 @@ def complete(prompt: str, *, role: str = config.ROLE_ANALYSIS,
              system: str | None = None,
              validate: Callable[[Any], Any] | None = None,
              retries: int = 1, timeout_s: int | None = None,
-             on_partial: Callable[[str, str], None] | None = None) -> Result:
+             on_partial: Callable[[str, str], None] | None = None,
+             isolated: bool = False) -> Result:
     """One call. Returns validated content when a schema is given, or raises.
 
     `retries` is a *bounded* re-ask on validation failure, which is how the CLI
@@ -678,7 +697,7 @@ def complete(prompt: str, *, role: str = config.ROLE_ANALYSIS,
     backend = get_backend()
     request = Request(prompt=prompt, role=role, images=tuple(images),
                       schema=schema, system=system, timeout_s=timeout_s,
-                      on_partial=on_partial)
+                      on_partial=on_partial, isolated=isolated)
 
     last: Exception | None = None
     for attempt in range(retries + 1):
@@ -697,7 +716,7 @@ def complete(prompt: str, *, role: str = config.ROLE_ANALYSIS,
                 prompt=(request.prompt + "\n\nYour previous reply could not be parsed"
                         f" as the required JSON ({exc}). Reply with JSON only."),
                 role=role, images=tuple(images), schema=schema, system=system,
-                timeout_s=timeout_s, on_partial=on_partial)
+                timeout_s=timeout_s, on_partial=on_partial, isolated=isolated)
     raise InferenceError(f"schema validation failed after {retries + 1} attempts: {last}")
 
 

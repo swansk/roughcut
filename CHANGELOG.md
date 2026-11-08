@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Added
+- Wave 20 VERIFY: `roughcut/verify.py` (Claude as the footage-event checker: one levelled 8 fps strip per event, verdicts confirm / reject / retime / unsure, per-bin mode Hybrid / Local only / Claude only, demotion of unsupported index claims) with its JSON fields documented for the UI; a `verify` model role (Sonnet) and an opt-in isolated CLI call.
+
 ### Fixed
 - Goal + wave 20: Karl says other riders' airs count as events; the test set marks each air's rider.
 - Research R12: the dense local pass scored on all 12 clips (0-0.22 recall; captions only), confirming the wave 20 plan.
