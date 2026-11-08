@@ -300,3 +300,79 @@ def test_a_coarse_look_samples_keyframes_and_labels_them_with_their_own_time(tmp
     assert [c["t"] for s in got["sheets"] for c in s["cells"]] == [0.0, 4.0, 8.0]
     # the close look's 1 s interval never takes the keyframe path
     assert _sheet(dense, tmp_path / "c", 1.0)["sampling"] == "decode"
+
+
+# ---- wave 20 DIARIZE: the speakers stage ---------------------------------------------
+
+def _fake_diarizer(path: Path, rc: int = 0) -> list[str]:
+    """A diarize.py stand-in: writes two speakers' turns over the stub sidecar's words
+    (or exits with `rc`, the way the real tool exits 3 without a token)."""
+    path.write_text(
+        "import json, sys\n"
+        f"if {rc}: sys.exit({rc})\n"
+        "out = sys.argv[sys.argv.index('-o') + 1]\n"
+        "json.dump({'model': 'fake', 'device': 'cuda', 'gpu_s': 0.1, 'peak_vram_mb': 5,\n"
+        "           'turns': [], 'exclusive': [{'start': 0.0, 'end': 2.0, 'speaker': 'A'},\n"
+        "                                      {'start': 2.0, 'end': 90.0, 'speaker': 'B'}]},\n"
+        "          open(out, 'w'))\n", encoding="utf-8")
+    return [sys.executable, str(path)]
+
+
+def test_the_speakers_stage_labels_the_sidecar_and_never_holds_a_release(tmp_path, project, monkeypatch, request):
+    import server
+
+    monkeypatch.delenv("ROUGHCUT_NO_DIARIZE", raising=False)
+    monkeypatch.setenv("HF_TOKEN", "test-fixture-not-a-token")
+    # the project's sidecars are shared by the whole session: put them back afterwards
+    saved = {p: p.read_text(encoding="utf-8") for p in project["sidecars"].glob("*.audio.json")}
+    request.addfinalizer(lambda: [p.write_text(t, encoding="utf-8") for p, t in saved.items()])
+    with _fresh(tmp_path, project, sidecars=project["sidecars"], visual=None) as c:
+        _stub_tools(server, monkeypatch, tmp_path)
+        fake = _fake_diarizer(tmp_path / "diar.py")
+        monkeypatch.setattr(server, "diarize_cmd", lambda clip, out: [*fake, "-o", str(out)])
+        r = c.post("/api/index", json={"order": "priority"})
+        s = _wait_index(c, r.json()["job"])
+        assert s["state"] == "done", s
+        j = journal.Journal.load(server.journal_path())
+        for clip in ("CLIP_A.MP4", "CLIP_B.MP4", "CLIP_C.MP4"):
+            assert j.state(clip, "speakers") == "done", clip
+            sc = json.loads((server.STATE["sidecars"] / f"{Path(clip).stem}.audio.json")
+                            .read_text(encoding="utf-8"))
+            assert [x["id"] for x in sc["speakers"]] and any(x["wearer"] for x in sc["speakers"])
+            assert all(u.get("speaker") for u in sc["transcript"] if u.get("words"))
+            assert server.speakers_done(clip)
+        # the planner's view of the clip carries the labels
+        assert any(u.get("speaker") for u in server.load_sidecar("CLIP_A.MP4")["transcript"])
+
+
+def test_the_speakers_stage_is_skipped_not_failed_without_a_token(tmp_path, project, monkeypatch):
+    import server
+
+    monkeypatch.delenv("ROUGHCUT_NO_DIARIZE", raising=False)
+    monkeypatch.delenv("HF_TOKEN", raising=False)
+    monkeypatch.setenv("ROUGHCUT_HF_TOKEN_FILE", str(tmp_path / "no-such-token"))
+    with _fresh(tmp_path, project, sidecars=project["sidecars"], visual=None) as c:
+        _stub_tools(server, monkeypatch, tmp_path)
+        s = _wait_index(c, c.post("/api/index", json={"order": "priority"}).json()["job"])
+        assert s["state"] == "done", s
+        j = journal.Journal.load(server.journal_path())
+        st = j.clips["CLIP_A.MP4"]["stages"]["speakers"]
+        assert st["state"] == "skipped" and "HuggingFace token" in st["last_error"]
+        assert not j.clips["CLIP_A.MP4"].get("parked")
+        sc = json.loads((server.STATE["sidecars"] / "CLIP_A.audio.json").read_text(encoding="utf-8"))
+        assert "speakers" not in sc
+
+
+def test_the_tool_exiting_3_means_no_token_and_a_crash_is_a_skip_with_the_reason(tmp_path, project, monkeypatch):
+    import server
+
+    monkeypatch.delenv("ROUGHCUT_NO_DIARIZE", raising=False)
+    monkeypatch.setenv("HF_TOKEN", "test-fixture-not-a-token")
+    with _fresh(tmp_path, project, sidecars=project["sidecars"], visual=None) as c:
+        _stub_tools(server, monkeypatch, tmp_path)
+        fake = _fake_diarizer(tmp_path / "diar3.py", rc=3)
+        monkeypatch.setattr(server, "diarize_cmd", lambda clip, out: [*fake, "-o", str(out)])
+        s = _wait_index(c, c.post("/api/index", json={"order": "priority"}).json()["job"])
+        assert s["state"] == "done", s
+        st = journal.Journal.load(server.journal_path()).clips["CLIP_B.MP4"]["stages"]["speakers"]
+        assert st["state"] == "skipped" and st["last_error"].startswith("not available")

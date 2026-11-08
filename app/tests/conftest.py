@@ -34,6 +34,16 @@ def pytest_configure(config):
 
 
 @pytest.fixture(scope="session", autouse=True)
+def no_diarize():
+    """The speakers stage (wave 20 DIARIZE) is off for the whole suite: it needs a
+    HuggingFace token and a GPU tool. test_speakers.py switches it on with a fake CLI."""
+    mp = pytest.MonkeyPatch()
+    mp.setenv("ROUGHCUT_NO_DIARIZE", "1")
+    yield
+    mp.undo()
+
+
+@pytest.fixture(scope="session", autouse=True)
 def ledger(tmp_path_factory):
     """Keep the suite out of the real inference ledger.
 

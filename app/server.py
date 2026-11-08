@@ -83,6 +83,7 @@ from roughcut import fxcheck  # noqa: E402
 from roughcut import dirwatch  # noqa: E402
 from roughcut import tracks as tracksmod  # noqa: E402
 from roughcut import media as mediamod  # noqa: E402
+from roughcut import speakers as speakersmod  # noqa: E402     # wave 20 DIARIZE: who said what
 
 # Stop means stop (verdict 3, punch 5): a job thread inside a `procscope.active` block
 # starts its tools in their own process groups, and its cancel kills them.
@@ -6437,6 +6438,7 @@ def index_files() -> dict[str, dict[str, bool]]:
             "look": vis.exists(),
             "close": fine.exists(),
             "picks": bool(events_at and newest and events_at >= newest),
+            "speakers": speakers_done(clip),
         }
     return out
 
@@ -6474,6 +6476,75 @@ def _run_tool(cmd: list[str]) -> str:
 # the audio pass batches every clip waiting on it, and a re-run of one clip's hearing must
 # not hear the bin.
 _STAGE_CTX = threading.local()
+
+
+# ------------------------------------------------------------------ the speakers stage
+# Wave 20 (lane DIARIZE): who said what. After asr, per clip: `research/tools/diarize.py`
+# (pyannote community-1, its own uv environment, a separate process at nice 5, one GPU job
+# at a time through the GPU lock file it takes itself) writes speaker turns; this thread
+# only aligns them to the Whisper words (milliseconds of dict work) and rewrites the audio
+# sidecar with `speaker`/`wearer` on each utterance and a `speakers` summary. Optional by the
+# telemetry's rule: no HuggingFace token, no uv, a failed run — the stage is *skipped* with
+# the reason, never failed, and a clip is released without waiting on it (journal.BACKGROUND).
+
+def speakers_dir() -> Path:
+    return STATE["work"] / "speakers" / STATE["footage"].name
+
+
+def speakers_file(clip: str) -> Path:
+    return speakers_dir() / f"{Path(clip).stem}.speakers.json"
+
+
+def speakers_done(clip: str) -> bool:
+    """Files are the truth: the diarization result exists and is at least as new as the
+    sidecar it was aligned into (a re-heard clip's fresh sidecar makes it stale)."""
+    f = speakers_file(clip)
+    sc = STATE["sidecars"] / f"{Path(clip).stem}.audio.json"
+    try:
+        return f.stat().st_mtime >= sc.stat().st_mtime
+    except OSError:
+        return False
+
+
+def diarize_cmd(clip: str, out: Path) -> list[str]:
+    """The diarizer as a command — a function so the tests can replace it."""
+    return ["nice", "-n", "5", "uv", "run", "--quiet", str(TOOLS / "diarize.py"),
+            str(clip_path(clip)), "-o", str(out)]
+
+
+def _speakers_stage(j: journal.Journal, clip: str) -> float:
+    ok, why = speakersmod.available()
+    if not ok:
+        raise _Skip("not available — " + why)
+    sc_path = STATE["sidecars"] / f"{Path(clip).stem}.audio.json"
+    sc = read_json_file(sc_path) if sc_path.exists() else {}
+    if not sc:
+        raise RuntimeError("no audio sidecar to label")
+    speakers_dir().mkdir(parents=True, exist_ok=True)
+    final = speakers_file(clip)
+    if not any(u.get("words") for u in sc.get("transcript") or []):
+        diar = {"turns": [], "exclusive": [], "note": "nothing was said"}      # nothing to label
+    else:
+        part = final.with_name(final.name + ".part")
+        part.unlink(missing_ok=True)
+        r = subprocess.run(diarize_cmd(clip, part), capture_output=True, text=True,
+                           env={**os.environ, "PYTHONUNBUFFERED": "1"})
+        scope = procscope.current()
+        if scope is not None and scope.cancelled:
+            raise RuntimeError("stopped")
+        if r.returncode == speakersmod.NOT_AVAILABLE_RC:
+            raise _Skip("not available — add a HuggingFace token")
+        if r.returncode != 0 or not part.exists():
+            tail = (r.stderr or r.stdout or "").strip().splitlines()
+            raise _Skip("failed: " + (tail[-1][:160] if tail else f"exit {r.returncode}"))
+        diar = read_json_file(part)
+        part.unlink(missing_ok=True)
+    speakersmod.apply(sc, diar)
+    tmp = sc_path.with_name(sc_path.name + ".tmp")
+    tmp.write_text(json.dumps(sc, indent=1), encoding="utf-8")
+    os.replace(tmp, sc_path)
+    final.write_text(json.dumps(diar), encoding="utf-8")       # last: its mtime >= the sidecar's
+    return 0.0
 
 
 def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
@@ -6590,6 +6661,8 @@ def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
     if stage == "picks":
         rebuild_events()
         return 0.0
+    if stage == "speakers":
+        return _speakers_stage(j, clip)
     raise RuntimeError(f"no runner for stage {stage!r}")
 
 
@@ -6846,6 +6919,11 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
                 and str(st.get("last_error") or "").startswith("not integrated")
                 and has_telemetry(clip)):
             j.reopen(clip, "telemetry")
+        # The speakers stage skips itself without a token; one added later takes the clip.
+        sps = j.clips[clip]["stages"]["speakers"]
+        if (sps["state"] == "skipped" and str(sps.get("last_error") or "").startswith("not available")
+                and speakersmod.available()[0]):
+            j.reopen(clip, "speakers")
     # Probes first, all of them: they are one ffprobe each, and with every probe settled
     # the audio pass can run as one batch over every clip instead of reloading its
     # model per clip as the priority walk would otherwise make it.
