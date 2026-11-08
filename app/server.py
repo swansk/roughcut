@@ -83,6 +83,7 @@ from roughcut import fxcheck  # noqa: E402
 from roughcut import dirwatch  # noqa: E402
 from roughcut import tracks as tracksmod  # noqa: E402
 from roughcut import media as mediamod  # noqa: E402
+from roughcut import gpulock, localvlm  # noqa: E402     # wave 20 LOCALGPU: the 3080 as a stage
 
 # Stop means stop (verdict 3, punch 5): a job thread inside a `procscope.active` block
 # starts its tools in their own process groups, and its cancel kills them.
@@ -6437,6 +6438,7 @@ def index_files() -> dict[str, dict[str, bool]]:
             "look": vis.exists(),
             "close": fine.exists(),
             "picks": bool(events_at and newest and events_at >= newest),
+            "local": local_sidecar(clip).exists(),
         }
     return out
 
@@ -6474,6 +6476,121 @@ def _run_tool(cmd: list[str]) -> str:
 # the audio pass batches every clip waiting on it, and a re-run of one clip's hearing must
 # not hear the bin.
 _STAGE_CTX = threading.local()
+
+
+# ------------------------------------------------------------------ the local GPU stage
+# Wave 20 (lane LOCALGPU): the RTX 3080 as an index stage. Per clip it embeds the frames for
+# Find (PE-Core) and asks Qwen3.5-4B whether the wearer fell at each telemetry moment worth
+# a look; the results are `<work>/local/<bin>/<stem>.local.json` (+ `.embed.npy`). It runs
+# after the coarse tier at nice 5, one job on the GPU at a time (the journal's `gpu` pool and
+# the GPU lock file), holds no clip back from release, and is optional by the same rule as
+# the telemetry: no GPU, no install, a failed run — the stage is *skipped* with the reason,
+# never failed, because a parked clip would stop the rest of its index.
+
+def local_dir() -> Path:
+    return STATE["work"] / "local" / STATE["footage"].name
+
+
+def local_sidecar(clip: str) -> Path:
+    return local_dir() / f"{Path(clip).stem}.local.json"
+
+
+def local_context() -> localvlm.Context:
+    return localvlm.bind(STATE["footage"], STATE["work"], TOOLS)
+
+
+@contextmanager
+def local_gpu_lock_for_audio():
+    """The audio pass shares the one card with the local stage: when the local stack is
+    installed it takes the GPU lock too (a no-op otherwise), so the two never run at once.
+    A Stop pressed while it is queued ends the wait (as a RuntimeError, the way a killed
+    tool fails, so the batch the audio pass holds is put back)."""
+    if not (localvlm.enabled() and localvlm.venv_python().exists()):
+        yield
+        return
+    scope = procscope.current()
+    try:
+        with gpulock.hold("asr", abort=(lambda: scope.cancelled) if scope is not None else None):
+            yield
+    except TimeoutError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
+def _local_facts(clip: str) -> dict:
+    """What the local stage found on a clip, for the Index panel's stage data: how many
+    moments it checked, how many falls it thinks likely, GPU seconds, peak VRAM."""
+    sc = localvlm.sidecar(clip, local_context())
+    if not sc:
+        return {}
+    ck = [c for c in sc.get("checks") or [] if c.get("q") == "fall"]
+    g = sc.get("gpu") or {}
+    return {"checks": len(sc.get("checks") or []), "likely_falls": sum(1 for c in ck if c.get("verdict") == "likely"),
+            "embedded": (sc.get("embed") or {}).get("n"), "gpu_s": g.get("gpu_s"),
+            "peak_vram_gb": g.get("peak_vram_gb"), "model": sc.get("model")}
+
+
+def _gate_local(j: journal.Journal, only):
+    """`only` (journal.next's narrowing) with the local stage held until every clip's
+    telemetry has settled: the stage runs the whole bin in one process (the models take
+    ~45 s to load), so it waits for all the candidates instead of starting on the first clip."""
+    def ready() -> bool:
+        return all(rec.get("missing") or rec.get("parked")
+                   or rec["stages"]["telemetry"]["state"] in journal.SETTLED
+                   for rec in j.clips.values())
+
+    def gated(clip: str, stage: str) -> bool:
+        if stage == "local" and not ready():
+            return False
+        return only is None or only(clip, stage)
+    return gated
+
+
+def _local_stage(j: journal.Journal, clip: str, allow) -> float:
+    a = localvlm.available()
+    if not a["ok"]:
+        raise _Skip("not available: " + a["why"])
+    ctx = local_context()
+    wanted = [c for c in footage_clips()
+              if c == clip or (c in j.clips
+                               and j.state(c, "local") in journal.RETRYABLE
+                               and j.state(c, "probe") in journal.SETTLED
+                               and j.state(c, "telemetry") in journal.SETTLED
+                               and (allow is None or allow(c, "local")))]
+    for other in wanted:
+        if other != clip:
+            j.start(other, "local")
+    again = any(j.clips[c]["stages"]["local"].get("force") for c in wanted if c in j.clips)
+    scope = procscope.current()
+    cancelled = lambda: scope is not None and scope.cancelled  # noqa: E731
+
+    def settle_others(res: dict | None, why: str | None) -> None:
+        for other in wanted:
+            if other == clip:
+                continue
+            stem = Path(other).stem
+            if res is not None and local_sidecar(other).exists() and stem in res["done"]:
+                j.finish(other, "local")
+            elif cancelled():
+                j.requeue(other, "local")
+            else:
+                j.skip(other, "local", "failed: " + ((res or {}).get("failed", {}).get(stem) or why or "no sidecar written")[:160])
+
+    try:
+        res = localvlm.run_index(wanted, ctx, force=again)
+    except localvlm.NotAvailable as exc:
+        settle_others(None, str(exc))
+        raise _Skip("not available: " + str(exc)[:160])
+    except (RuntimeError, OSError) as exc:
+        settle_others(None, str(exc))
+        if cancelled():
+            raise
+        raise _Skip("failed: " + str(exc)[:160])
+    settle_others(res, None)
+    if cancelled():
+        raise RuntimeError("stopped")
+    if Path(clip).stem not in res["done"] or not local_sidecar(clip).exists():
+        raise _Skip("failed: " + str(res["failed"].get(Path(clip).stem) or "no sidecar written")[:160])
+    return 0.0
 
 
 def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
@@ -6517,7 +6634,8 @@ def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
         # heard again (the Index panel): the tool re-hears the clips it is given
         again = any(j.clips[c]["stages"]["asr"].get("force") for c in wanted if c in j.clips)
         try:
-            _run_tool(analyze_cmd(skip, again))
+            with local_gpu_lock_for_audio():
+                _run_tool(analyze_cmd(skip, again))
         except RuntimeError as exc:
             scope = procscope.current()
             for other in wanted:
@@ -6590,6 +6708,8 @@ def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
     if stage == "picks":
         rebuild_events()
         return 0.0
+    if stage == "local":
+        return _local_stage(j, clip, allow)
     raise RuntimeError(f"no runner for stage {stage!r}")
 
 
@@ -6846,6 +6966,12 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
                 and str(st.get("last_error") or "").startswith("not integrated")
                 and has_telemetry(clip)):
             j.reopen(clip, "telemetry")
+        # The local stage skips itself when there is no GPU or no install; a later run on a
+        # machine where it is available takes the clip again (the reason says why it skipped).
+        lst = j.clips[clip]["stages"]["local"]
+        if (lst["state"] == "skipped" and str(lst.get("last_error") or "").startswith("not available")
+                and localvlm.available()["ok"]):
+            j.reopen(clip, "local")
     # Probes first, all of them: they are one ffprobe each, and with every probe settled
     # the audio pass can run as one batch over every clip instead of reloading its
     # model per clip as the priority walk would otherwise make it.
@@ -6964,7 +7090,7 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
             # the Program shows a 360p preview until a clip's 720p proxy lands) — once the
             # first pass's coarse tier, what its proposal waits on, is through.
             pick = _cut_proxy_next(j) if not coarse or j.coarse_ready() else None
-            only = _walk_only(entry)
+            only = _gate_local(j, _walk_only(entry))
             if pick is not None and only is not None and not only(pick, "proxy"):
                 pick = None
             if pick is not None:
@@ -7583,12 +7709,16 @@ def api_index_cancel() -> JSONResponse:
 # runs only the (clip, stage) pairs it was asked for and their free prerequisites; joined
 # to a free run (an import's), only those priced pairs pass its hold.
 
-INDEX_PANEL_STAGES = ("asr", "look", "close", "telemetry", "proxy")
+INDEX_PANEL_STAGES = ("asr", "look", "close", "telemetry", "proxy", "local")
 RERUN_ALIASES = {"asr": "asr", "hear": "asr", "heard": "asr", "look": "look", "looked": "look",
                  "close": "close", "close_looks": "close", "telemetry": "telemetry",
-                 "proxy": "proxy", "preview": "proxy", "previews": "proxy"}
+                 "proxy": "proxy", "preview": "proxy", "previews": "proxy",
+                 "local": "local", "gpu": "local", "3080": "local"}
 RERUN_WORDS = {"asr": "heard", "look": "looked at", "close": "looked at closely",
-               "telemetry": "telemetry read", "proxy": "previews built"}
+               "telemetry": "telemetry read", "proxy": "previews built",
+               "local": "checked on the 3080"}
+# The Index panel's name for each stage (the UI words are lane K5UI's; the data carries them).
+STAGE_LABELS = {"local": "Local (3080)"}
 # The re-run state of each index job, by id. Out of the job's own dict on purpose: sets do
 # not serialise, and /api/job/<id> hands the dict out whole.
 INDEX_RERUNS: dict[str, dict] = {}
@@ -7821,7 +7951,8 @@ def rerun_plan(body: dict) -> dict:
               "look": lambda c: Path(c).stem in looked,
               "close": lambda c: Path(c).stem in closed,
               "telemetry": lambda c: (telemetry_dir() / f"{Path(c).stem.upper()}.telemetry.json").exists(),
-              "proxy": lambda c: (STATE["proxy_dir"] / f"{Path(c).stem}.mp4").exists()}
+              "proxy": lambda c: (STATE["proxy_dir"] / f"{Path(c).stem}.mp4").exists(),
+              "local": lambda c: local_sidecar(c).exists()}
     tele_known = STATE.get("telemetry") or {}
 
     def settled(clip: str, s: str) -> bool:
@@ -8026,7 +8157,7 @@ def _index_clips_disk() -> dict:
         paths = {"asr": STATE["sidecars"] / f"{stem}.audio.json",
                  "look": vis / f"{stem}.visual.json", "close": fine,
                  "telemetry": tdir / f"{stem.upper()}.telemetry.json",
-                 "proxy": pdir / f"{stem}.mp4"}
+                 "proxy": pdir / f"{stem}.mp4", "local": local_sidecar(clip)}
         stages = {}
         for s in INDEX_PANEL_STAGES:
             js = (rec or {}).get("stages", {}).get(s) or {}
@@ -8053,6 +8184,10 @@ def _index_clips_disk() -> dict:
                 v.update(windows=facts.get("windows"), moments=facts.get("moments"))
             if s == "telemetry" and not js and tele_known.get(clip) is False:
                 v.update(journal="skipped", error="no telemetry stream in the file")
+            if s == "local":
+                v["label"] = STAGE_LABELS["local"]
+                if mtime is not None:
+                    v.update(_local_facts(clip))
             stages[s] = v
         f = (rec or {}).get("facts") or {}
         rows.append({
@@ -8150,10 +8285,10 @@ def index_clips_payload() -> dict:
     now = time.time()
     rows = []
     summary = {"clips": 0, "heard": 0, "looked": 0, "close": 0, "telemetry": 0,
-               "no_telemetry": 0, "previews": 0, "looked_at": {}, "cost_usd": 0.0,
+               "no_telemetry": 0, "previews": 0, "local": 0, "looked_at": {}, "cost_usd": 0.0,
                "running": 0, "queued": 0, "held": 0, "failed": 0}
     count = {"asr": "heard", "look": "looked", "close": "close", "telemetry": "telemetry",
-             "proxy": "previews"}
+             "proxy": "previews", "local": "local"}
     for r in disk["rows"]:
         stages = {}
         for s, v in r["stages"].items():

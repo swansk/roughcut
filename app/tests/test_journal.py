@@ -40,6 +40,8 @@ def _listen(j: Journal, clip: str, *, t: float = 0.0, facts: dict | None = None)
     """The free stages, done — the point at which a clip gets its priority."""
     for i, s in enumerate(FREE):
         _run(j, clip, s, t=t + i)
+    # the local GPU stage is optional: on a machine without the stack it skips itself
+    j.skip(clip, "local", "not available: no GPU", now=t + len(FREE))
     j.set_facts(clip, facts or {})
 
 
@@ -450,7 +452,7 @@ def test_progress_counts_cost_and_a_rolling_mean_eta(tmp_path):
     p = j.progress(now=0.0)
     assert p["clips"] == 3 and p["released"] == 0 and p["pct"] == 0.0
     assert p["eta_s"] is None and p["eta_source"] == "none"
-    assert p["total_stages"] == 21 and p["stages"]["probe"]["queued"] == 3
+    assert p["total_stages"] == 24 and p["stages"]["probe"]["queued"] == 3
 
     for c in ("A.MP4", "B.MP4", "C.MP4"):
         _listen(j, c, facts={"candidates": 3})
@@ -473,7 +475,7 @@ def test_progress_counts_cost_and_a_rolling_mean_eta(tmp_path):
     assert p["eta_by_kind"]["picks"] == pytest.approx(4.0)
     assert p["eta_s"] == pytest.approx(100.0), "the busiest pool is the ETA"
     assert p["eta_source"] == "measured" and p["eta_unmeasured"] == []
-    assert p["pct"] == pytest.approx(round(100 * 16 / 21, 1))
+    assert p["pct"] == pytest.approx(round(100 * 19 / 24, 1))
     rows = {r["clip"]: r for r in p["rows"]}
     assert rows["A.MP4"]["state"] == "released"
     assert rows["B.MP4"]["state"] == "indexing"
@@ -492,7 +494,7 @@ def test_progress_leaves_unmeasured_stages_out_of_the_eta_and_says_so(tmp_path):
     _run(j, "A.MP4", "probe", t=0.0, dur=1.0)
     p = j.progress(now=2.0)
     assert p["eta_s"] is None, "nothing left to run has been measured"
-    assert set(p["eta_unmeasured"]) == {"telemetry", "asr", "proxy", "look", "close", "picks"}
+    assert set(p["eta_unmeasured"]) == {"telemetry", "asr", "proxy", "look", "close", "picks", "local"}
     _run(j, "A.MP4", "asr", t=2.0, dur=5.0)
     _run(j, "A.MP4", "telemetry", t=7.0, dur=1.0)
     _run(j, "A.MP4", "proxy", t=8.0, dur=20.0)
