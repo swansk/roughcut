@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Added
+- Wave 20 DIARIZE: `research/tools/diarize.py`, a pyannote community-1 diarization CLI in its own uv environment (torch cu128, batch 8 = ~0.6 GB reserved instead of 9 GB), honouring the GPU lock file; reads the HuggingFace token at run time from `$HF_TOKEN` or `~/.config/roughcut/hf-token` and never prints it; exits 3 "not available" without one.
+
 ### Fixed
 - Goal + wave 20: Karl says other riders' airs count as events; the test set marks each air's rider.
 - Research R12: the dense local pass scored on all 12 clips (0-0.22 recall; captions only), confirming the wave 20 plan.
