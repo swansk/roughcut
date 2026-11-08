@@ -1,0 +1,32 @@
+[project]
+name = "roughcut-localgpu"
+version = "0.1.0"
+description = "Roughcut's local-GPU footage understanding (wave 20): NVDEC frames, Qwen3.5-4B yes/no checks, PE-Core embeddings. Kept apart from the app's own light environment."
+requires-python = ">=3.12,<3.13"
+# Pinned as the bake-off ran (research/R12-understanding/local-3080-results.md).
+dependencies = [
+  "torch==2.11.0",
+  "torchvision==0.26.0",
+  "transformers==5.22.2",
+  "accelerate==1.15.0",
+  "bitsandbytes==0.50.2",
+  "open_clip_torch==4.2.1",
+  "timm==1.0.31",
+  "PyNvVideoCodec==2.2.4",
+  "flash-linear-attention==0.6.0",
+  "numpy==2.5.4",
+  "opencv-python-headless==5.0.0.93",
+  "pillow",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

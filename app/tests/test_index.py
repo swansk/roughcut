@@ -58,8 +58,9 @@ def test_the_index_runs_unattended_and_releases_every_clip(tmp_path, project, mo
 
     with _fresh(tmp_path, project, sidecars=project["sidecars"], visual=None) as c:
         _stub_tools(server, monkeypatch, tmp_path)
-        assert c.get("/api/index").json() == {"exists": False, "running": False, "job": None,
-                                              "interval_s": 4.0}
+        first = c.get("/api/index").json()
+        assert first.pop("mode")["mode"] == "hybrid"       # wave 20: the bin's mode rides along
+        assert first == {"exists": False, "running": False, "job": None, "interval_s": 4.0}
         r = c.post("/api/index", json={"order": "priority"})
         assert r.status_code == 200, r.text
         assert c.post("/api/index", json={}).status_code == 409, "one at a time"

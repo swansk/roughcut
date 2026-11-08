@@ -49,6 +49,23 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-08 ~16:00: **TELEM (fixed), K5UI (+ live-data fixes) and VERIFY merged; 8766 deployed on `4d5267e`** after quick
+  gates GREEN 2/2 (holds 21-64 ms; one RED on `50ac50a` was journey step 24's export-size estimate, -37 %, unrelated: watch).
+  Lead fixes: `clip_coverage` now ranks with the felt sidecar (the board saw 0 felt moments); test_verify imports the package.
+  On Karl's bin: 258 moments (74 felt by telemetry), Hybrid effective = Claude (no local stack yet), "Check 28 claims ·
+  $1.24"; his K5 run now reads "only re-ranked". The felt sidecars were built by a free telemetry-only re-run (job
+  82855811, $0). Still running: LOCALGPU, DIARIZE. Launched: EVAL. FIND3 after LOCALGPU.
+- 2026-11-08 ~14:50: **TELEM merged (`a85300b`) but NOT deployed**: quick gate journey RED 2 of 3 (loop hold 852 / 216 ms,
+  "nothing in the server ran") vs base `0fef473` GREEN 2 of 2 (27 ms): the felt build is pure Python on a stage thread and
+  holds the GIL (the reconcile "reopen once" rebuilds every bin at boot). TELEM is moving the build out of process; deploy
+  8766 only after its fix is merged and 3 quick gates are GREEN. 8766 still serves `0fef473`'s server. Lane DIARIZE launched
+  (pyannote community-1; Karl's HF token in ~/.config/roughcut/hf-token, access confirmed).
+- 2026-11-08 ~14:30 (box clock): Karl: "merge deploy for now and then keep working". **EFFECTS2 + LOOPHOLD merged**
+  (`9773355`, `0fef473`; CHANGELOG by union). Quick gate `0fef473` **GREEN** in 100 s (screens, journey 24 steps 53 s, boot
+  0.66 s, hygiene; ~/roughcut-loop/gate-0fef473-20261108T1422). **8766 restarted on `0fef473`** (v5 proxies already built).
+  foxtrot rebooted ~14:10 (8766 had been down). **Wave 20 launched** (judge/WAVE20.md): TELEM, LOCALGPU, VERIFY, K5UI in
+  roughcut-wt/w20-<lane> from `0fef473`; FIND3 + EVAL after TELEM and LOCALGPU merge. PLAY10 / WORKER relaunch after wave 20's
+  lanes, at load <= 4. Tick cron recreated (session-only). Karl has a HuggingFace token ready for pyannote (speaker labels).
 - 2026-11-06 ~22:20 (box clock): **RESUMED by Karl** ("let's resume that work ... continue the work against the goals"). Tick
   cron recreated (session-only, :13/:43). Karl opened 8766 via the launcher at 21:43: it now serves THIS worktree live
   (`389df7e`, server and pages agree; v5 proxies rebuilding into /mnt/roughcut/work/app-redesign), so **no merges into

@@ -34,10 +34,12 @@ def pytest_configure(config):
 
 
 @pytest.fixture(scope="session", autouse=True)
-def no_diarize():
-    """The speakers stage (wave 20 DIARIZE) is off for the whole suite: it needs a
-    HuggingFace token and a GPU tool. test_speakers.py switches it on with a fake CLI."""
+def no_local_gpu():
+    """The local GPU stage (wave 20) is off for the whole suite: the suite must pass on a
+    CPU-only machine, and on this one it must not load a 12 GB card for a fake index. The
+    tests of the stage itself switch it on with a fake CLI (test_localvlm.py)."""
     mp = pytest.MonkeyPatch()
+    mp.setenv("ROUGHCUT_LOCALGPU", "0")
     mp.setenv("ROUGHCUT_NO_DIARIZE", "1")
     yield
     mp.undo()

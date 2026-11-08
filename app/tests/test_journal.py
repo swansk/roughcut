@@ -40,6 +40,8 @@ def _listen(j: Journal, clip: str, *, t: float = 0.0, facts: dict | None = None)
     """The free stages, done — the point at which a clip gets its priority."""
     for i, s in enumerate(FREE):
         _run(j, clip, s, t=t + i)
+    # the local GPU stage is optional: on a machine without the stack it skips itself
+    j.skip(clip, "local", "not available: no GPU", now=t + len(FREE))
     j.set_facts(clip, facts or {})
 
 
@@ -492,7 +494,7 @@ def test_progress_leaves_unmeasured_stages_out_of_the_eta_and_says_so(tmp_path):
     _run(j, "A.MP4", "probe", t=0.0, dur=1.0)
     p = j.progress(now=2.0)
     assert p["eta_s"] is None, "nothing left to run has been measured"
-    assert set(p["eta_unmeasured"]) == {"telemetry", "asr", "proxy", "look", "close", "picks", "speakers"}
+    assert set(p["eta_unmeasured"]) == {"telemetry", "asr", "proxy", "look", "close", "picks", "local", "speakers"}
     _run(j, "A.MP4", "asr", t=2.0, dur=5.0)
     _run(j, "A.MP4", "telemetry", t=7.0, dur=1.0)
     _run(j, "A.MP4", "proxy", t=8.0, dur=20.0)

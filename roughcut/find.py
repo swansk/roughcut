@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from . import config, speakers
+from . import telemetry_events
 from .inference import complete
 from .revise import _clip_block, events_section
 
@@ -122,6 +123,20 @@ def lexical(query: str, clips: dict[str, dict]) -> list[dict]:
                          "notable": bool(m.get("notable")),
                          "score": len(got) / len(q)
                          + (0.25 if m.get("notable") else 0.0),
+                         "tokens": got})
+
+        # What the camera felt (wave 20): the same words the planner reads, so "where did I
+        # jump" and "where did I stop" find the sensor's airs and stops with no model call.
+        for m in c.get("felt_rows") if "felt_rows" in c else telemetry_events.felt_words(clip):
+            got = _matched(q, f"{m.get('kind', '')} {m.get('what', '')}")
+            if not got:
+                continue
+            lo, hi = window(float(m["start"]) - PAD_HEAD_S, float(m["end"]) + PAD_TAIL_S)
+            hits.append({"clip": clip, "start": lo, "end": hi,
+                         "what": str(m.get("what", "")).strip(),
+                         "why": "felt by the camera", "source": "felt",
+                         "kind": m.get("kind", ""), "notable": bool(m.get("notable")),
+                         "score": len(got) / len(q) * 0.9 + (0.25 if m.get("notable") else 0.0),
                          "tokens": got})
 
     # One moment, one row: a line and the frames that show it land within seconds of

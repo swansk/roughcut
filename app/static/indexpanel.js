@@ -39,7 +39,17 @@
     ['telemetry', 'Telemetry', 'Telemetry — the camera\'s motion sensors (free)'],
     ['proxy', 'Preview', 'Preview — the proxy the monitors play (free)'],
   ];
-  const NAME = { asr: 'Heard', look: 'Looked at', close: 'Close looks', telemetry: 'Telemetry', proxy: 'Preview' };
+  const NAME = { asr: 'Heard', look: 'Looked at', close: 'Close looks', telemetry: 'Telemetry', proxy: 'Preview',
+                 local: 'Local (3080)' };
+  // The 3080's column (wave 20 LOCALGPU's `local` stage): drawn only when the report has it
+  const LOCAL_COL = ['local', 'Local (3080)', 'Local (3080) — the GPU in this machine looks at every frame of the footage: free, and it checks falls and finds what you search for'];
+  /* Understanding, per bin (wave 20, Karl's K6): who looks at the footage, and what each
+   * costs. The words come from the server when it sends them (GET /api/index/mode). */
+  const MODES = {
+    hybrid: ['Hybrid (3080 + Claude)', 'The 3080 looks at everything for free; Claude double-checks only the moments the cut uses. Costs a few Claude calls.'],
+    local: ['Local only (3080, free)', 'Only the 3080 looks, free; nothing is double-checked, so events stay unchecked. Costs nothing.'],
+    claude: ['Claude only', 'Claude reads the contact sheets and checks the events; the 3080 is not used. Costs the most Claude calls.'],
+  };
   // what the foot runs again (the select's own words are short: the bar is one row)
   const WHAT = [
     ['asr', 'Hear', 'Hear again'], ['look', 'Look', 'Look again'],
@@ -52,7 +62,7 @@
   const IX = {
     rep: null, sig: '', sel: new Set(), anchor: null, focus: null, what: 'look', interval: null,
     quote: null, quoteKey: '', busy: false, err: '', timer: 0, qtimer: 0, mounted: false, job: null,
-    lastJob: null,
+    lastJob: null, mode: null, modeErr: '', modeBusy: false,
   };
 
   const $ = (s, r) => (r || document).querySelector(s);
@@ -151,6 +161,17 @@
   /* ------------------------------------------------------------ the scope and the price */
 
   function rows() { return (IX.rep && IX.rep.rows) || []; }
+  /* The 3080's column shows when the report has the stage (a row's `stages.local`) or says
+   * what the GPU is (`local`, with `available: false` and a `reason` when there is none). */
+  function hasLocal() {
+    const rep = IX.rep;
+    return !!rep && (!!(rep.local && typeof rep.local === 'object') || rows().some((r) => r.stages && r.stages.local));
+  }
+  function localGone() {
+    const l = IX.rep && IX.rep.local;
+    return l && typeof l === 'object' && l.available === false ? (l.reason || 'no GPU found') : '';
+  }
+  function cols() { return hasLocal() ? STAGES.concat([LOCAL_COL]) : STAGES; }
   function scopeClips() {
     const all = rows().filter((r) => !r.missing).map((r) => r.clip);
     const picked = all.filter((c) => IX.sel.has(c));
@@ -242,9 +263,13 @@
     IX.mounted = true;
     sec.innerHTML = `
       <div class="ix-sum" data-testid="index-summary"></div>
+      <div class="ix-mode" data-testid="index-modebar" hidden>
+        <label for="ixMode">Understanding</label>
+        <select id="ixMode" class="ix-modesel" data-testid="index-mode" aria-label="who looks at the footage in this bin"></select>
+        <span class="ix-modeline" data-testid="index-modeline"></span>
+      </div>
       <div class="ix-list" tabindex="0"><table class="plist ixt">
-        <colgroup><col class="c-name">${STAGES.map(([k]) => `<col class="c-${k}">`).join('')}<col class="c-cost"><col class="c-ran"></colgroup>
-        <thead><tr><th class="name">Name</th>${STAGES.map(([k, l, t]) => `<th class="stg" data-stage="${k}" title="${esc(t)}">${l}</th>`).join('')}<th class="num" title="what the model calls on this clip cost">Cost</th><th title="when its index last ran">Ran</th></tr></thead>
+        <colgroup></colgroup><thead><tr></tr></thead>
         <tbody></tbody></table></div>
       <div class="ix-detail" data-testid="index-detail"></div>
       <div class="ix-foot">
@@ -278,6 +303,7 @@
         IX.sel.clear(); IX.focus = null; paint(); requote();
       }
     });
+    $('.ix-modesel', sec).addEventListener('change', (e) => setMode(e.target.value));
     const what = $('.ix-what', sec);
     what.value = IX.what;
     what.addEventListener('change', () => { IX.what = what.value; paintFoot(); requote(); });
@@ -290,14 +316,21 @@
 
   function cell(r, k) {
     const v = r.stages[k] || {};
-    const st = v.state || 'not run';
+    let st = v.state || 'not run';
     let text = '', title = `${NAME[k]}: `;
-    if (st === 'done') {
+    const gone = k === 'local' ? localGone() : '';
+    if (gone) {
+      // no GPU: said, with the reason, never a blank or a failure
+      st = 'unavailable';
+      text = 'n/a';
+      title += `not available — ${gone}`;
+    } else if (st === 'done') {
       text = k === 'look' ? `✓ ${Number(v.interval_s || 4)} s` : '✓';
       title += `done ${when(v.at, true)}`;
       if (k === 'look') title += ` · one frame every ${Number(v.interval_s || 4)} s${v.sheets ? ` · ${plural(v.sheets, 'sheet')}` : ''}`;
       if (k === 'close' && v.windows) title += ` · ${plural(v.windows, 'window')}`;
       if (k === 'asr' && r.words != null) title += ` · ${plural(r.words, 'word')}`;
+      if (k === 'local') title += ` · free, on this machine${v.checked != null ? ` · ${plural(v.checked, 'window')} checked` : ''}${v.frames ? ` · ${plural(v.frames, 'frame')}` : ''}`;
       if (v.batch) title += ' · the rest of its batch is still being heard';
       if (PRICED.has(k)) title += ` · ${costWords(v.cost_usd, true).title || costWords(v.cost_usd, true).text}`;
       if (v.again === 'waiting') { text += ' ↻'; title += ' — asked again, not run yet (stopped): runs with the next index'; }
@@ -344,7 +377,7 @@
     const junk = r.junk ? '<span class="junk" title="marked junk: its looks are skipped">junk</span>' : '';
     return `<tr class="row${sel}${r.missing ? ' missing' : ''}" data-clip="${esc(r.clip)}" data-testid="index-row">`
       + `<td class="name" title="${esc(r.clip)}"><span class="n">${name}</span>${tuned}${junk}</td>`
-      + STAGES.map(([k]) => cell(r, k)).join('')
+      + cols().map(([k]) => cell(r, k)).join('')
       + `<td class="num cost" title="${esc(c.title || 'no model call on this clip yet')}">${rowCost(r) > 0 ? esc(c.text) : '—'}</td>`
       + `<td class="ran" title="${esc(ran ? `last ran ${when(ran, true)}` : 'nothing indexed yet')}">${esc(ran ? shortWhen(ran) : '—')}</td></tr>`;
   }
@@ -383,7 +416,7 @@
     const dur = r.duration != null ? clock(r.duration) : '';
     const head = `<div class="ix-dh"><b>${esc(stem(r.clip))}</b>${dur ? `<span>${dur}</span>` : ''}`
       + `<span title="the interval its next look reads at">next look: every ${Number(r.interval_s)} s${r.tuned ? ' (tuned)' : ''}</span></div>`;
-    const lines = STAGES.map(([k]) => {
+    const lines = cols().map(([k]) => {
       const v = r.stages[k] || {};
       const st = v.state || 'not run';
       const bits = [];
@@ -449,6 +482,77 @@
     stopB.textContent = rep && rep.stopping ? 'Stopping…' : 'Stop';
   }
 
+  /* the colgroup and the heading row follow the columns (the 3080's comes and goes) */
+  function paintHead(sec) {
+    const cs = cols();
+    const key = cs.map(([k]) => k).join(',');
+    const t = $('table.ixt', sec);
+    if (t.dataset.cols === key) return;
+    t.dataset.cols = key;
+    $('colgroup', t).innerHTML = `<col class="c-name">${cs.map(([k]) => `<col class="c-${k}">`).join('')}<col class="c-cost"><col class="c-ran">`;
+    $('thead tr', t).innerHTML = `<th class="name">Name</th>${cs.map(([k, l, tt]) => `<th class="stg" data-stage="${k}" title="${esc(tt)}">${l}</th>`).join('')}<th class="num" title="what the model calls on this clip cost">Cost</th><th title="when its index last ran">Ran</th>`;
+    IX.sig = '';
+  }
+
+  /* ------------------------------------------------------------ understanding (K6) */
+
+  function modeWords(m) {
+    const w = IX.mode && IX.mode.words && IX.mode.words[m];
+    return Array.isArray(w) ? w : (w && w.label ? [w.label, w.line || ''] : MODES[m]);
+  }
+  async function loadMode() {
+    try {
+      const d = await getJSON('/api/index/mode');
+      IX.mode = d && typeof d === 'object' && MODES[d.mode] ? d : null;
+    } catch (e) { IX.mode = null; }      // the endpoint is not there: the control stays away
+    const sec = $('#projBody > section[data-tool=index]');
+    if (sec && IX.mounted) paintMode(sec);
+  }
+  async function setMode(m) {
+    if (!IX.mode || IX.modeBusy || !MODES[m]) return;
+    IX.modeBusy = true;
+    IX.modeErr = '';
+    const was = IX.mode.mode;
+    IX.mode = { ...IX.mode, mode: m };
+    paintMode($('#projBody > section[data-tool=index]'));
+    try {
+      const d = await getJSON('/api/index/mode', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: m }) });
+      IX.mode = { ...IX.mode, ...(d && typeof d === 'object' ? d : {}), mode: d && MODES[d.mode] ? d.mode : m };
+      say(`Understanding: ${modeWords(IX.mode.mode)[0]}`, 2600);
+    } catch (e) {
+      IX.mode = { ...IX.mode, mode: was };
+      IX.modeErr = `could not change it: ${e.message}`;
+      say(`Could not change the mode: ${e.message}`, 4500);
+    } finally {
+      IX.modeBusy = false;
+      paintMode($('#projBody > section[data-tool=index]'));
+    }
+  }
+  function paintMode(sec) {
+    if (!sec) return;
+    const bar = $('.ix-mode', sec);
+    if (!bar) return;
+    bar.hidden = !IX.mode;
+    if (!IX.mode) return;
+    const sel = $('.ix-modesel', sec);
+    // no 3080: the report's `local` {available: false, reason}, or the mode endpoint's
+    // `local_available: false` (lane VERIFY) with its `note`
+    const gone = localGone() || (IX.mode.local_available === false ? 'no local model on this machine' : '');
+    const key = `${Object.keys(MODES).join()}|${gone}`;
+    if (sel.dataset.key !== key) {
+      sel.dataset.key = key;
+      sel.innerHTML = Object.keys(MODES).map((m) => `<option value="${m}"${m === 'local' && gone ? ' disabled' : ''}>${esc(modeWords(m)[0])}${m === 'local' && gone ? ' — not available' : ''}</option>`).join('');
+    }
+    sel.value = IX.mode.mode;
+    sel.disabled = IX.modeBusy;
+    const line = $('.ix-modeline', sec);
+    const effective = IX.mode.effective && IX.mode.effective !== IX.mode.mode && IX.mode.note ? IX.mode.note : '';
+    const t = [IX.modeErr || modeWords(IX.mode.mode)[1], gone ? `The 3080 is not available: ${gone}.` : '', effective].filter(Boolean).join(' ');
+    line.textContent = t;
+    line.title = Object.keys(MODES).map((m) => `${modeWords(m)[0]}: ${modeWords(m)[1]}`).join('\n');
+    line.classList.toggle('bad', !!IX.modeErr);
+  }
+
   function paint() {
     const sec = mount();
     if (!sec) return;
@@ -461,13 +565,15 @@
       free() ? `~${dollars(s.cost_usd)} if using the API · free on your plan` : `spent ${dollars(s.cost_usd)}`,
       rep.journal ? `journal: ${rep.path}` : 'no journal yet: the files on disk',
       rep.job_label ? `now: ${rep.job_label}` : ''].filter(Boolean).join('\n') : '';
-    const sig = JSON.stringify([rep && rep.rows, [...IX.sel], IX.focus]);
+    paintHead(sec);
+    paintMode(sec);
+    const sig = JSON.stringify([rep && rep.rows, [...IX.sel], IX.focus, rep && rep.local]);
     if (sig !== IX.sig) {
       IX.sig = sig;
       const list = $('.ix-list', sec);
       const top = list.scrollTop, left = list.scrollLeft;
       $('tbody', sec).innerHTML = rows().map(rowHtml).join('')
-        || '<tr class="empty"><td colspan="8" class="hint">No footage in this bin yet: File › Import…</td></tr>';
+        || `<tr class="empty"><td colspan="${cols().length + 3}" class="hint">No footage in this bin yet: File › Import…</td></tr>`;
       list.scrollTop = top;
       list.scrollLeft = left;
       paintDetail(sec);
@@ -653,6 +759,7 @@
     const shown = !!sec && !sec.hidden;
     if (window.dock && typeof dock.open === 'function') dock.open('index');
     paint();
+    loadMode();
     // revealed, the observer reads it fresh (init); already shown, read it here
     if (shown || !('MutationObserver' in window)) refresh().then(requote);
     return true;
@@ -671,6 +778,7 @@
       what: IX.what, interval_s: intervalShown(),
       price: IX.quote ? { usd: IX.quote.usd, local: !!IX.quote.local, words: priceWords(IX.quote).text } : null,
       summary: summaryWords(), running: !!(rep && rep.running), job: rep ? rep.job : null,
+      mode: IX.mode ? IX.mode.mode : null, local_column: hasLocal(), local_gone: localGone() || null,
     };
   }
 
@@ -689,6 +797,7 @@
     }
     window.addEventListener('rc:clips-changed', () => { if (isShown()) refresh(); });
     if (isShown()) refresh().then(requote);
+    loadMode();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
