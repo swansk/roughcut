@@ -6,9 +6,9 @@
   "recall_karl": 0.6,
   "recall_air": 0.8,
   "recall_fall": 1.0,
-  "negatives_asserted": 4,
+  "negatives_asserted": 3,
   "negatives_total": 19,
-  "fa_per_neg_min": 2.35,
+  "fa_per_neg_min": 1.17,
   "find_overlap": 0.632,
   "find_iou": 0.421,
   "find_union_overlap": 0.789,
@@ -112,14 +112,14 @@
     ]
    },
    "negatives_asserted": [
-    4,
+    3,
     19
    ],
-   "false_events": 6,
+   "false_events": 3,
    "neg_minutes": 2.55,
-   "fa_per_neg_min": 2.35,
-   "unmatched_events": 61,
-   "events": 80
+   "fa_per_neg_min": 1.17,
+   "unmatched_events": 30,
+   "events": 46
   },
   "felt": {
    "recall": {
