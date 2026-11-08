@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- Loop state: FIND3 and DIARIZE merged; all of wave 20 on the 8766 preview.
 - The suite's conftest puts the repo root on `sys.path`, so any test file run alone imports `roughcut` (test_find and test_find_union failed to collect when run first).
 - Loop state: EVAL and LOCALGPU merged and on the 8766 preview; FIND3 launched; DIARIZE re-merging.
 - Understanding eval scores Find with the 3080 (wave 20, FIND3): `find_union_overlap` / `find_union_iou` through the app's own `find.search`, from the clips' embeddings and cached query text vectors (`eval/query-vectors.json`, `--refresh-vectors`), so the gate needs no GPU and stays ~1 s; "skipped: no local stack here" when the embeddings are missing or only partly written (the preview copy mid-run no longer reads as a regression). `--rerank` scores the Claude rerank apart (not in the gate). Baseline updated for the Find lines only: union 0.789 / IoU 0.474 against lexical 0.632 / 0.421.

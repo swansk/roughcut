@@ -49,6 +49,12 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-08 ~16:30: **FIND3 (`51342e7`, Find + 3080 0.79) and DIARIZE (`848dcab`, re-merged by its lane; speakers stage)
+  merged; all wave 20 lanes in. 8766 deployed on `848dcab`** (gates GREEN 2/2, holds 17-44 ms, understanding line incl.
+  "Find + 3080 0.79"). Lead fixes: conftest puts the repo root on sys.path (test_find / test_find_union / test_verify failed
+  to collect alone). The free local stage finished on Karl's bin (12 sidecars). Gap found: VERIFY never joins the 3080's
+  checks into events (0 'local' certainty) and `bool(localvlm.available())` is always true — sent back to VERIFY. Next:
+  that fix; then PLAY10 / WORKER at load <= 4; then the full gate and judge 16. Pending Karl: the Claude checker run.
 - 2026-11-08 ~17:30: **EVAL merged (`9d38376`; the gate's understanding line: recall 0.89, 4 of 19 negatives asserted, Find
   0.63) and LOCALGPU merged (`012a42c`, gates GREEN 3 of 4 — one 246 ms "idle (select)" hold during a 0.28 s GET
   /api/firstpass: watch — base 2 of 2)**; 8766 deployed on `012a42c`: Hybrid effective = hybrid, the 3080 available. The
