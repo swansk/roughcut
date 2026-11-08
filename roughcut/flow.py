@@ -693,6 +693,8 @@ def _n(x) -> str:
 
 def _model_name(m) -> str:
     s = str(m or "").lower()
+    if s in ("analysis", "skeleton", "judge", "quick", "deep"):
+        return ""                 # a role id is not a model: say nothing
     for k, v in (("sonnet", "Sonnet"), ("opus", "Opus"), ("haiku", "Haiku")):
         if k in s:
             return v

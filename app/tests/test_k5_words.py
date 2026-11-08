@@ -185,3 +185,52 @@ def test_lane_verify_and_telem_fields_read_as_the_chips():
     assert rej["level"] == "contradicted" and "rejected by Claude" in rej["title"]
     old = flow.certainty(_m(claim_status="unsupported"))
     assert old["level"] == "unsupported"
+
+
+# ---------------------------------------------------------------- real-bin fixes (lead, 2026-11-08)
+
+# Karl's Killington record from before `produced.index_ran` (K5's click: mode rerun, 58 s)
+OLD_RECORD = {
+    "job": "8cb3b622", "mode": "rerun", "keep": [], "state": "done", "started": 1794065632.2,
+    "clips": 12, "cut": "main", "finished": 1794065690.5,
+    "clip_names": [f"CLIP_{i:02d}.MP4" for i in range(1, 13)], "base_names": None,
+    "proposal": {"job": "ebe12c54", "shots": 19}, "produced": {
+        "index": {"clips": 12, "listened": 12, "looked": 12, "look_need": 12, "close": 12,
+                  "close_need": 12, "proxied": 12, "pct": 100,
+                  "words": "heard 12/12 · looked at 12/12 · previews 12/12"},
+        "picks": 92, "cut": {"shots": 19, "length_s": 163.76}}}
+
+
+def test_an_old_rerun_record_on_a_complete_index_is_rerank_only():
+    import server
+    assert server.index_ran_of(OLD_RECORD) is False
+    acc = flow.pass_account(KILLINGTON, {"state": "done", "index_ran": server.index_ran_of(OLD_RECORD),
+                                         "index_complete": True, "picks": 92, "shots": 19})
+    assert acc["rerank_only"] and "only re-ranked" in acc["headline"]
+
+
+def test_an_old_record_that_cannot_be_told_leaves_the_headline_out():
+    import server
+    first = {**OLD_RECORD, "mode": "run"}
+    partial = {**OLD_RECORD, "produced": {**OLD_RECORD["produced"], "index": {
+        **OLD_RECORD["produced"]["index"], "close": 3}}}
+    newclips = {**OLD_RECORD, "base_names": OLD_RECORD["clip_names"][:10]}
+    for rec in (first, partial, newclips, None, {}):
+        assert server.index_ran_of(rec) is None, rec
+    acc = flow.pass_account(KILLINGTON, {"state": "done", "index_ran": None, "shots": 19})
+    assert acc["headline"] == "" and acc["rerank_only"] is False
+    assert server.index_ran_of({**OLD_RECORD, "produced": {**OLD_RECORD["produced"],
+                                                           "index_ran": True}}) is True
+
+
+def test_a_role_is_resolved_to_its_model_and_never_printed():
+    import server
+    assert server._layer_model({"role": "analysis"}) == "claude-sonnet-5-5"
+    assert flow._model_name(server._layer_model({"role": "analysis"})) == "Sonnet"
+    assert server._layer_model({"model": "claude-opus-5-5", "role": "x"}) == "claude-opus-5-5"
+    assert server._layer_model({"role": "mystery"}) is None and server._layer_model({}) is None
+    a = {**KILLINGTON, "looked": {**KILLINGTON["looked"], "model": "analysis"},
+         "close": {**KILLINGTON["close"], "model": "skeleton"}}
+    words = flow.index_account(a)
+    assert "analysis" not in words and "skeleton" not in words
+    assert "651 frames, 6×5 contact sheets of 320 px frames)" in words

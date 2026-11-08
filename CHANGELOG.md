@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Fixed
+- Wave 20 K5UI: the first pass's Index words never print a role id ("651 frames, analysis" on Karl's old sidecars): a role resolves to its model through `config.model_for` (Sonnet), or the words say nothing; and a finished run recorded before `produced.index_ran` is read as re-rank-only when it was a re-run on a complete index with no new clips, else it leaves the headline out.
+
 ### Changed
 - Wave 20 K5UI: the certainty chips read the field names lanes VERIFY (`certainty`, `claim_status`, `verdict`; `local_available` / `effective` / `note` on the mode payload) and TELEM (`text`, status `felt`) document; the Index panel says what a Hybrid bin without a local model actually runs.
 
