@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import colour as colourmod
-from . import config, edits
+from . import config, edits, telemetry_events
 from .boundaries import polish, polish_plan, summarise  # noqa: F401 — polish_plan re-exported
 from .estimate import Estimate, estimate
 from .firstpass import clip_name
@@ -342,6 +342,11 @@ def _clip_block(clip: dict, timeline: dict[str, str] | None = None) -> str:
             mark = "!" if m.get("notable") else " "
             lines.append(f" {mark} {m['start']:.1f}-{m['end']:.1f}  "
                          f"[{m.get('kind', '')}] {m.get('what', '')}")
+    # What the camera felt (wave 20, lane TELEM): GoPro telemetry as numbers, ahead of any
+    # frame-reading. The sensor measured these seconds; nobody has necessarily looked.
+    felt = clip["felt"] if "felt" in clip else telemetry_events.felt_line(clip["clip"])
+    if felt:
+        lines.append(felt)
     if visual.get("unusable"):
         lines.append("unusable stretches (do not cut here): " + "; ".join(
             f"{u['start']:.1f}-{u['end']:.1f} {u.get('why', '')}"

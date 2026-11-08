@@ -79,6 +79,7 @@ from roughcut import flow as flowmod  # noqa: E402
 from roughcut import deep as deepmod  # noqa: E402
 from roughcut import firstpass as fpmod  # noqa: E402
 from roughcut import procscope  # noqa: E402
+from roughcut import telemetry_events  # noqa: E402
 from roughcut import fxcheck  # noqa: E402
 from roughcut import dirwatch  # noqa: E402
 from roughcut import tracks as tracksmod  # noqa: E402
@@ -6501,6 +6502,12 @@ def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
             raise RuntimeError("the telemetry tool wrote no summary")
         if d.get("error") or not d.get("gpmd"):
             raise _Skip(str(d.get("error") or "no usable gpmd stream")[:120])
+        # The timed events (wave 20, roughcut/telemetry_events.py): airs, impacts, speed
+        # drops, stops and lifts with their numbers, cached on the file's signature.
+        try:
+            telemetry_events.build_sidecar(clip, clip_path(clip), telemetry_dir(), force=forced)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"the felt events failed: {exc}") from exc
         return 0.0
     if stage == "asr":
         # One tool run over every clip still waiting on it, not one per clip: the
@@ -6846,6 +6853,11 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
                 and str(st.get("last_error") or "").startswith("not integrated")
                 and has_telemetry(clip)):
             j.reopen(clip, "telemetry")
+        # A telemetry stage done before the felt events existed has no `.felt.json`: run it
+        # again (the tool's own cache makes that free, the events are pure Python).
+        if (st["state"] == "done" and has_telemetry(clip)
+                and not telemetry_events.sidecar_path(clip).exists()):
+            j.reopen(clip, "telemetry")
     # Probes first, all of them: they are one ffprobe each, and with every probe settled
     # the audio pass can run as one batch over every clip instead of reloading its
     # model per clip as the priority walk would otherwise make it.
@@ -7081,6 +7093,9 @@ IMPACT_SHOW_G = 5.0
 
 def telemetry_dir() -> Path:
     return STATE["work"] / "telemetry" / STATE["footage"].name
+
+
+telemetry_events.use_telemetry_dir(lambda: telemetry_dir())
 
 
 def telemetry_cmd(stem: str, force: bool = False) -> list[str]:

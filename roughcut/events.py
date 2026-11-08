@@ -48,6 +48,9 @@ import subprocess
 import time
 from pathlib import Path
 
+from . import telemetry_events as _tel
+from .telemetry_events import telemetry_events      # noqa: F401 — the one door VERIFY / LOCALGPU use
+
 # 10 Hz to match the audio sidecars' track rate exactly (R8), so the two can be
 # compared sample for sample without resampling either.
 MOTION_HZ = 10.0
@@ -339,7 +342,14 @@ def deep_verdict(moment: dict, deep: dict | None) -> str | None:
     return "confirmed" if same else "contradicted"
 
 
-CONFIRMATION_WEIGHT = {"confirmed": CONFIRMED, "unseen": UNSEEN,
+# A telemetry candidate (wave 20): the sensor measured it, no one has looked. Above UNSEEN
+# because the bake-off (R12) found the telemetry rules at 0.78 recall for the wearer's
+# events where the sampled-frame claims reached 0.33, and a number is a witness that does
+# not hallucinate; below CONFIRMED, because a lone accelerometer dip is a candidate until
+# the checker (roughcut/verify.py) has seen it.
+FELT = 1.2
+
+CONFIRMATION_WEIGHT = {"felt": FELT, "confirmed": CONFIRMED, "unseen": UNSEEN,
                        "deep": DEEP, "fine-only": FINE_ONLY,
                        "unsupported": UNSUPPORTED, "contradicted": CONTRADICTED}
 
@@ -369,9 +379,30 @@ def score_moment(moment: dict, *, track: list[float] | None = None,
         "unusable_overlap": round(blocked, 2)}}
 
 
+# What a telemetry event is scored as: the family of claim it is a candidate for.
+FELT_KIND = {"air": "jump", "speed_drop": "fall", "impact": "crash"}
+
+
+def telemetry_moments(clip: str, felt: list[dict] | None = None) -> list[dict]:
+    """The clip's telemetry events as candidate moments: `source: "telemetry"`, `status:
+    "felt"`, the numbers riding along in `felt`. Only the events a checker should look at
+    (`check`): every air, a slowing that came to a stop or jolted the camera, an impact that
+    is not hands on the camera and not the landing an air already carries."""
+    out = []
+    for e in (_tel.telemetry_events(clip) if felt is None else felt):
+        if not e.get("check") or e.get("after_air") or e["kind"] not in FELT_KIND:
+            continue
+        kind = FELT_KIND[e["kind"]]
+        out.append({"clip": clip, "start": e["start"], "end": max(e["end"], e["start"] + 0.1),
+                    "kind": kind, "what": e.get("text", ""), "notable": e["kind"] != "impact",
+                    "source": "telemetry", "status": "felt", "who": e.get("who", "wearer"),
+                    "frames": [], "confidence": "", "demoted": "", "felt": e})
+    return out
+
+
 def rank_clip(clip: str, coarse: dict, fine: dict | None = None,
               track: list[float] | None = None, hz: float = MOTION_HZ,
-              deep: dict | None = None) -> list[dict]:
+              deep: dict | None = None, felt: list[dict] | None = None) -> list[dict]:
     """One clip's moments, coarse, fine and deep together, each with a score and its reason.
 
     A fine moment supersedes the coarse moment it audits rather than joining it: they
@@ -440,6 +471,19 @@ def rank_clip(clip: str, coarse: dict, fine: dict | None = None,
                     "confidence": e.get("confidence", ""), "demoted": "",
                     **score_moment(e, track=track, hz=hz, unusable=unusable,
                                    status="confirmed" if agrees else "deep")})
+    for m in telemetry_moments(clip, felt) if felt else []:
+        # A sheet or close-look claim of the same family on the same seconds is the same
+        # event seen twice: the telemetry row carries it (timestamps from the sensor) and
+        # keeps what the frames said. A deep look is a stronger reader and stays its own row.
+        fam = FAMILY.get(m["kind"]) or "down"
+        twins = [o for o in out if o["source"] in ("sheet", "close look")
+                 and overlap((m["start"] - 1, m["end"] + 1), (o["start"], o["end"])) > 0
+                 and FAMILY.get(o["kind"] if "kind" in o else "", None) == fam]
+        out = [o for o in out if o not in twins]
+        if twins:
+            m["what"] = f"{m['what']} · frames: {twins[0].get('what', '')}"
+            m["seen_by_frames"] = True
+        out.append({**m, **score_moment(m, track=track, hz=hz, unusable=unusable, status="felt")})
     return [e for e in out if e["score"] > 0.0]
 
 
@@ -453,7 +497,7 @@ def rank_bin(per_clip: dict[str, dict]) -> list[dict]:
     out: list[dict] = []
     for clip, d in per_clip.items():
         out += rank_clip(clip, d.get("coarse", {}), d.get("fine"), d.get("track"),
-                         d.get("hz", MOTION_HZ), d.get("deep"))
+                         d.get("hz", MOTION_HZ), d.get("deep"), d.get("felt"))
     out.sort(key=lambda e: (-e["score"], e["clip"], e["start"]))
     for i, e in enumerate(out, 1):
         e["rank"] = i
@@ -695,6 +739,17 @@ def gather(visual_dir: Path, audio_dir: Path) -> dict[str, dict]:
         track = excitement(motion_cache(visual_dir, stem), _onset(audio_dir, stem))
         per_clip[coarse.get("clip") or deep.get("clip") or f"{stem}.MP4"] = {
             "coarse": coarse, "fine": fine, "deep": deep, "track": track, "hz": MOTION_HZ}
+    # The sensor's candidates (wave 20): every clip with a felt sidecar, looked at or not.
+    # A bin nobody has looked at yet still has its airs, and that is the point of the stage.
+    tdir = _tel._dir(None)
+    for side in sorted(tdir.glob("*.felt.json")) if tdir and tdir.is_dir() else []:
+        clip = f"{side.name[: -len('.felt.json')]}.MP4"
+        found = next((c for c in per_clip if Path(c).stem.upper() == Path(clip).stem.upper()), None)
+        felt = _tel.telemetry_events(found or clip)
+        if not felt:
+            continue
+        per_clip.setdefault(found or clip, {"coarse": {}, "fine": {}, "deep": {}, "track": None,
+                                            "hz": MOTION_HZ})["felt"] = felt
     return per_clip
 
 
