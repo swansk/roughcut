@@ -14,6 +14,17 @@ layers with very different prices:
     the frames call "person airborne". It costs a call, so the board offers it with
     a price and the human clicks — the same rule as the visual pass.
 
+Wave 20 (FIND3) adds two more, both optional and both degrading to what is above:
+
+  * **union** — the local 3080's PE-Core search (`localvlm.search`: text against 2 fps
+    frame embeddings) fused with the lexical rows: overlapping windows merge, each
+    source's evidence stays on the row, the windows tighten to the scoring frames, and
+    the fused score is a reciprocal-rank sum, so a moment both sources like beats one
+    only either does. With no local stack it is exactly the lexical list.
+  * **rerank** — one Claude call over the union's top ~10 (text + up to 6 small
+    thumbnails). Priced first; on by default only in Claude only / Hybrid, never in
+    Local only.
+
 Both return windows, not cut points: a match is somewhere to *look*, played from the
 full clip so the editor can scrub around it, and only becomes a segment when they add
 it. Nothing here writes anything.
@@ -22,6 +33,8 @@ it. Nothing here writes anything.
 from __future__ import annotations
 
 from typing import Any, Callable
+
+from pathlib import Path
 
 from . import config
 from . import telemetry_events
@@ -291,3 +304,272 @@ def find(query: str, clips: dict[str, dict], events: list[dict] | None = None,
         "backend": result.backend, "latency_ms": result.latency_ms,
     }
     return found
+
+
+# --------------------------------------------------------------- the union (wave 20)
+
+# What a person reads next to a result. `seen` is the Claude visual pass's moments; `local` is
+# the 3080's frame search; `model` is a Claude Find.
+SOURCE_LABEL = {"heard": "heard", "felt": "felt", "seen": "seen by Claude", "local": "seen by the 3080",
+                "model": "Claude"}
+
+# Reciprocal-rank fusion. K=10 and the 8 + 5 depths sit on a plateau of the Killington sweep
+# (research/R12-understanding/eval): any K in 10..60 with 5-12 lexical and 3-8 visual rows
+# gives the same hit@3, so these are the middle of the flat part, not a tuned peak.
+FUSE_K = 10
+FUSE_LEXICAL = 8
+FUSE_VISUAL = 5
+# Windows on the same clip within this many seconds of each other are one moment.
+FUSE_GAP_S = 1.0
+
+
+def _stem(clip: str) -> str:
+    return Path(clip).stem
+
+
+def _label(source: str) -> str:
+    return " \u00b7 ".join(SOURCE_LABEL.get(n, n) for n in str(source).split("+"))
+
+
+def _evidence(row: dict, source: str, rank: int) -> dict:
+    return {"source": source, "label": _label(source), "what": row.get("what", ""),
+            "start": row["start"], "end": row["end"], "score": row.get("score"), "rank": rank}
+
+
+def local_rows(query: str, clips: dict[str, dict], *, k: int = FUSE_VISUAL,
+               search: Callable[..., dict] | None = None) -> tuple[list[dict], str]:
+    """The 3080's frame matches as Find rows, and why there are none (empty string if fine).
+
+    `search(text, k=...)` is `localvlm.search_ex` by default (a subprocess: it loads the text
+    tower under the GPU lock, so call this from a worker thread, never the event loop). A row
+    for a clip the bin does not list (junk, out of the segment filter) is dropped.
+    """
+    if search is None:
+        from . import localvlm
+        search = localvlm.search_ex
+    try:
+        r = search(query, k=k)
+    except Exception as exc:                                  # noqa: BLE001  degrade, never raise
+        return [], f"the local search failed: {str(exc)[:120]}"
+    if not r.get("ok"):
+        return [], str(r.get("why") or "no local model")
+    by_stem = {_stem(c): c for c in clips}
+    rows = []
+    for m in (r.get("results") or {}).get(query, []):
+        clip = by_stem.get(_stem(m["clip"]))
+        if clip is None:
+            continue
+        rows.append({"clip": clip, "start": float(m["start"]), "end": float(m["end"]),
+                     "what": f"looks like \u201c{query.strip()}\u201d",
+                     "why": "matches the picture on the local model", "source": "local",
+                     "score": float(m.get("score", 0.0))})
+    return rows, ""
+
+
+def union(lexical_rows: list[dict], local: list[dict], *, k: int = FUSE_K, n_lexical: int = FUSE_LEXICAL,
+          n_local: int = FUSE_VISUAL, gap: float = FUSE_GAP_S, limit: int = MAX_LEXICAL) -> list[dict]:
+    """Lexical + local rows as one ranked list of windows. Pure.
+
+    Each input is best-first. Rows on one clip whose windows touch (within `gap`) merge into
+    one: the window becomes the hull of its parts (the local part is the scoring frame +-1 s,
+    so a long utterance a frame match lands inside is not widened), `evidence` keeps every
+    part, and the fused score is the sum of `k / (k + rank)` over the parts, so 1.0 is a lone
+    top hit and a moment both sources rank first is near 2.
+    """
+    parts = [(dict(r), i, r.get("source") or "heard") for i, r in enumerate(lexical_rows[:n_lexical])]
+    parts += [(dict(r), i, "local") for i, r in enumerate(local[:n_local])]
+    parts.sort(key=lambda p: (_stem(p[0]["clip"]), p[0]["start"]))
+    out: list[dict] = []
+    for row, rank, source in parts:
+        w = k / (k + rank)
+        ev = _evidence(row, source, rank)
+        tgt = next((o for o in out if _stem(o["clip"]) == _stem(row["clip"])
+                    and row["start"] <= o["end"] + gap and row["end"] >= o["start"] - gap), None)
+        if tgt is None:
+            out.append({**{x: row[x] for x in ("clip", "start", "end", "what", "why") if x in row},
+                        "score": w, "evidence": [ev],
+                        **{x: row[x] for x in ("kind", "notable") if x in row}})
+            continue
+        tgt["start"], tgt["end"] = min(tgt["start"], row["start"]), max(tgt["end"], row["end"])
+        tgt["score"] += w
+        tgt["evidence"].append(ev)
+        if row.get("what") and row["what"] not in tgt["what"] and source != "local":
+            tgt["what"] = f"{tgt['what']} \u00b7 {row['what']}" if tgt["what"] else row["what"]
+        for x in ("kind", "notable"):
+            if x in row and x not in tgt:
+                tgt[x] = row[x]
+    for o in out:
+        names: list[str] = []
+        for e in o["evidence"]:
+            for part in str(e["source"]).split("+"):
+                if part not in names:
+                    names.append(part)
+        o["source"] = "+".join(names)
+        o["label"] = _label("+".join(names))
+        o["why"] = ("matches here: " + o["label"]) if len(names) > 1 else o.get("why", "")
+        o["score"] = round(o["score"], 3)
+        o["start"], o["end"] = round(o["start"], 2), round(o["end"], 2)
+    out.sort(key=lambda r: (-r["score"], r["clip"], r["start"]))
+    return out[:limit]
+
+
+def search(query: str, clips: dict[str, dict], *, local: bool = True,
+           local_search: Callable[..., dict] | None = None) -> dict:
+    """The free Find: lexical, plus the 3080 when it is there. -> {matches, local: {used, why}}."""
+    lex = lexical(query, clips)
+    if not local:
+        return {"matches": [dict(r, label=_label(r["source"]),
+                                 evidence=[_evidence(r, r["source"], i)]) for i, r in enumerate(lex)],
+                "local": {"used": False, "why": "not asked for"}}
+    vis, why = local_rows(query, clips, search=local_search)
+    if not vis:
+        return {"matches": union(lex, []), "local": {"used": False, "why": why or "no frame matched"}}
+    return {"matches": union(lex, vis), "local": {"used": True, "why": ""}}
+
+
+# --------------------------------------------------------------- the rerank (wave 20)
+
+RERANK_TOP = 10
+RERANK_THUMBS = 6
+RERANK_ROLE = config.ROLE_VERIFY            # a look at a few frames, not a read of the bin
+
+RERANK_SCHEMA = {
+    "ranking": [{"n": 1, "fit": "yes | maybe | no", "why": "one short clause: what is there"}],
+    "notes": "one sentence: how you judged, or what to try instead",
+}
+
+RERANK_SYSTEM = (
+    "You help a film editor find a specific moment in raw footage. You are shown numbered "
+    "candidate windows another search proposed, each with what it matched on and, for the "
+    "first few, a small frame from inside it. You say which candidates really show or say "
+    "what the editor described. You never add candidates and never invent timestamps.")
+
+
+# The brief: ticked by default in Claude only / Hybrid. The Killington measurement says do not
+# yet: one middle frame per candidate cannot see a 0.3 s air, and the rerank LOST two of the 15
+# union hits (hit@3 0.789 -> 0.684, 19 calls, $1.39). Flip this when a prompt/thumbnail change
+# beats the union in `tools/eval_understanding.py --rerank`.
+RERANK_DEFAULT_ON = False
+
+
+def rerank_policy(mode: str) -> dict:
+    """Whether the rerank may run and whether it starts ticked, for the bin's index mode
+    (`hybrid` | `local` | `claude`). Local only never spends a Claude call; the tick is
+    on only in Claude only / Hybrid, and only while RERANK_DEFAULT_ON."""
+    m = str(mode or "").lower()
+    return {"allowed": m != "local", "default": RERANK_DEFAULT_ON and m in ("claude", "hybrid"), "mode": m}
+
+
+def rerank_projected_usd(n_thumbs: int = RERANK_THUMBS) -> float:
+    """One rerank call: the CLI harness overhead, ~700 tokens of text, a few small frames."""
+    pin, pout = config.price_per_mtok(config.model_for(RERANK_ROLE))
+    return round((18000 + 900 + n_thumbs * 450) / 1e6 * pin + 400 / 1e6 * pout, 3)
+
+
+def build_rerank_prompt(query: str, rows: list[dict], n_thumbs: int) -> str:
+    lines = []
+    for i, r in enumerate(rows, 1):
+        ev = "; ".join(f"{e['label']}: {str(e.get('what', ''))[:90]}" for e in r.get("evidence", [])) or r.get("what", "")
+        lines.append(f"{i}. {r['clip']} {r['start']:.1f}-{r['end']:.1f} s \u2014 {ev}")
+    pics = (f"The first {n_thumbs} candidates come with one frame each, in order, from the middle "
+            "of their window." if n_thumbs else "No frames are attached; judge from the text.")
+    return f"""The editor is looking for this moment in their footage:
+
+## What they are looking for
+{query.strip()}
+
+## Candidates (best guess first)
+{chr(10).join(lines)}
+
+{pics} A candidate matched on "heard" is a line someone said (the thing may have happened
+before or after it); "felt" is what the camera's sensors recorded; "seen by the 3080" is a
+picture match by a small local model, often right about the scene and wrong about the
+instant.
+
+## What to return
+For every candidate number, `fit`: "yes" if it shows or says what the editor asked for,
+"maybe" if it is plausible but you cannot tell, "no" if it is something else. `why` is a
+short clause. `notes` is one sentence."""
+
+
+def validate_rerank(payload: Any, n: int) -> dict:
+    if not isinstance(payload, dict) or not isinstance(payload.get("ranking"), list):
+        raise ValueError("expected an object with a 'ranking' list")
+    seen: dict[int, dict] = {}
+    for i, r in enumerate(payload["ranking"]):
+        if not isinstance(r, dict):
+            raise ValueError(f"ranking {i} is not an object")
+        try:
+            k = int(r["n"])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError(f"ranking {i} has no candidate number") from None
+        if not 1 <= k <= n:
+            raise ValueError(f"ranking {i} names candidate {k}, there are {n}")
+        fit = str(r.get("fit", "")).strip().lower()
+        if fit not in ("yes", "maybe", "no"):
+            raise ValueError(f"ranking {i} fit must be yes, maybe or no")
+        seen.setdefault(k, {"fit": fit, "why": str(r.get("why", "")).strip()[:200]})
+    return {"ranking": seen, "notes": str(payload.get("notes", "")).strip()[:300]}
+
+
+def apply_rerank(rows: list[dict], verdict: dict) -> list[dict]:
+    """Yes before maybe before unjudged before no; the union's order within each. A `no` is
+    demoted, not deleted: the human decides what is gone."""
+    order = {"yes": 0, "maybe": 1, None: 2, "no": 3}
+    marked = []
+    for i, r in enumerate(rows, 1):
+        v = verdict["ranking"].get(i)
+        r = dict(r, rerank=v) if v else dict(r)
+        if v:
+            r["source"] = r["source"] if "model" in r["source"].split("+") else r["source"] + "+model"
+            if "Claude" not in r.get("label", ""):
+                r["label"] = (r.get("label", "") + " \u00b7 Claude " + v["fit"]).lstrip(" \u00b7")
+        marked.append(r)
+    marked.sort(key=lambda r: order[(r.get("rerank") or {}).get("fit")])
+    return marked
+
+
+def rerank(query: str, rows: list[dict], thumb_of: Callable[[dict], Path | None] | None = None, *,
+           top: int = RERANK_TOP, n_thumbs: int = RERANK_THUMBS) -> dict:
+    """One Claude call over the union's top rows. -> {matches (the whole list, reordered),
+    notes, usage}. Raises InferenceError like `find`; the caller falls back to `rows`."""
+    cands = rows[:top]
+    if not query.strip() or not cands:
+        raise ValueError("nothing to rerank")
+    thumbs: list[Path] = []
+    for r in cands[:n_thumbs]:
+        p = thumb_of(r) if thumb_of else None
+        if not p:
+            break                 # the prompt says "the first N candidates have a frame": a prefix only
+        thumbs.append(Path(p))
+    result = complete(build_rerank_prompt(query, cands, len(thumbs)), role=RERANK_ROLE, images=thumbs,
+                      schema=RERANK_SCHEMA, system=RERANK_SYSTEM,
+                      validate=lambda p: validate_rerank(p, len(cands)), retries=1, isolated=True)
+    verdict = result.content
+    return {"matches": apply_rerank(cands, verdict) + rows[top:], "notes": verdict["notes"],
+            "usage": {"input_tokens": result.input_tokens, "output_tokens": result.output_tokens,
+                      "projected_usd": result.projected_usd, "model": result.model,
+                      "backend": result.backend, "latency_ms": result.latency_ms,
+                      "thumbs": len(thumbs)}}
+
+
+def thumb_maker(video_of: Callable[[str], Path], workdir: Path, width: int = 320) -> Callable[[dict], Path | None]:
+    """A `thumb_of` for `rerank`: one frame from the middle of a row's window, as a small JPEG."""
+    workdir = Path(workdir)
+
+    def make(row: dict) -> Path | None:
+        from . import verify
+        t = (float(row["start"]) + float(row["end"])) / 2
+        out = workdir / f"{_stem(row['clip'])}_{t:.2f}.jpg"
+        if out.exists():
+            return out
+        try:
+            frames, _ = verify.get_frames(Path(video_of(row["clip"])), [t], width)
+            if not frames or frames[0] is None:
+                return None
+            workdir.mkdir(parents=True, exist_ok=True)
+            frames[0].convert("RGB").save(out, quality=80)
+            return out
+        except Exception:                                    # noqa: BLE001  a missing frame is not a failure
+            return None
+    return make

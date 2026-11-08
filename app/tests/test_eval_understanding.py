@@ -158,3 +158,33 @@ def test_reads_only_and_skips_without_work_dir(tmp_path, capsys):
     ev.evaluate(work, "tiny", _set(tmp_path))
     assert before == sorted(p.relative_to(work).as_posix() for p in work.rglob("*"))
     assert ev.main(["--work", str(tmp_path / "nowhere"), "--check"]) == 3
+
+
+def test_find_union_is_scored_from_embeddings_and_cached_vectors_or_says_skipped(tmp_path):
+    """FIND3: the union line needs the clips' .embed.npy and the cached text vectors; with
+    either missing it is 'skipped' and never a regression (its headline value is None)."""
+    import numpy as np
+    work, evald = _bin(tmp_path), _set(tmp_path)
+    res = ev.evaluate(work, "tiny", evald)
+    assert "skipped" in res["find_union"] and "no frame embeddings" in res["find_union"]["skipped"]
+    assert res["headline"]["find_union_overlap"] is None
+    assert ev.compare({"find_union_overlap": 0.79}, res["headline"]) == ([], [])
+
+    local = tmp_path / "local"
+    local.mkdir()
+    t = np.arange(0, 60, 0.5)
+    e = np.zeros((len(t), 4), dtype=np.float16)
+    e[:, 0] = 1.0
+    e[12] = [0, 1, 0, 0]                                  # 6 s on CLIP_A
+    np.save(local / "CLIP_A.embed.npy", e)
+    (local / "CLIP_A.embed.json").write_text(json.dumps({"clip": "CLIP_A", "times": list(t)}))
+    res = ev.evaluate(work, "tiny", evald, local)
+    assert "only" not in res["find_union"].get("skipped", "") and "embedded 1 of 2" in res["find_union"]["skipped"]
+    np.save(local / "CLIP_B.embed.npy", e)
+    (local / "CLIP_B.embed.json").write_text(json.dumps({"clip": "CLIP_B", "times": list(t)}))
+    res = ev.evaluate(work, "tiny", evald, local)
+    assert "no cached text vectors" in res["find_union"]["skipped"]
+    qs = ev.load_set(evald)[1]
+    (evald / ev.VECTORS).write_text(json.dumps({"vectors": {q["query"]: [0, 1, 0, 0] for q in qs}}))
+    res = ev.evaluate(work, "tiny", evald, local)
+    assert res["find_union"]["hit3_overlap"][1] >= 1 and res["headline"]["find_union_overlap"] is not None

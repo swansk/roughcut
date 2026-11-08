@@ -147,6 +147,19 @@ def cmd_search(a) -> int:
     return 0
 
 
+def cmd_encode(a) -> int:
+    """Text -> PE-Core vectors ({"model", "dim", "vectors": {text: [floats]}}). The eval caches
+    these so the gate can score Find from the embeddings with no GPU."""
+    from roughcut import gpulock
+
+    from .embed import Embedder
+    with gpulock.hold("local-encode"):
+        qs = Embedder().texts(a.text)
+    _out({"model": config.PE_REPO, "dim": int(qs.shape[1]),
+          "vectors": {t: [round(float(x), 6) for x in qs[i]] for i, t in enumerate(a.text)}})
+    return 0
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="rcgpu")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -169,5 +182,8 @@ def main(argv=None) -> int:
     p.add_argument("--dir", required=True); p.add_argument("--text", action="append", required=True)
     p.add_argument("--k", type=int, default=3); p.add_argument("--clips", action="append")
     p.set_defaults(fn=cmd_search)
+    p = sub.add_parser("encode")
+    p.add_argument("--text", action="append", required=True)
+    p.set_defaults(fn=cmd_encode)
     a = ap.parse_args(argv)
     return a.fn(a)
