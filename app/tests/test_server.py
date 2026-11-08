@@ -18,6 +18,15 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture
+def claims_as_found(monkeypatch):
+    """These tests drive the visual pipeline with fabricated jump / fall claims and no
+    telemetry. Wave 20's demotion pass would (correctly) hold such claims back from the
+    board, so they run with it off; test_verify.py covers the demotion itself."""
+    from roughcut import verify
+    monkeypatch.setattr(verify, "DEMOTE", False)
+
+
 def _duration(path: Path) -> float:
     r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
                         "-of", "csv=p=0", str(path)], capture_output=True, text=True)
@@ -42,6 +51,7 @@ def test_all_clips_offered_not_just_used(client):
     assert p["clips"]["CLIP_A.MP4"]["used"] is True
 
 
+@pytest.mark.usefixtures("claims_as_found")
 def test_visual_moments_reach_the_model_when_the_pass_has_run(tmp_path, project):
     """The visual sidecars are optional — they cost model calls — but when they exist
     the events nobody narrated have to reach the prompt."""
@@ -2214,6 +2224,7 @@ def test_the_visual_pass_is_priced_before_it_is_offered(tmp_path, project):
     assert server.VISUALS == {}
 
 
+@pytest.mark.usefixtures("claims_as_found")
 def test_the_visual_pass_runs_in_app_and_what_it_saw_reaches_the_board(
         tmp_path, project, monkeypatch):
     import server
@@ -2276,6 +2287,7 @@ def _stub_fine(script: Path, out: Path, stems: list[str]) -> list[str]:
     return [sys.executable, str(script), str(out), *stems]
 
 
+@pytest.mark.usefixtures("claims_as_found")
 def test_the_close_look_is_a_second_stage_that_can_overrule_the_first(
         tmp_path, project, monkeypatch):
     """Coarse pass, free scan, close look, rank — and the rank believes the close look.
@@ -2328,6 +2340,7 @@ def test_the_close_look_is_a_second_stage_that_can_overrule_the_first(
         assert kinds == ["junk"], kinds
 
 
+@pytest.mark.usefixtures("claims_as_found")
 def test_a_failed_close_look_keeps_the_sheets_that_were_paid_for(tmp_path, project,
                                                                  monkeypatch):
     import server
@@ -2406,6 +2419,7 @@ def test_the_audit_is_priced_before_it_spends_and_offered_on_the_status(
         assert ran == [] and set(server.VISUALS) == jobs_before
 
 
+@pytest.mark.usefixtures("claims_as_found")
 def test_the_audit_reads_exactly_the_planned_windows_then_reranks(
         tmp_path, project, monkeypatch):
     import server
