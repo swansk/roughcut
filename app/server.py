@@ -6586,8 +6586,8 @@ def _local_stage(j: journal.Journal, clip: str, allow) -> float:
             raise
         raise _Skip("failed: " + str(exc)[:160])
     settle_others(res, None)
-    if cancelled():
-        raise RuntimeError("stopped")
+    if cancelled() and not (Path(clip).stem in res["done"] and local_sidecar(clip).exists()):
+        raise RuntimeError("stopped")          # a clip that landed before the Stop stays done
     if Path(clip).stem not in res["done"] or not local_sidecar(clip).exists():
         raise _Skip("failed: " + str(res["failed"].get(Path(clip).stem) or "no sidecar written")[:160])
     return 0.0
@@ -7802,7 +7802,10 @@ def _scope_words(j: journal.Journal, entry) -> str:
     bad: list[str] = []
     for c, s in _scope_pairs(entry):
         st = j.clips.get(c, {}).get("stages", {}).get(s, {})
-        if st.get("state") in journal.SETTLED:
+        if s == "local" and st.get("state") == "skipped":
+            # the 3080 did not run (no GPU, not installed, a failed run): say so, not "checked"
+            bad.append(f"{STAGE_LABELS['local']}: {str(st.get('last_error') or 'skipped')[:70]}")
+        elif st.get("state") in journal.SETTLED:
             by.setdefault(s, []).append(Path(c).stem)
         elif st.get("state") in ("failed", "parked"):
             bad.append(f"{Path(c).stem} {RERUN_WORDS.get(s, s)}: {str(st.get('last_error') or 'failed')[:60]}")
@@ -7815,7 +7818,7 @@ def _scope_words(j: journal.Journal, entry) -> str:
         parts.append(f"{who} {RERUN_WORDS[s]} again")
     out = " · ".join(parts) or "nothing re-ran"
     if bad:
-        out += " — failed: " + "; ".join(bad[:3])
+        out += " — failed: " + "; ".join(list(dict.fromkeys(bad))[:3])
     return out
 
 
