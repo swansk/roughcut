@@ -49,6 +49,12 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-08 ~16:55: **PLAY10 merged (`43e4299`, ff; better than base, not at the bar: dissolves out of 0.5x hold 8/18 and
+  14/18 plays vs 18/18; cut 5 1/5 vs 5/5; residual single 83 ms holds inside the 0.5x shot, maybe WORKER's hand-off) and
+  VERIFY's local-join fix merged (`3b697a8`: 3 of 19 negatives asserted, 1.17 false/neg-min, recall 0.89)**; gates GREEN 2/2;
+  **8766 deployed on `3b697a8`**. WORKER (big grade.js read-back rewrite, `db75fad` on its branch) NOT merged: unmeasured;
+  PLAY10 and WORKER are running their quiet-box A/Bs now (load ~2.5) — the lead stays off the box. Follow-up: K5's
+  certainty counts read coverage moments, not verify's events, so "checked by the 3080" shows 0.
 - 2026-11-08 ~16:30: **FIND3 (`51342e7`, Find + 3080 0.79) and DIARIZE (`848dcab`, re-merged by its lane; speakers stage)
   merged; all wave 20 lanes in. 8766 deployed on `848dcab`** (gates GREEN 2/2, holds 17-44 ms, understanding line incl.
   "Find + 3080 0.79"). Lead fixes: conftest puts the repo root on sys.path (test_find / test_find_union / test_verify failed
