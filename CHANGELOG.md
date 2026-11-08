@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- Wave 20 DIARIZE: nobody is the wearer when the best candidate is quieter than -36 dB in the speech band (Killington CLIP_10's lone 2.9 s voice at -41.7 dB is not the camera's owner).
 - Wave 20 DIARIZE: diarize.py caps its own VRAM at 3 GB (a cuDNN autotune workspace took 8.9 GB and 40 s on some clips; capped it takes 0.4 GB and 5 s), and the wearer pick ignores speakers who talk under a fifth of the main talker's time (a bystander's 2.7 s burst out-shouted the wearer's 23 s monologue on CLIP_01).
 - Wave 20 DIARIZE: the `speakers` index stage runs after asr as a background stage (offered last, never holds a clip's release), the diarizer out of process at nice 5; skipped with "not available — add a HuggingFace token" when there is no token, and reopened when one appears.
 - Wave 20 DIARIZE: `roughcut/speakers.py` aligns diarization turns to the Whisper words (utterance `speaker` S1.., word `s`, sidecar `speakers` [{id, talk_s, loudness_db, wearer}]); the wearer is the loudest speaker in the speech band with wind frames masked. The planner's transcript lines read `wearer:` / `S2:` (revise.py transcript rendering only) and Find's lexical rows say "said here by the wearer / someone else".

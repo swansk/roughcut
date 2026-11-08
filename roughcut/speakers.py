@@ -22,6 +22,10 @@ MIN_TALK_S = 1.0
 # ...nor can one who talks under this share of the main talker's time: on Killington CLIP_01
 # a 2.7 s burst from a bystander was 3.5 dB louder than the wearer's 23 s monologue.
 MIN_SHARE = 0.2
+# The wearer's own voice is loud on their mic (Killington: -21 to -28 dBFS in the speech
+# band); a best candidate quieter than this is somebody far away, so nobody is the wearer
+# (CLIP_10: one 2.9 s voice at -41.7 dB).
+WEARER_MIN_DB = -36.0
 # A word with no turn under it takes the nearest turn within this many seconds.
 NEAR_S = 0.5
 # Wearer margin under which the pick is flagged as a close call.
@@ -87,6 +91,8 @@ def pick_wearer(speakers: list[dict]) -> str | None:
         win = max(pool, key=lambda s: s["talk_s"])
     else:
         win = ranked[0]
+        if win["loudness_db"] < WEARER_MIN_DB:
+            return None
         win["wearer_margin_db"] = (round(win["loudness_db"] - ranked[1]["loudness_db"], 1)
                                    if len(ranked) > 1 else None)
         win["wearer_close_call"] = bool(len(ranked) > 1

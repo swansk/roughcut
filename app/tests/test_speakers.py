@@ -81,7 +81,7 @@ def test_wind_frames_are_masked_out_of_the_loudness():
 
 
 def test_lone_speaker_is_the_wearer_and_short_talkers_cannot_win():
-    sc = _sidecar()
+    sc = _sidecar(level_b=-30.0)
     one = {"exclusive": [{"start": 0.0, "end": 20.0, "speaker": "A"}]}
     out = speakers.apply(sc, one)
     assert [s["wearer"] for s in out["speakers"]] == [True]
@@ -153,3 +153,10 @@ def test_a_bystander_burst_louder_than_the_wearers_monologue_does_not_win():
     by = {s["id"]: s for s in out["speakers"]}
     assert by["S2"]["loudness_db"] > by["S1"]["loudness_db"]
     assert by["S1"]["wearer"] and not by["S2"]["wearer"]
+
+
+def test_a_lone_voice_far_below_the_wearers_level_is_not_the_wearer():
+    sc = _sidecar(level_a=-42.0, level_b=-42.0)
+    out = speakers.apply(sc, {"exclusive": [{"start": 0.0, "end": 20.0, "speaker": "A"}]})
+    assert [s["wearer"] for s in out["speakers"]] == [False]
+    assert all(u["wearer"] is False for u in out["transcript"])
