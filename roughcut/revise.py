@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import colour as colourmod
-from . import config, edits, telemetry_events
+from . import config, edits, speakers, telemetry_events
 from .boundaries import polish, polish_plan, summarise  # noqa: F401 — polish_plan re-exported
 from .estimate import Estimate, estimate
 from .firstpass import clip_name
@@ -353,8 +353,11 @@ def _clip_block(clip: dict, timeline: dict[str, str] | None = None) -> str:
             for u in visual["unusable"]))
 
     if clip.get("transcript"):
-        lines.append("transcript:")
-        lines += [f"  {u['start']:.1f}-{u['end']:.1f}  {u['text']}"
+        tagged = any(u.get("speaker") for u in clip["transcript"])
+        lines.append("transcript (wearer = whoever wears the camera; S2 etc. = other voices):"
+                     if tagged else "transcript:")
+        # who spoke, when the speakers stage has run: `wearer:` (the mic's owner) or `S2:`
+        lines += [f"  {u['start']:.1f}-{u['end']:.1f}  {speakers.render_tag(u)}{u['text']}"
                   for u in clip["transcript"]]
     else:
         lines.append("transcript: (no speech)")

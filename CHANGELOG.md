@@ -14,6 +14,13 @@ same commit. Releases move entries into a dated version section.
 - Loop state: EVAL and LOCALGPU merged and on the 8766 preview; FIND3 launched; DIARIZE re-merging.
 - Understanding eval scores Find with the 3080 (wave 20, FIND3): `find_union_overlap` / `find_union_iou` through the app's own `find.search`, from the clips' embeddings and cached query text vectors (`eval/query-vectors.json`, `--refresh-vectors`), so the gate needs no GPU and stays ~1 s; "skipped: no local stack here" when the embeddings are missing or only partly written (the preview copy mid-run no longer reads as a regression). `--rerank` scores the Claude rerank apart (not in the gate). Baseline updated for the Find lines only: union 0.789 / IoU 0.474 against lexical 0.632 / 0.421.
 - Find (wave 20, FIND3): the free Find is now the union of the word match and the 3080's PE-Core frame search. `find.search` fuses the lexical rows with `localvlm` frame matches by reciprocal rank (overlapping windows merge, each source's evidence stays on the row, windows are the hull of their parts so a long utterance a frame match lands inside is not widened), and every row says where it came from (`heard`, `felt`, `seen by Claude`, `seen by the 3080`, `Claude`). With no local stack it is the lexical list as before (`local: {used: false, why}`). On the 19 non-low Killington queries any-overlap hit@3 goes 0.63 to 0.79 and IoU>=0.3 0.42 to 0.47. `POST /api/find` runs the search off the event loop (the text tower loads in a subprocess under the GPU lock); `localvlm.encode_texts/load_items/rank_windows` and `rcgpu encode` support it. The optional Claude rerank (`rerank: true`: one isolated verify-role call over the top 10 with up to 6 thumbnails, priced first via `/api/find/price`, a job like the model Find) is allowed in Claude only / Hybrid (ticked by default there once `find.RERANK_DEFAULT_ON` is flipped; it is OFF because on Killington the rerank scored hit@3 0.684 against the union's 0.789, 19 calls, $1.39) and refused (409) in Local only; a `no` is demoted, never deleted. Tests: fusion, fallbacks, mode gating, mocked rerank, endpoint.
+- Tests: the journal and Index panel expectations count the `speakers` stage beside `local`.
+- Wave 20 DIARIZE: merged with TELEM, K5UI, VERIFY, EVAL and LOCALGPU; `speakers` shares the `gpu` worker pool with `local`, is a background stage beside it, and the Index panel lists it ("Speakers", re-runnable as speakers/diarize).
+- Wave 20 DIARIZE: nobody is the wearer when the best candidate is quieter than -36 dB in the speech band (Killington CLIP_10's lone 2.9 s voice at -41.7 dB is not the camera's owner).
+- Wave 20 DIARIZE: diarize.py caps its own VRAM at 3 GB (a cuDNN autotune workspace took 8.9 GB and 40 s on some clips; capped it takes 0.4 GB and 5 s), and the wearer pick ignores speakers who talk under a fifth of the main talker's time (a bystander's 2.7 s burst out-shouted the wearer's 23 s monologue on CLIP_01).
+- Wave 20 DIARIZE: the `speakers` index stage runs after asr as a background stage (offered last, never holds a clip's release), the diarizer out of process at nice 5; skipped with "not available — add a HuggingFace token" when there is no token, and reopened when one appears.
+- Wave 20 DIARIZE: `roughcut/speakers.py` aligns diarization turns to the Whisper words (utterance `speaker` S1.., word `s`, sidecar `speakers` [{id, talk_s, loudness_db, wearer}]); the wearer is the loudest speaker in the speech band with wind frames masked. The planner's transcript lines read `wearer:` / `S2:` (revise.py transcript rendering only) and Find's lexical rows say "said here by the wearer / someone else".
+- Wave 20 DIARIZE: `research/tools/diarize.py`, a pyannote community-1 diarization CLI in its own uv environment (torch cu128, batch 8 = ~0.6 GB reserved instead of 9 GB), honouring the GPU lock file; reads the HuggingFace token at run time from `$HF_TOKEN` or `~/.config/roughcut/hf-token` and never prints it; exits 3 "not available" without one.
 - test_k5_ui's "no local stage" case strips the stage from the server's report: since LOCALGPU merged, the server always reports `local` (n/a with its reason when there is no GPU), so the column shows.
 - Loop state: TELEM, K5UI and VERIFY merged and on the 8766 preview; EVAL launched.
 - Wave 20 EVAL: `tools/eval_understanding.py` scores, offline from a bin's sidecars (no model, no GPU, read-only, ~1 s), what the planner and the board assert (raw index, asserted after telemetry merge + demotion, felt, checker-confirmed) against Karl's checked Killington set: recall by kind on high-confidence and Karl-confirmed rows, negatives still asserted, false events per negative minute, Find hit@3 through `find.lexical`, counts by certainty; writes JSON + markdown. The gate gets an `understanding` check against the committed `research/R12-understanding/eval/baseline.json` (a regression fails, an improvement suggests updating it; skipped with a reason when the Killington preview work dir is absent). Tests on a synthetic bin.
@@ -2415,7 +2422,7 @@ same commit. Releases move entries into a dated version section.
   lane `agent/tl-keys`).** `app/static/timeline-keys.js`, loaded after the foundation and
   registered by wrapping `tl.mount` (the foundation has no mounted event); a keydown
   listener on `window` in the capture phase that stops only the keys it owns, so space,
-  `u`, the brackets, the foundation's `+ - \` / ⌘Z / ⌘⇧Z and the switcher's `o` keep
+  `u`, the brackets, the foundation's `+ - ` / ⌘Z / ⌘⇧Z and the switcher's `o` keep
   their owners; nothing fires while typing. **JKL** shuttle on the monitor: `L` plays,
   again for 2× / 4× / 8× (`playbackRate` and `defaultPlaybackRate` on both buffers, so the
   hand-over at a cut keeps the speed); `J` reverses by driving `currentTime` from rAF as
@@ -2430,7 +2437,7 @@ same commit. Releases move entries into a dated version section.
   transcript line as why; `⌥I` / `⌥O` and `Esc` clear; playing the cut, `I` says to open
   a clip and `O` stays the switcher's. A **Timeline** section in the Keys panel rendered
   from the module's one table, with the trim lane's `,` `.` `S` and the foundation's
-  `+ − \`; `?` brings it up. `timeline.css` gains the marks bar and the map's rules.
+  `+ − `; `?` brings it up. `timeline.css` gains the marks bar and the map's rules.
   `test_timeline_keys.py`: eight playwright tests (L stacks to 8× and K resets both
   buffers; J moves `currentTime` back over 300 ms, stacks, crosses the cut onto CLIP_A's
   out-point; K+L; `↓` from shot 1 lands at 2.0 s with shot 2 selected, `↑` / Home / End;
@@ -2546,7 +2553,7 @@ same commit. Releases move entries into a dated version section.
   Thirteen playwright tests against the synthetic bin: the ruler's labels and end mark
   agree with the seed EDL and `#posTotal`; blocks carry the ids the page was handed and
   the first save persists, and at the fit zoom the two 2 s shots share the viewport
-  equally; `+` doubles the px/s and `\` fits; a click selects the block and its card
+  equally; `+` doubles the px/s and `` fits; a click selects the block and its card
   (and a card click selects the block), ⇧-click ranges, ⌘-click toggles, the empty ruler
   clears; a click on the ruler at 3 s parks the monitor on shot 2 at 1.0 s, paused, with
   the playhead at 3 s and space resuming from there; the playhead follows playback;
@@ -2564,7 +2571,7 @@ same commit. Releases move entries into a dated version section.
   the in-point (lazy, one frame per settled trim, never one per nudge), the clip's hue, the
   stem, the duration and the shot's strongest line, a mark on any edge that opens
   mid-sentence or cuts a line off — and the playhead as one line across the whole cut at its
-  film time. `+`/`-` zoom (⌘/ctrl + wheel around the cursor), `\` fits, ⇧ + wheel pans.
+  film time. `+`/`-` zoom (⌘/ctrl + wheel around the cursor), `` fits, ⇧ + wheel pans.
   Blocks carry the server's `data-id`, never an index; the module's selection is a set of
   ids mapped onto app.js's index `sel` at the boundary (click selects and plays from there,
   ⇧-click ranges, ⌘-click toggles, a click on the empty ruler or lane clears — the cards

@@ -38,7 +38,7 @@ from typing import Any, Iterable
 VERSION = 1
 
 # The stages, in the order a clip walks through them.
-STAGES = ("probe", "telemetry", "asr", "proxy", "look", "close", "picks", "local")
+STAGES = ("probe", "telemetry", "asr", "proxy", "look", "close", "picks", "local", "speakers")
 
 # What a stage needs finished (or skipped) before it may start. Proxy needs the probe,
 # not the ASR: encoding a preview does not wait on listening. Picks wait on the close
@@ -56,6 +56,8 @@ DEPENDS: dict[str, tuple[str, ...]] = {
     "picks": ("asr", "look", "close"),
     # the local GPU's embeddings and fall checks: need the sensor candidates, nothing else
     "local": ("probe", "telemetry"),
+    # who said what: pyannote over the clip's audio, aligned to the words asr wrote
+    "speakers": ("asr",),
 }
 
 # The stages that spend money. `pause_priced()` holds exactly these, for the whole bin;
@@ -63,16 +65,16 @@ DEPENDS: dict[str, tuple[str, ...]] = {
 PRICED = frozenset({"look", "close"})
 
 # Stages that run in the background and never hold a clip back: a clip is released (its
-# picks on the floor) without them, because a local GPU stage takes minutes and the cut
-# does not wait on it. They still show in the stage list and the progress counts.
-BACKGROUND = frozenset({"local"})
+# picks on the floor) without them, because a GPU stage can queue behind another job for
+# minutes and the cut does not wait on it. They still show in the stage list and counts.
+BACKGROUND = frozenset({"local", "speakers"})
 
 # Which worker pool a stage draws from. Proxies and sheets have separate limits because
 # one is CPU-bound ffmpeg and the other is model calls with a rate limit; running two
 # encodes at once is a machine question, running two sheets at once is a budget one.
 KIND: dict[str, str] = {
     "probe": "probe", "telemetry": "probe", "asr": "asr", "proxy": "proxy",
-    "look": "sheet", "close": "sheet", "picks": "picks", "local": "gpu",
+    "look": "sheet", "close": "sheet", "picks": "picks", "local": "gpu", "speakers": "gpu",
 }
 # `gpu` is the one 12 GB card: one local job at a time (it also takes the GPU lock file).
 DEFAULT_WORKERS: dict[str, int] = {"probe": 2, "asr": 1, "proxy": 1, "sheet": 2, "picks": 1, "gpu": 1}
@@ -650,8 +652,12 @@ class Journal:
         now = time.time() if now is None else now
         limits = {**self.workers, **(workers or {})}
         load = self._pool_load()
-        tiers = ([COARSE, tuple(s for s in STAGES if s not in COARSE)] if coarse
-                 else [STAGES])
+        # background stages (speakers) are offered last: only when nothing a clip is
+        # waiting on is runnable, so a GPU job never queues ahead of a proxy or a look
+        fg = tuple(s for s in STAGES if s not in BACKGROUND)
+        bg = tuple(s for s in STAGES if s in BACKGROUND)
+        tiers = ([COARSE, tuple(s for s in fg if s not in COARSE), bg] if coarse
+                 else [fg, bg])
         for tier in tiers:
             hit = self._next_in(tier, now, limits, load, coarse, only, asked or ())
             if hit is not None:

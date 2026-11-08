@@ -46,6 +46,7 @@ def no_local_gpu():
     tests of the stage itself switch it on with a fake CLI (test_localvlm.py)."""
     mp = pytest.MonkeyPatch()
     mp.setenv("ROUGHCUT_LOCALGPU", "0")
+    mp.setenv("ROUGHCUT_NO_DIARIZE", "1")
     yield
     mp.undo()
 
