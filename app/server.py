@@ -120,7 +120,7 @@ def _glibc():
 
 _LIBC = _glibc()
 MEM: dict = {"arenas": None, "trims": 0, "trimmed_mb": 0.0, "last_trim_mb": None, "thread": None,
-             "locked_mb": None}
+             "locked_mb": None, "lock_on": False}
 try:
     _ARENAS = int(os.environ.get("ROUGHCUT_MALLOC_ARENAS", MALLOC_ARENAS))   # 0: glibc's own
 except ValueError:
@@ -161,11 +161,41 @@ def mem_trim() -> float | None:
 
 
 def _mem_trim_loop() -> None:
+    """Every RELOCK_S what has been mapped since is locked (`lock_resident`); every
+    MEM_TRIM_S the allocator's free memory goes back first — its arenas unlocked for the
+    trim (a locked page is never handed back) and relocked after (`mem_cycle`)."""
+    waited = 0.0
     while True:
-        time.sleep(MEM_TRIM_S)
-        mem_trim()
-        if MEM.get("locked_mb"):
-            lock_resident(heap=False)
+        time.sleep(RELOCK_S)
+        waited += RELOCK_S
+        trim = waited >= MEM_TRIM_S
+        if trim:
+            waited = 0.0
+        mem_cycle(trim)
+
+
+def mem_cycle(trim: bool = True) -> None:
+    """One turn of the trim thread: (when `trim`) hand malloc's free pages back, then lock
+    what the process runs on again (when locking is on). A trim leaves a locked page where
+    it is (madvise refuses it): the heap's top and an empty arena still go back, and the
+    free pages inside a locked arena stay, reused by the next allocations. Only when that
+    free memory grows past TRIM_LOCKED_MB are malloc's maps unlocked for the trim, and
+    relocked straight after it (`unlock_malloc`, `relock`): a page unlocked is one the
+    kernel may take, so that window is opened rarely and kept short."""
+    locking = bool(MEM.get("lock_on"))
+    if trim:
+        free = _malloc_free_mb() if locking else None
+        if free is not None and free >= TRIM_LOCKED_MB:
+            ranges = unlock_malloc()
+            try:
+                mem_trim()
+            finally:
+                relock(ranges)
+            MEM["unlocked_trims"] = MEM.get("unlocked_trims", 0) + 1
+        else:
+            mem_trim()
+    if locking:
+        lock_resident(again=True)
 
 
 def start_mem_trim() -> None:
@@ -181,62 +211,207 @@ def start_mem_trim() -> None:
 # burst at the pass's end runs, unused for minutes) are as swappable, and the judge's holds
 # at that burst were 0.4-0.9 s with the process all but off the CPU. So once the server is
 # configured, before it serves, those pages are locked as they are (`mlock2`, MLOCK_ONFAULT:
-# nothing not already resident is read in): the main heap, the main thread's stack, the
-# small anonymous maps (the allocator's 1 MiB object arenas) and the shared libraries' —
-# never a thread's 64 MB malloc arena, a thread stack or a big buffer, which the trim hands
-# back instead; and every MEM_TRIM_S the object arenas Python has made since (Killington,
-# wave 16: a 497 ms garbage collection that faulted 119 pages back in). ~120 MB mapped;
-# within RLIMIT_MEMLOCK or not at all (ROUGHCUT_MLOCK=0: off).
+# nothing not already resident is read in, and what is touched later stays), and every
+# RELOCK_S what has been mapped since.
+#
+# Verdict 15 punch 7: a 2.5 s hold (36 major faults) in FastAPI's per-request
+# `_get_param_aliases` while 10 GB of files were copied, with "locked 131 MB" printed. The
+# lock missed most of what the loop touches (wave 19 LOOPHOLD, measured with every page the
+# kernel could take taken — cgroup `memory.reclaim` on the server's scope, or MADV_PAGEOUT —
+# and one round of the board's reads): Python's 1 MiB object arenas are mapped side by side
+# and the kernel merges them, so the startup ones (module dicts, functions, classes, code:
+# 9 216 + 4 564 of the module-level objects) sat in one 8 MiB and one 4 MiB map, which the
+# old "small maps only" rule (< 4 MiB, to leave big buffers out) skipped; and a thread's
+# malloc arena (the dict tables and strings a worker thread made, which the loop reads) and
+# the main heap's growth were never locked. One round of reads after the reclaim faulted
+# 2 484 pages back (1 936 in those maps, 545 in the thread arena); with a 4 GB dd beside
+# it, holds of 1-17 s ("faults", up to 1 495 major faults). Now every private anonymous map
+# is locked — the main heap, the object arenas whatever their map's size, the threads'
+# malloc arenas and stacks — except a big map that is mostly untouched (a library's
+# reserve, e.g. OpenBLAS's 192 MB of thread buffers: locked on fault, a matrix product
+# would pin it) and the shared libraries' and interpreter's code as before. A locked page
+# is never handed back by a trim (madvise refuses it), so each MEM_TRIM_S the malloc-owned
+# maps are unlocked, trimmed and relocked (`mem_cycle`): what is still in use is locked
+# again, what was free is gone. Within RLIMIT_MEMLOCK (most important first: what stops
+# at the limit is a thread's stack) or not at all (ROUGHCUT_MLOCK=0: off).
 MLOCK_ONFAULT = 1
-LOCK_SMALL_MAP = 4 << 20
+LOCK_SPARSE_MAP = 4 << 20       # an anonymous map this big is locked only when it is in use:
+LOCK_SPARSE_SHARE = 0.25        # at least this share of it resident
 GLIBC_HEAP_MAX = 64 << 20       # a 64-bit glibc's thread arena heap (HEAP_MAX_SIZE)
+GUARD_MAX = 64 << 10            # a thread stack's guard below it (glibc: one page)
+TRIM_LOCKED_MB = 32.0           # free inside locked arenas worth unlocking them for a trim
+LOCK_REFUSALS = 4               # refusals in a row that mean RLIMIT_MEMLOCK, not a race
+try:
+    RELOCK_S = float(os.environ.get("ROUGHCUT_RELOCK_S", "5"))
+except ValueError:
+    RELOCK_S = 5.0
+RELOCK_S = max(0.1, RELOCK_S)
+PAGE = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
 
 
-def lock_resident(heap: bool = True) -> float | None:
-    """Lock the pages resident now that the loop runs on (see above); returns the MB of
-    mappings locked, None where it cannot be done (not glibc, off, or refused). Asked
-    again (`heap` False: the trim thread, every MEM_TRIM_S) it locks what has been mapped
-    since — the object arenas Python made since, a library imported late — and leaves the
-    main heap's growth to the trim."""
-    if _LIBC is None or os.environ.get("ROUGHCUT_MLOCK", "1") == "0":
-        return None
-    try:
-        mlock2 = _LIBC.mlock2
-        mlock2.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
-        maps = Path("/proc/self/maps").read_text().splitlines()
-    except (AttributeError, OSError):
-        return None
-    exe = os.path.realpath(sys.executable)
+def _maps() -> list[tuple[int, int, str, str]]:
+    """/proc/self/maps as (start, end, perms, name)."""
     vmas = []
-    for line in maps:
+    for line in Path("/proc/self/maps").read_text().splitlines():
         parts = line.split(maxsplit=5)
         if len(parts) < 5:
             continue
         a, b = (int(x, 16) for x in parts[0].split("-"))
         vmas.append((a, b, parts[1], parts[5].strip() if len(parts) > 5 else ""))
-    # glibc's thread arenas: 64 MB windows, each starting on a 64 MB boundary
+    return vmas
+
+
+def _arena_windows(vmas) -> set[int]:
+    """glibc's thread arenas: a 64 MB window on a 64 MB boundary whose maps run unbroken to
+    its end (the part in use read-write, the rest reserved)."""
     win = GLIBC_HEAP_MAX
-    heaps = {a for a, _b, _p, name in vmas if not name and a % win == 0}
+    out: set[int] = set()
+    for i, (a, b, perms, name) in enumerate(vmas):
+        if name or a % win or b - a > win or perms.startswith("---"):
+            continue
+        j = i
+        while (j + 1 < len(vmas) and not vmas[j + 1][3] and vmas[j + 1][0] == vmas[j][1]
+               and vmas[j + 1][1] <= a + win):
+            j += 1
+        if vmas[j][1] == a + win:
+            out.add(a)
+    return out
+
+
+def _resident_share(a: int, b: int) -> float:
+    """The share of [a, b) resident now (`mincore`); 1.0 where it cannot say."""
+    n = max(1, (b - a + PAGE - 1) // PAGE)
+    vec = (ctypes.c_ubyte * n)()
+    try:
+        f = _LIBC.mincore
+        f.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p]
+        if f(a, b - a, vec) != 0:
+            return 1.0
+    except (AttributeError, OSError, ctypes.ArgumentError):
+        return 1.0
+    return 1.0 - bytes(vec).count(0) / n
+
+
+def _lock_plan(vmas) -> list[tuple[int, int, int, str]]:
+    """What `lock_resident` locks, most important first: (rank, start, end, kind)."""
+    exe = os.path.realpath(sys.executable)
+    wins = _arena_windows(vmas)
+    plan = []
+    prev = None
+    for a, b, perms, name in vmas:
+        below, prev = prev, (a, b, perms, name)
+        if perms.startswith("---") or perms[3:4] == "s":
+            continue                                  # a guard, a reservation, a shared map
+        if name == "[heap]":
+            plan.append((0, a, b, "malloc"))
+        elif name == "[stack]":
+            plan.append((0, a, b, "stack"))
+        elif name.startswith("["):
+            continue                                  # [vvar], [vdso], [vsyscall]
+        elif name:
+            if name == exe or ".so" in Path(name).name:
+                plan.append((0, a, b, "code"))
+            # else: a data file someone mapped, not code
+        elif a in wins:
+            # a thread's malloc arena: the whole window, its reserve too, so that what the
+            # arena grows into later is locked as it is touched (mprotect keeps the flags)
+            plan.append((1, a, a + GLIBC_HEAP_MAX, "malloc"))
+        elif (a - a % GLIBC_HEAP_MAX) in wins:
+            continue                                  # the rest of a window, locked with it
+        elif (below is not None and below[1] == a and below[2].startswith("---")
+              and below[1] - below[0] <= GUARD_MAX and not below[3]):
+            plan.append((2, a, b, "stack"))           # a thread's stack, above its guard
+        elif b - a < LOCK_SPARSE_MAP or _resident_share(a, b) >= LOCK_SPARSE_SHARE:
+            plan.append((0, a, b, "objects"))         # object arenas, a buffer in use
+        # else: a big map mostly untouched — a library's reserve — is left alone
+    plan.sort(key=lambda r: r[0])
+    return plan
+
+
+def lock_resident(again: bool = False) -> float | None:
+    """Lock the pages resident now that the process runs on (see above); returns the MB of
+    mappings locked, None where it cannot be done (not glibc, off, or refused). Asked
+    `again` (the trim thread, every RELOCK_S) it locks what has been mapped since — the
+    object arenas Python made since, the heap's and the arenas' growth, a new thread's
+    stack, a library imported late."""
+    if _LIBC is None or os.environ.get("ROUGHCUT_MLOCK", "1") == "0":
+        return None
+    try:
+        mlock2 = _LIBC.mlock2
+        mlock2.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+        plan = _lock_plan(_maps())
+    except (AttributeError, OSError, ValueError):
+        return None
     done = 0
+    kinds: dict[str, int] = {}
+    refused = 0
+    for _rank, a, b, kind in plan:
+        if mlock2(a, b - a, MLOCK_ONFAULT) != 0:
+            # a map gone since /proc/self/maps was read (a buffer freed, a thread ended)
+            # is refused like the limit is (ENOMEM both): past LOCK_REFUSALS in a row it is
+            # the limit, and what is locked stays
+            refused += 1
+            MEM["lock_refused"] = MEM.get("lock_refused", 0) + 1
+            if refused >= LOCK_REFUSALS:
+                break
+            continue
+        refused = 0
+        done += b - a
+        kinds[kind] = kinds.get(kind, 0) + (b - a)
+    mb = round(done / 2**20, 1) if done else None
+    if again:
+        MEM["relocks"] = MEM.get("relocks", 0) + 1
+    if mb is not None:
+        MEM["lock_on"] = True
+    if mb is not None or not again:
+        MEM["locked_mb"] = mb
+        MEM["locked_kinds"] = {k: round(v / 2**20, 1) for k, v in kinds.items()}
+    return mb
+
+
+def unlock_malloc() -> list[tuple[int, int]]:
+    """Unlock what malloc manages — the main heap and the threads' arenas, their parts in
+    use — so a trim can hand its free pages back (madvise refuses a locked page). Returns
+    the ranges unlocked, for `relock`."""
+    if _LIBC is None:
+        return []
+    try:
+        munlock = _LIBC.munlock
+        munlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+        vmas = _maps()
+    except (AttributeError, OSError, ValueError):
+        return []
+    wins = _arena_windows(vmas)
+    out = []
     for a, b, perms, name in vmas:
         if perms.startswith("---"):
-            continue                                  # a guard or a reservation
-        if name in ("[heap]", "[stack]"):
-            if not heap:
-                continue
-        elif not name:
-            if b - a >= LOCK_SMALL_MAP or (a - a % win) in heaps:
-                continue                              # a malloc arena, a thread stack, a buffer
-        elif not (name == exe or ".so" in Path(name).name):
-            continue                                  # a data file someone mapped: not code
-        if mlock2(a, b - a, MLOCK_ONFAULT) != 0:
-            break                                     # past RLIMIT_MEMLOCK: what is locked stays
-        done += b - a
-    if heap:
-        MEM["locked_mb"] = round(done / 2**20, 1) if done else None
-    else:
-        MEM["relocks"] = MEM.get("relocks", 0) + 1
-    return round(done / 2**20, 1) if done else None
+            continue
+        if name == "[heap]" or (not name and (a - a % GLIBC_HEAP_MAX) in wins):
+            if munlock(a, b - a) == 0:
+                out.append((a, b))
+    return out
+
+
+def relock(ranges) -> None:
+    """Lock `ranges` again, as they are (what a trim took away is simply not there)."""
+    if _LIBC is None:
+        return
+    mlock2 = _LIBC.mlock2
+    mlock2.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+    for a, b in ranges:
+        mlock2(a, b - a, MLOCK_ONFAULT)
+
+
+def _malloc_free_mb() -> float | None:
+    """MB free inside malloc's arenas (glibc `mallinfo2`), None where it cannot say."""
+    if _LIBC is None:
+        return None
+    try:
+        f = _LIBC.mallinfo2
+        f.restype = _MallInfo2
+        return f().fordblks / 2**20
+    except (AttributeError, OSError):
+        return None
 
 
 class _MallInfo2(ctypes.Structure):
@@ -251,7 +426,10 @@ def mem_stats() -> dict:
     and resident locked, and the process's swap."""
     out: dict = {"arenas_max": MEM["arenas"], "trims": MEM["trims"],
                  "trimmed_mb": MEM["trimmed_mb"], "last_trim_mb": MEM["last_trim_mb"],
-                 "locked_mb": MEM.get("locked_mb"), "relocks": MEM.get("relocks", 0)}
+                 "locked_mb": MEM.get("locked_mb"), "relocks": MEM.get("relocks", 0),
+                 "locked_kinds": MEM.get("locked_kinds"),
+                 "unlocked_trims": MEM.get("unlocked_trims", 0),
+                 "lock_refused": MEM.get("lock_refused", 0)}
     try:
         for line in Path("/proc/self/smaps_rollup").read_text().splitlines():
             k, _, v = line.partition(":")
@@ -2074,7 +2252,7 @@ async def api_save(request: Request) -> JSONResponse:
         try:
             answer_ask(body["answer"])
         except (HTTPException, OSError, ValueError) as exc:
-            print(f"  !! save: the answer it carried was not recorded: {exc}", flush=True)
+            say(f"  !! save: the answer it carried was not recorded: {exc}")
     # `ids`: {tmp-N: minted id}, so the board re-keys its new shots from this reply
     return JSONResponse({"ok": True, "saved": len(clean), "ids": minted})
 
@@ -2120,8 +2298,38 @@ def note_request(row: dict) -> None:
     if row["ms"] >= SLOW_MS:
         SLOW.append(row)
         del SLOW[:-SLOW_KEEP]
-        print(f"  !! slow request: {row['ms']:.0f} ms {row['method']} {row['path']} "
-              f"({row['handler']})", flush=True)
+        say(f"  !! slow request: {row['ms']:.0f} ms {row['method']} {row['path']} "
+            f"({row['handler']})")
+
+
+# The loop never writes the log itself (wave 19 LOOPHOLD, verdict 15 punch 7): stdout is a
+# file under a judge's or a lane's run, and with a 4 GB dd beside the board one "slow
+# request" line held the loop 245 ms in write() (the sampler: `note_request`), the disk's
+# queue full of the dd's writeback. Lines said on the loop go to a queue a thread prints.
+_SAY: dict = {"q": None, "thread": None, "lock": threading.Lock()}
+
+
+def _say_loop(q) -> None:
+    while True:
+        line = q.get()
+        try:
+            print(line, flush=True)
+        except (OSError, ValueError):
+            pass
+
+
+def say(line: str) -> None:
+    """Print `line` from a thread, never from the caller (the event loop): in order, and
+    as soon as the writer thread gets to it."""
+    if _SAY["thread"] is None:
+        with _SAY["lock"]:
+            if _SAY["thread"] is None:
+                import queue
+                q = _SAY["q"] = queue.SimpleQueue()
+                t = threading.Thread(target=_say_loop, args=(q,), name="log", daemon=True)
+                t.start()
+                _SAY["thread"] = t
+    _SAY["q"].put(line)
 
 
 _HERE_ROOT = str(HERE.parent)
@@ -2357,11 +2565,11 @@ async def _loop_lag() -> None:
                 SLOW.append(row)
                 del SLOW[:-SLOW_KEEP]
                 w = row["where"] or {}
-                print(f"  !! the event loop was held {lag:.0f} ms"
-                      + (f" ({w.get('cause')}: rq {w.get('rq_ms')} ms, {w.get('majflt')} faults, "
-                         f"gc {w.get('gc_ms')} ms)" if w.get("cause") else "")
-                      + (f" — loop at {w.get('loop')}" if w.get("loop") else "")
-                      + (f"; ran: {'; '.join(w['busy'])}" if w.get("busy") else ""), flush=True)
+                say(f"  !! the event loop was held {lag:.0f} ms"
+                    + (f" ({w.get('cause')}: rq {w.get('rq_ms')} ms, {w.get('majflt')} faults, "
+                       f"gc {w.get('gc_ms')} ms)" if w.get("cause") else "")
+                    + (f" — loop at {w.get('loop')}" if w.get("loop") else "")
+                    + (f"; ran: {'; '.join(w['busy'])}" if w.get("busy") else ""))
 
 
 def _watch_loop() -> None:
@@ -2544,6 +2752,44 @@ def api_debug_slow(heap: int = 0) -> JSONResponse:
                          # settled (`snap_respond`, `late_respond`), by what they asked for
                          "late_answers": dict(SNAP["late"]),
                          "over_budget": list(OVER_BUDGET), "slow": list(SLOW)})
+
+
+MADV_PAGEOUT = 21
+
+
+def _rollup_mb() -> dict:
+    out: dict = {}
+    try:
+        for line in Path("/proc/self/smaps_rollup").read_text().splitlines():
+            k, _, v = line.partition(":")
+            if k in ("Rss", "Swap", "Locked"):
+                out[k.lower() + "_mb"] = round(int(v.split()[0]) / 1024, 1)
+    except (OSError, ValueError, IndexError):
+        pass
+    return out
+
+
+@app.post("/api/debug/pageout")
+def api_debug_pageout() -> JSONResponse:
+    """Tests and the gate only (ROUGHCUT_DEBUG_PAGEOUT=1; otherwise 404): hand the kernel
+    every page of this process it can take, now — MADV_PAGEOUT over every mapping, the
+    anonymous pages to swap and the file pages dropped; a locked page stays. What a box
+    under page-cache pressure does to a board over minutes, at once, so a test can see what
+    the next requests have to read back (wave 19 LOOPHOLD, verdict 15 punch 7). Answers the
+    maps advised and the process's resident, swapped and locked MB before and after."""
+    if os.environ.get("ROUGHCUT_DEBUG_PAGEOUT") != "1" or _LIBC is None:
+        raise HTTPException(404, "not on")
+    madvise = _LIBC.madvise
+    madvise.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+    before = _rollup_mb()
+    n = ok = 0
+    for a, b, perms, name in _maps():
+        if perms.startswith("---") or name in ("[vvar]", "[vdso]", "[vsyscall]"):
+            continue
+        n += 1
+        if madvise(a, b - a, MADV_PAGEOUT) == 0:
+            ok += 1
+    return JSONResponse({"maps": n, "advised": ok, "before": before, "after": _rollup_mb()})
 
 
 @app.post("/api/snap")
