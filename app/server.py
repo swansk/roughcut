@@ -83,6 +83,7 @@ from roughcut import fxcheck  # noqa: E402
 from roughcut import dirwatch  # noqa: E402
 from roughcut import tracks as tracksmod  # noqa: E402
 from roughcut import media as mediamod  # noqa: E402
+from roughcut import verify as verifymod  # noqa: E402
 
 # Stop means stop (verdict 3, punch 5): a job thread inside a `procscope.active` block
 # starts its tools in their own process groups, and its cancel kills them.
@@ -1188,7 +1189,12 @@ def load_visual(clip: str) -> dict:
     # joining it. An inventory that still lists a backflip the 1s read found to be a
     # glove over the lens teaches the Ask exactly the wrong thing (R10). A deep look's
     # beats replace both for the seconds it read (INTAKE M15).
-    return {"moments": events.merge_moments(d.get("moments", []), fine, deep),
+    # Wave 20 VERIFY: a jump / fall / crash / inverted claim with no telemetry and no
+    # checker verdict behind it is kept in the record (`unsupported`) but is not asserted
+    # to the planner or the board (roughcut/verify.py).
+    moments, held = verifymod.demote(events.merge_moments(d.get("moments", []), fine, deep),
+                                     clip, verify_state())
+    return {"moments": moments, "unsupported": held,
             "unusable": d.get("unusable", []) + fine.get("unusable", []),
             "summary": d.get("summary", "")}
 
@@ -1504,6 +1510,12 @@ def ensure_segment_ids(edl: dict) -> bool:
     return changed
 
 
+def _asserted_events() -> tuple[list[dict], list[dict]]:
+    """The ranked events split into those the planner and the board may state and the
+    index claims nothing backs (wave 20 VERIFY demotion)."""
+    return verifymod.demote_ranked(events.load(STATE["visual"]), verify_state())
+
+
 def project_payload() -> dict:
     edl = read_edl()
     ensure_segment_ids(edl)               # persisted at open (configure) and on every save;
@@ -1546,6 +1558,7 @@ def project_payload() -> dict:
     for clip in sorted(referenced - clips.keys()):
         if not edits.is_generated(clip) and clip_path(clip).is_file():
             clips[clip] = unheard_clip(clip, used=True)
+    asserted_events, held_events = _asserted_events()
     return {
         "title": edl.get("title", ""),
         "variant": edl.get("variant", ""),
@@ -1558,7 +1571,8 @@ def project_payload() -> dict:
         # question is "what are the biggest things in this footage" and that is not a
         # per-clip question. Capped: the board shows 40 and the Ask reads 14, so a
         # 400-event bin does not put 400 rows through every poll.
-        "events": events.load(STATE["visual"])[:60],
+        "events": asserted_events[:60],
+        "events_unsupported": held_events[:60],
         "proxies_ready": STATE.get("proxies_ready", False),
         "edl_path": str(STATE["edl"]),
         "cut": cut_name_of(edl, STATE["edl"]),
@@ -4782,6 +4796,9 @@ def firstpass_plan(mode: str | None = None, keep=None, *, facts: dict | None = N
     ]
     return {"mode": mode, "steps": steps, "keep": keep_rows, "replace": replace_rows,
             "locked": locked, "cost": fpmod.cost_words(ix_usd + cut_usd),
+            # wave 20 VERIFY: the Claude checks on the events the cut uses, priced first
+            "verify": verifymod.first_pass_price(verify_state()["mode"], footage_clips(),
+                                                 verifymod.load_state(verify_path())),
             # verdict 4: the ranges the editor rejected — a run will not propose them again
             "rejected": [{k: r.get(k) for k in ("clip", "in", "out")} for r in fpmod.rejections(edl)],
             "produces": "a proposed rough cut you accept, discard or adjust"}
@@ -5012,7 +5029,8 @@ async def api_firstpass_post(request: Request) -> JSONResponse:
             would = firstpass_plan(body.get("mode"), body.get("keep"))
         except ValueError as exc:
             raise HTTPException(400, str(exc))
-        refuse_past_cap("the first pass", float(would["cost"]["usd"]))
+        refuse_past_cap("the first pass",
+                        float(would["cost"]["usd"]) + float(would["verify"].get("usd") or 0))
         job = uuid.uuid4().hex[:8]
         FIRSTPASS[job] = {
             "id": job, "state": "running", "mode": would["mode"], "keep": would["locked"],
@@ -5167,6 +5185,22 @@ def _firstpass_job(job: str) -> None:
         _firstpass_walk(job, fp)
 
 
+def _fp_verify(fp: dict, plan: dict, locked: list[str]) -> dict:
+    """The first pass's check step (wave 20 VERIFY): after the cut is proposed, Claude
+    checks the events it uses (and the heroes and airs, <= 40 calls), and the shots are
+    re-timed from the verdicts. Never fails the pass: the cut stands either way."""
+    st = verifymod.load_state(verify_path())
+    try:
+        return verifymod.verify_cut(
+            plan, footage_clips(), st, mode=st["mode"], video_of=_verify_video,
+            workdir=_verify_workdir(), save=_verify_save, locked=locked,
+            duration_of=clip_duration, cancelled=lambda: bool(fp.get("cancel")))
+    except Exception as exc:  # noqa: BLE001
+        return {"mode": st["mode"], "calls": 0, "usd": 0.0, "error": str(exc)[:200],
+                "said": "The Claude check of the cut's moments did not run "
+                        f"({str(exc)[:120]}); the cut stands as proposed."}
+
+
 def _firstpass_walk(job: str, fp: dict) -> None:
     # The clips the last finished pass saw: what is new to this one, which its cut is
     # told about and its notes account for (verdict 9, punch 2). A run that stopped or
@@ -5253,6 +5287,7 @@ def _firstpass_walk(job: str, fp: dict) -> None:
 
         def finish(plan: dict) -> dict:
             plan = dict(plan)
+            verified = _fp_verify(fp, plan, locked)      # wave 20 VERIFY
             plan["segments"], left = fpmod.drop_rejected(plan["segments"], segments,
                                                          rejected)
             if segments and locked:
@@ -5268,7 +5303,11 @@ def _firstpass_walk(job: str, fp: dict) -> None:
                 "job": job, "mode": fp["mode"], "keep": locked,
                 "manual": [r for r in manual if r.get("id") in set(locked)],
                 "rejected": left,
-                "diff": fpmod.rerun_diff(segments, plan["segments"], locked, manual)}
+                "diff": fpmod.rerun_diff(segments, plan["segments"], locked, manual),
+                "verified": verified}
+            if verified.get("said"):
+                plan["notes"] = "\n\n".join(x for x in (
+                    str(plan.get("notes") or "").strip(), verified["said"]) if x)
             if new:
                 rows = fpmod.new_clip_rows(plan["segments"], new, plan.get("new_clips"),
                                            unavailable)
@@ -7504,9 +7543,11 @@ def api_index_status() -> JSONResponse:
     if not path.exists():
         return JSONResponse({"exists": False, "running": running is not None,
                              "interval_s": look_interval(),
+                             "mode": verify_mode_payload(),
                              "job": running["id"] if running else None})
     j = load_journal()
     return JSONResponse({"exists": True, "path": str(path), "order": j.order,
+                         "mode": verify_mode_payload(),
                          "paused_priced": j.paused_priced,
                          # what the pause holds, priced — the paused box says it
                          "waiting": journal_waiting(j),
@@ -7514,6 +7555,177 @@ def api_index_status() -> JSONResponse:
                          "progress": j.progress(), "released": j.released_clips(),
                          "running": running is not None,
                          "job": running["id"] if running else None})
+
+
+# ------------------------------------------------------------- wave 20: VERIFY
+# Claude as the event checker (roughcut/verify.py documents every field). The per-bin
+# mode lives beside the bin's index journal; the verdicts too, so a verdict is never
+# bought twice. Every check is a `verify`-role call through roughcut.inference: the
+# ledger, the cap and the price-first rule all apply.
+
+def verify_path() -> Path:
+    return verifymod.state_path(STATE["work"], STATE["footage"].name)
+
+
+def verify_state() -> dict:
+    return verifymod.load_state_cached(verify_path())
+
+
+def verify_mode_payload() -> dict:
+    return verifymod.mode_payload(verify_state()["mode"])
+
+
+def _verify_video(clip: str) -> Path:
+    """What the strips are cut from: the oriented 720p proxy when there is one, else the
+    clip itself (ffmpeg applies its rotation)."""
+    proxy = STATE["proxy_dir"] / f"{Path(clip).stem}.mp4"
+    return proxy if proxy.is_file() else clip_path(clip)
+
+
+def _verify_workdir() -> Path:
+    return STATE["work"] / "verify" / STATE["footage"].name
+
+
+def _verify_save(st: dict) -> None:
+    verifymod.merge_verdicts(verify_path(), st["verdicts"])
+
+
+def verify_events_rows() -> list[dict]:
+    """The bin's felt events with their certainty, for the Index panel."""
+    st = verify_state()
+    ok = verifymod.local_available()
+    return [verifymod.annotate_event(e, st, mode=st["mode"], local_ok=ok)
+            for e in verifymod.telemetry_events_for(footage_clips())]
+
+
+def verify_claims_held() -> list[dict]:
+    """Index claims nothing backs yet, as checkable rows (verdict-less)."""
+    held = {}
+    for clip in footage_clips():
+        v = load_visual(clip)
+        if v.get("unsupported"):
+            held[clip] = v["unsupported"]
+    return verifymod.claim_rows(held, verifymod.load_state(verify_path()))
+
+
+VERIFIES: dict[str, progress.Job] = {}
+
+
+@app.get("/api/index/mode")
+def api_index_mode() -> JSONResponse:
+    """The bin's footage-understanding mode: hybrid (default) | local | claude, and what
+    actually runs (`effective`) with the plain-words `note`."""
+    return JSONResponse(verify_mode_payload())
+
+
+@app.put("/api/index/mode")
+async def api_index_mode_put(request: Request) -> JSONResponse:
+    body = await request.json()
+    if not isinstance(body, dict) or "mode" not in body:
+        raise HTTPException(400, 'expected {"mode": "hybrid" | "local" | "claude"}')
+    try:
+        verifymod.set_mode(verify_path(), str(body["mode"]))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return JSONResponse(verify_mode_payload())
+
+
+def verify_payload() -> dict:
+    rows = verify_events_rows()
+    claims = verify_claims_held()
+    unsupported = []
+    for clip in footage_clips():
+        unsupported += [{**m, "clip": clip} for m in load_visual(clip).get("unsupported", [])]
+    live = next((j for j in VERIFIES.values()), None)
+    by = {}
+    for r in rows:
+        by[r["certainty"]] = by.get(r["certainty"], 0) + 1
+    return {"mode": verify_mode_payload(), "events": rows, "unsupported": unsupported,
+            "counts": {"events": len(rows), "by_certainty": by,
+                       "unsupported": len(unsupported), "claims_to_check": len(claims)},
+            "claims_check": verifymod.price(len(claims), "claims"),
+            "job": dict(live) if live else None}
+
+
+@app.get("/api/verify")
+def api_verify() -> JSONResponse:
+    return JSONResponse(verify_payload())
+
+
+def _verify_start(rows: list[dict], what: str) -> dict:
+    if not rows:
+        raise HTTPException(400, f"no {what} to check")
+    running = next((j for j in VERIFIES.values() if j["state"] not in progress.TERMINAL), None)
+    if running is not None:
+        raise HTTPException(409, "a check is already running")
+    quote = verifymod.price(len(rows), what)
+    refuse_past_cap(f"checking {len(rows)} {what}", float(quote["usd"]))
+    job = uuid.uuid4().hex[:8]
+    VERIFIES.clear()
+    VERIFIES[job] = progress.Job("verify", f"Checking {len(rows)} {what}", id=job,
+                                 state="running", done=0, total=len(rows), errors=[],
+                                 detail=f"0 of {len(rows)} checked")
+    threading.Thread(target=_verify_job, args=(job, rows), daemon=True).start()
+    return {"job": job, "price": quote}
+
+
+def _verify_job(job: str, rows: list[dict]) -> None:
+    entry = VERIFIES[job]
+    state = verifymod.load_state(verify_path())
+    events_all = verifymod.telemetry_events_for(footage_clips())
+
+    def on_done(e: dict, v: dict | None, err: str | None) -> None:
+        entry["done"] = entry.get("done", 0) + 1
+        entry["detail"] = f"{entry['done']} of {entry['total']} checked"
+        if err:
+            entry["errors"].append({"event_id": e["event_id"], "error": err})
+
+    try:
+        summary = verifymod.run_checks(
+            rows, video_of=_verify_video, workdir=_verify_workdir(), state=state,
+            save=_verify_save, duration_of=clip_duration, on_done=on_done,
+            neighbours_of=lambda e: [n for n in events_all if n["clip"] == e["clip"]
+                                     and abs(float(n["start"]) - float(e["start"])) <= 3.0])
+    except Exception as exc:  # noqa: BLE001 — a job must end in a state, not a trace
+        entry.finish("failed", detail=str(exc)[:200])
+        return
+    entry["summary"] = summary
+    entry.finish("done", detail=verifymod.verified_sentence(summary, state["mode"], 0, 0))
+
+
+@app.post("/api/verify/claims")
+async def api_verify_claims(request: Request) -> JSONResponse:
+    """"Check N claims · price": have Claude settle the index's unsupported jump / fall /
+    crash claims. Body `{ids?: [claim ids]}` (default: all). The price is in `price`
+    and in GET /api/verify `claims_check` before this is called."""
+    body = await request.json() if int(request.headers.get("content-length") or 0) else {}
+    rows = verify_claims_held()
+    ids = (body or {}).get("ids")
+    if isinstance(ids, list):
+        rows = [r for r in rows if r["event_id"] in set(map(str, ids))]
+    return JSONResponse(_verify_start(rows, "claims"))
+
+
+@app.post("/api/verify/events")
+async def api_verify_events(request: Request) -> JSONResponse:
+    """Have Claude check the felt (telemetry) events that have no verdict yet. Body
+    `{ids?: [event ids]}` (default: what the mode's routing would send, at most 40)."""
+    if verify_state()["mode"] == "local":
+        raise HTTPException(409, "this bin is in Local only mode: no Claude checks")
+    body = await request.json() if int(request.headers.get("content-length") or 0) else {}
+    st = verifymod.load_state(verify_path())
+    events_all = verifymod.telemetry_events_for(footage_clips())
+    ids = (body or {}).get("ids")
+    if isinstance(ids, list):
+        want = set(map(str, ids))
+        rows = [e for e in events_all if e["event_id"] in want
+                and e["event_id"] not in st["verdicts"]]
+    else:
+        rows = verifymod.route(events_all, mode=st["mode"], local_ok=verifymod.local_available(),
+                               used=[e["event_id"] for e in events_all
+                                     if verifymod.is_checkable(e)],
+                               limit=verifymod.CALLS_PER_RUN, verdicts=st["verdicts"])
+    return JSONResponse(_verify_start(rows, "moments"))
 
 
 INDEX_CANCEL_WAIT_S = 5.0

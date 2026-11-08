@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- Wave 20 VERIFY wiring: `GET/PUT /api/index/mode` (Hybrid / Local only / Claude only, stored per bin), `GET /api/verify` + `POST /api/verify/claims|events` ("Check N claims", priced first), unsupported index claims demoted out of the planner's and the board's moments/events, and a first-pass step where Claude checks the events the cut uses (<= 40 calls) and the shots are retimed from the verdicts.
 - Wave 20 VERIFY: `roughcut/verify.py` (Claude as the footage-event checker: one levelled 8 fps strip per event, verdicts confirm / reject / retime / unsure, per-bin mode Hybrid / Local only / Claude only, demotion of unsupported index claims) with its JSON fields documented for the UI; a `verify` model role (Sonnet) and an opt-in isolated CLI call.
 
 ### Fixed

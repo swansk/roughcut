@@ -243,7 +243,33 @@ def load_state(path: Path) -> dict:
             "verdicts": verdicts if isinstance(verdicts, dict) else {}}
 
 
-_SAVE = threading.Lock()
+_SAVE = threading.RLock()
+_CACHE: dict = {}
+
+
+def load_state_cached(path: Path) -> dict:
+    """`load_state`, re-read only when the file changed (the payload builders call it once
+    per clip)."""
+    try:
+        st = Path(path).stat()
+        sig = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        sig = None
+    hit = _CACHE.get(str(path))
+    if hit is not None and hit[0] == sig:
+        return hit[1]
+    d = load_state(path)
+    _CACHE[str(path)] = (sig, d)
+    return d
+
+
+def merge_verdicts(path: Path, verdicts: dict) -> None:
+    """Add verdicts to the stored record without disturbing anything else in it (the
+    mode may have been changed while a batch ran)."""
+    with _SAVE:
+        cur = load_state(path)
+        cur["verdicts"].update(verdicts)
+    save_state(path, cur)
 
 
 def save_state(path: Path, state: dict) -> None:
@@ -260,7 +286,8 @@ def save_state(path: Path, state: dict) -> None:
 def set_mode(path: Path, mode: str) -> dict:
     if mode not in MODES:
         raise ValueError(f"mode must be one of {list(MODES)}")
-    st = load_state(path)
+    with _SAVE:
+        st = load_state(path)
     st["mode"] = mode
     save_state(path, st)
     return st
@@ -790,6 +817,24 @@ def demote(moments: Sequence[dict], clip: str, state: dict,
                             "rejected": "rejected"}[s["claim_status"]]
         row["asserted"] = s["claim_status"] == "supported"
         (asserted if row["asserted"] else held).append(row)
+    return asserted, held
+
+
+def demote_ranked(rows: Sequence[dict], state: dict,
+                  tel_of: Callable[[str], Sequence[dict]] | None = None
+                  ) -> tuple[list[dict], list[dict]]:
+    """`demote` over the bin's ranked events (rows from different clips, in rank order)."""
+    cache: dict[str, list[dict]] = {}
+
+    def tel(clip: str) -> list[dict]:
+        if clip not in cache:
+            cache[clip] = list(tel_of(clip)) if tel_of else telemetry_events_for([clip])
+        return cache[clip]
+    asserted, held = [], []
+    for r in rows:
+        a, h = demote([r], r.get("clip", ""), state, tel(r.get("clip", "")))
+        asserted += a
+        held += h
     return asserted, held
 
 
