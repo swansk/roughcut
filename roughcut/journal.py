@@ -38,7 +38,7 @@ from typing import Any, Iterable
 VERSION = 1
 
 # The stages, in the order a clip walks through them.
-STAGES = ("probe", "telemetry", "asr", "proxy", "look", "close", "picks")
+STAGES = ("probe", "telemetry", "asr", "proxy", "look", "close", "picks", "local")
 
 # What a stage needs finished (or skipped) before it may start. Proxy needs the probe,
 # not the ASR: encoding a preview does not wait on listening. Picks wait on the close
@@ -54,20 +54,28 @@ DEPENDS: dict[str, tuple[str, ...]] = {
     "look": ("proxy",),
     "close": ("look",),
     "picks": ("asr", "look", "close"),
+    # the local GPU's embeddings and fall checks: need the sensor candidates, nothing else
+    "local": ("probe", "telemetry"),
 }
 
 # The stages that spend money. `pause_priced()` holds exactly these, for the whole bin;
 # `hold_priced()` holds them for some clips (footage imported while an index runs).
 PRICED = frozenset({"look", "close"})
 
+# Stages that run in the background and never hold a clip back: a clip is released (its
+# picks on the floor) without them, because a local GPU stage takes minutes and the cut
+# does not wait on it. They still show in the stage list and the progress counts.
+BACKGROUND = frozenset({"local"})
+
 # Which worker pool a stage draws from. Proxies and sheets have separate limits because
 # one is CPU-bound ffmpeg and the other is model calls with a rate limit; running two
 # encodes at once is a machine question, running two sheets at once is a budget one.
 KIND: dict[str, str] = {
     "probe": "probe", "telemetry": "probe", "asr": "asr", "proxy": "proxy",
-    "look": "sheet", "close": "sheet", "picks": "picks",
+    "look": "sheet", "close": "sheet", "picks": "picks", "local": "gpu",
 }
-DEFAULT_WORKERS: dict[str, int] = {"probe": 2, "asr": 1, "proxy": 1, "sheet": 2, "picks": 1}
+# `gpu` is the one 12 GB card: one local job at a time (it also takes the GPU lock file).
+DEFAULT_WORKERS: dict[str, int] = {"probe": 2, "asr": 1, "proxy": 1, "sheet": 2, "picks": 1, "gpu": 1}
 
 # States a stage can be in. `failed` is retryable; `parked` is not, until someone
 # `unpark`s it. `skipped` means not applicable (telemetry on a phone clip) and counts
@@ -818,7 +826,7 @@ class Journal:
         rec = self._rec(clip)
         if rec.get("missing"):
             return False
-        return all(self.stands(rec["stages"][s]) for s in STAGES)
+        return all(self.stands(rec["stages"][s]) for s in STAGES if s not in BACKGROUND)
 
     @_locked
     def released_clips(self) -> list[str]:
@@ -839,7 +847,7 @@ class Journal:
         if self.released(clip):
             return False
         return all(rec["stages"][s]["state"] in SETTLED
-                   for s in STAGES if s not in PRICED and s != "picks")
+                   for s in STAGES if s not in PRICED and s not in BACKGROUND and s != "picks")
 
     # ------------------------------------------------------------- progress
 

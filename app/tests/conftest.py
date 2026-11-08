@@ -34,6 +34,17 @@ def pytest_configure(config):
 
 
 @pytest.fixture(scope="session", autouse=True)
+def no_local_gpu():
+    """The local GPU stage (wave 20) is off for the whole suite: the suite must pass on a
+    CPU-only machine, and on this one it must not load a 12 GB card for a fake index. The
+    tests of the stage itself switch it on with a fake CLI (test_localvlm.py)."""
+    mp = pytest.MonkeyPatch()
+    mp.setenv("ROUGHCUT_LOCALGPU", "0")
+    yield
+    mp.undo()
+
+
+@pytest.fixture(scope="session", autouse=True)
 def ledger(tmp_path_factory):
     """Keep the suite out of the real inference ledger.
 
