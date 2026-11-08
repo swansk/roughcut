@@ -28,7 +28,8 @@
   'use strict';
   const POLL_MS = 5000, FAST_MS = 1500;
   const FP = { s: null, open: false, keepMine: true, busy: false, watching: null,
-               shown: null, timer: 0, err: '', jobs: [], jobsKey: '[]' };
+               shown: null, timer: 0, err: '', jobs: [], jobsKey: '[]',
+               acct: null, acctKey: '', acctAt: 0, acctBusy: false };
 
   const $ = (sel, root) => (root || document).querySelector(sel);
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, (c) =>
@@ -95,8 +96,19 @@
     return [`${what} ${ago(s.when)}`, s.finished].filter(Boolean).join(' · ');
   }
 
+  /* What the account (GET /api/firstpass/account) says, or '' while it is not in. */
+  const acctStep = (key) => {
+    const st = FP.acct && (FP.acct.steps || []).find((x) => x.key === key);
+    return st ? st : null;
+  };
+  const cap = (t) => { t = String(t || ''); return t.charAt(0).toUpperCase() + t.slice(1); };
+
   function title(s) {
     if (!s) return 'The first pass: index the footage, rank the picks, propose a rough cut';
+    if (running(s) && FP.acct && FP.acct.now) return `The first pass is running — ${FP.acct.now}`;
+    if (s.state === 'done' && FP.acct && FP.acct.headline) {
+      return `${label(s)} — last run ${ago(s.when)}. ${FP.acct.headline}`;
+    }
     if (running(s)) {
       const cut = s.counts && s.counts.cut;
       const step = s.stage === 'picks' ? 'ranking the picks'
@@ -293,9 +305,13 @@
         + ' data-testid="firstpass-index-link" title="The Index panel: what was heard and looked at on each'
         + ' clip, when, how often and at what cost — look again or re-tune a clip there">each clip in the'
         + ' Index panel</button>.</span>' : '';
-    return `<li class="fp-step is-${esc(state)}" data-step="${esc(st.key)}">`
+    // what it does / is doing / did, in this bin's numbers (the account), else the plan's line
+    const acct = acctStep(st.key);
+    let said = acct && acct.text ? cap(acct.text) : st.will;
+    if (ix && !/[.!?]$/.test(said)) said += '.';       // the Index link follows as a sentence
+    return `<li class="fp-step is-${esc(state)}" data-step="${esc(st.key)}" data-testid="firstpass-step">`
       + `<span class="fp-sname">${mark ? `<b>${mark}</b> ` : ''}${esc(st.name)}</span>`
-      + `<span class="fp-swill">${esc(st.will)}${ix}</span>`
+      + `<span class="fp-swill" data-testid="firstpass-step-text">${esc(said)}${ix}</span>`
       + `<span class="fp-scost" title="${esc(cost.hover || '')}">${esc(cost.words || '')}</span></li>`;
   }
 
@@ -344,6 +360,39 @@
     return out;
   }
 
+  /* "This run only re-ranked the existing index…": the account's one sentence on what the
+   * run did to the index (K5). */
+  function headlineHtml() {
+    const h = FP.acct && FP.acct.headline;
+    return h ? `<div class="fp-headline" data-testid="firstpass-headline">${esc(h)}</div>` : '';
+  }
+
+  /* How sure the moments are: counts by certainty, for the cut and for the bin. A level
+   * with none is not listed; a missing account draws nothing. */
+  const CERT_NAMES = { felt: 'felt by telemetry', local: 'checked by the 3080',
+    claude: 'checked by Claude', once: 'seen once', unchecked: 'unchecked',
+    unsupported: 'unsupported', contradicted: 'contradicted' };
+  const CERT_HELP = { felt: 'a sensor measured it; no look has checked it',
+    local: 'the local GPU looked at its frames and agreed', claude: 'Claude looked at its frames and agreed',
+    once: 'one close look saw it and nothing else did', unchecked: 'only the contact sheets claim it',
+    unsupported: 'a closer look found nothing there', contradicted: 'a closer look found something else' };
+  function certRow(kind, counts, words, lead) {
+    if (!counts || !counts.total) return '';
+    const chips = Object.keys(CERT_NAMES).filter((k) => counts[k]).map((k) =>
+      `<span class="cert c-${k}" data-level="${k}" data-count="${counts[k]}" title="${esc(`${counts[k]} ${CERT_NAMES[k]}: ${CERT_HELP[k]}`)}">`
+      + `<b>${counts[k]}</b> ${esc(CERT_NAMES[k])}</span>`).join('');
+    return `<div class="fp-certrow" data-kind="${kind}" title="${esc(words || '')}">`
+      + `<span class="fp-certlead">${esc(lead)}</span>${chips}</div>`;
+  }
+  function certaintyHtml() {
+    const c = FP.acct && FP.acct.certainty;
+    if (!c) return '';
+    const cut = c.cut ? certRow('cut', c.cut, c.cut_words,
+      `${c.cut_source === 'proposal' ? 'The proposed cut' : 'The cut'}: ${c.cut_shots} shots, how sure:`) : '';
+    const all = certRow('bin', c.bin, c.bin_words, `All ${c.bin && c.bin.total} moments:`);
+    return cut || all ? `<div class="fp-cert" data-testid="firstpass-certainty">${cut}${all}</div>` : '';
+  }
+
   function paintPanel() {
     const host = mount();
     if (!host) return;
@@ -381,8 +430,8 @@
     panel.innerHTML = '<div class="fp-head"><b>First pass</b>'
       + '<span class="fp-sub">index · picks · a proposed rough cut</span>'
       + '<button type="button" class="fp-close" data-fp="close" aria-label="close">×</button></div>'
-      + `<div class="fp-status">${statusLine(s)}</div>${pending}`
-      + `<ol class="fp-steps">${steps}</ol>`
+      + `<div class="fp-status">${statusLine(s)}</div>${pending}${headlineHtml()}`
+      + `<ol class="fp-steps">${steps}</ol>${certaintyHtml()}`
       + (w.error ? `<div class="fp-bad">${esc(w.error)}</div>` : '')
       + `<div class="fp-keep" data-testid="firstpass-keep">${esc(keepLine(w))}</div>${kept}${toggleKeep}`
       + rejectedLine(w)
@@ -548,7 +597,30 @@
     }
     paintControl();
     paintPanel();
+    refreshAccount();
     return FP.s;
+  }
+
+  /* The account is words and counts off the files (it re-ranks nothing): read when the panel
+   * is open or a run is going, and again when the pass's state moves. */
+  async function refreshAccount(force) {
+    const s = FP.s;
+    if (!s || FP.acctBusy) return;
+    const p = s.proposal || {};
+    const key = [s.state, s.stage, s.when, p.job, p.pending].join('|');
+    const due = force || key !== FP.acctKey || ((FP.open || running(s)) && Date.now() - FP.acctAt > 4000);
+    if (!due) return;
+    FP.acctBusy = true;
+    FP.acctKey = key;
+    try {
+      const q = p.pending && p.job ? `?job=${encodeURIComponent(p.job)}` : '';
+      const r = await fetch(`/api/firstpass/account${q}`);
+      FP.acct = r.ok ? await r.json() : null;
+    } catch (e) { /* server away: keep the last account */ }
+    FP.acctBusy = false;
+    FP.acctAt = Date.now();
+    paintControl();
+    paintPanel();
   }
 
   async function loop() {
@@ -570,6 +642,7 @@
     });
     // an edit on the board can make the pass stale: re-read when the window comes back
     window.addEventListener('focus', () => refresh());
+    watchChips();
     loop();
   }
 
@@ -591,8 +664,48 @@
     return (FP.jobs || []).find((j) => j.kind === kind) || null;
   }
 
+  /* ------------------------------------------------------------ certainty chips (K5)
+   * Every `.certslot[data-cert-clip][data-cert-in][data-cert-out]` (a proposal's shot, a
+   * Selects row) gets a small chip: how sure the moment under it is, and its hover says who
+   * settled it and with what ("air 0.39 s · telemetry · confirmed by Claude"). A shot with
+   * no moment under it, or a server that does not answer, gets none. */
+  const CERT = { timer: 0 };
+  function chipHtml(c) {
+    return `<i class="cert c-${esc(c.level)}" data-level="${esc(c.level)}" data-testid="certainty-chip" `
+      + `title="${esc(`${c.name}: ${c.title}`)}">${esc(c.chip)}</i>`;
+  }
+  async function decorate(root) {
+    const slots = [...(root || document).querySelectorAll('.certslot:not([data-cert-done])')];
+    if (!slots.length) return;
+    slots.forEach((el) => { el.dataset.certDone = '1'; });
+    let out = null;
+    try {
+      const r = await fetch('/api/certainty', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ shots: slots.map((el) => ({ clip: el.dataset.certClip,
+          in: Number(el.dataset.certIn), out: Number(el.dataset.certOut) })) }),
+      });
+      out = r.ok ? (await r.json()).shots : null;
+    } catch (e) { out = null; }
+    slots.forEach((el, i) => {
+      const c = out && out[i];
+      if (c && c.level && el.isConnected) el.innerHTML = chipHtml(c);
+    });
+  }
+  function watchChips() {
+    if (!('MutationObserver' in window)) return;
+    const again = () => { clearTimeout(CERT.timer); CERT.timer = setTimeout(() => decorate(document), 60); };
+    ['proposalDiff', 'library'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) new MutationObserver(again).observe(el, { childList: true, subtree: true });
+    });
+    again();
+  }
+  window.rcCertainty = { decorate };
+
   window.rcFirstPass = { open, close, toggle, refresh, run, cancel, jobs,
-                         state: () => FP.s, label: () => label(FP.s) };
+                         state: () => FP.s, label: () => label(FP.s),
+                         account: () => FP.acct, refreshAccount };
   // the one rule for a clip's name on screen (a generated clip by Premiere's name for it)
   window.rcClipName = clipName;
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

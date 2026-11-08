@@ -247,6 +247,76 @@ def test_a_hero_in_the_cut_wears_a_star_and_the_rest_are_unlabelled_outlines(pag
         timeout=5000)
 
 
+# Verdict 15, punch 9: at fit zoom at 1920 the keeps lane under A2 read as unlabelled dashed
+# boxes (40-crop-bottom.png). Its name is in the track-header column at its row, as the
+# proposal's is, and the lane says on hover what it holds; the outlines keep their own words.
+KEEPS_HEAD_JS = """() => { const h = document.querySelector('#tl [data-testid=keeps-lane-head]');
+  const lane = document.querySelector('#tl .tl-xlane[data-lane=bin]');
+  const view = document.querySelector('#tl .tl-view'), side = document.querySelector('#tl .tl-side');
+  const r = (e) => { const b = e.getBoundingClientRect(); return {l: b.left, r: b.right, t: b.top, b: b.bottom}; };
+  const hb = h.getBoundingClientRect(), lb = lane.getBoundingClientRect();
+  const at = document.elementFromPoint(hb.left + hb.width / 2, hb.top + hb.height / 2);
+  const outs = [...lane.querySelectorAll('.avail')];
+  const o = outs[0] && outs[0].getBoundingClientRect();
+  const atOut = o && document.elementFromPoint(o.left + Math.min(o.width / 2, 3), o.top + o.height / 2);
+  return { shown: getComputedStyle(h).display !== 'none' && hb.height > 0,
+           text: h.innerText.replace(/\\s+/g, ' ').trim(), title: h.title, laneTitle: lane.title,
+           cut: [h, ...h.children].filter((e) => e.scrollWidth > e.clientWidth + 0.5).map((e) => e.textContent),
+           head: r(h), lane: r(lane), view: r(view), side: r(side),
+           top: !!at && h.contains(at), outlines: outs.map((a) => a.title),
+           outlineHover: !!atOut && atOut === outs[0], zoom: tl.state.zoom }; }"""
+
+
+@pytest.mark.parametrize("size", [(1440, 900), (1920, 1080)], ids=lambda s: f"{s[0]}x{s[1]}")
+def test_the_keeps_lane_is_named_in_the_header_column_and_says_what_it_holds(live_server, project, size):
+    """Two keeps the cut does not use (CLIP_C twice) and one it does: the lane under A2 holds
+    two outlines; at the fit zoom its name "Keeps · 2 not in the cut" is in the header column
+    at the lane's row, whole, on top and in view, and the name, the lane and each outline
+    say on hover what they are. No keep left out: no name."""
+    seed = {"variant": "T", "title": "test cut", "orient": "none", "story": "", "target_s": [5, 20],
+            "segments": [{"clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0, "why": "first"},
+                         {"clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0, "why": "second"}]}
+    Path(project["edl"]).write_text(json.dumps(seed, indent=1), encoding="utf-8")
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch()
+        pg = browser.new_page(viewport={"width": size[0], "height": size[1]})
+        errors = []
+        pg.on("pageerror", lambda e: errors.append(str(e)))
+        pg.goto(live_server)
+        pg.wait_for_selector("#tl .blk")
+        _put_selects(pg, [
+            {"clip": "CLIP_A.MP4", "start": 1.0, "end": 3.0, "hero": False, "why": "in the cut"},
+            {"clip": "CLIP_C.MP4", "start": 0.5, "end": 2.0, "hero": False, "why": "the jump"},
+            {"clip": "CLIP_C.MP4", "start": 3.0, "end": 4.5, "hero": False, "why": "the landing"},
+        ])
+        pg.reload()
+        pg.wait_for_selector("#tl .tl-xlane[data-lane=bin] .avail", timeout=8000)
+        pg.evaluate("tl.fit()")
+        pg.wait_for_timeout(300)
+        k = pg.evaluate(KEEPS_HEAD_JS)
+        assert k["shown"] and k["text"] == "Keeps 2 not in the cut", k
+        assert k["cut"] == [], k                                          # the words whole
+        h, lane, view, side = k["head"], k["lane"], k["view"], k["side"]
+        assert side["l"] - 0.5 <= h["l"] and h["r"] <= side["r"] + 0.5, k     # in the header column
+        assert abs(h["t"] - lane["t"]) <= 1.5 and abs(h["b"] - lane["b"]) <= 1.5, k  # at the lane's row
+        assert view["t"] <= h["t"] and h["b"] <= view["b"] + 0.5, k           # in view, not scrolled off
+        assert k["top"], k                                                # nothing over it
+        for words in (k["title"], k["laneTitle"]):
+            assert words.startswith("Keeps not in the cut: 2 kept ranges from Selects") and \
+                "drag one onto V1" in words, k
+        assert len(k["outlines"]) == 2 and all(t.startswith("kept, not in the cut") for t in k["outlines"]), k
+        assert k["outlineHover"], k                                       # an outline is its own hover
+        # every keep in the cut: the lane and its name go
+        _put_selects(pg, [{"clip": "CLIP_A.MP4", "start": 1.0, "end": 3.0, "hero": False, "why": "in the cut"}])
+        pg.reload()
+        pg.wait_for_selector("#tl .blk")
+        pg.wait_for_timeout(800)
+        assert pg.evaluate("getComputedStyle(document.querySelector('#tl [data-testid=keeps-lane-head]')).display") == "none"
+        assert pg.evaluate("document.querySelector('#tl .tl-xlane[data-lane=bin]').hidden")
+        assert errors == []
+        browser.close()
+
+
 def test_a_pending_proposal_is_a_ghost_lane_you_can_play_either_side_of(page):
     """A scripted proposal — CLIP_B first, then CLIP_A, then CLIP_C — while the diff panel
     is up: three ghost blocks under V1 by the proposal's film time. B matches shot 2 and

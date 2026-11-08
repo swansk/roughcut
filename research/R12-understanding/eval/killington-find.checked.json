@@ -1,0 +1,446 @@
+{
+ "bin": "killington-neutral",
+ "status": "DRAFT",
+ "queries": [
+  {
+   "id": "f01",
+   "query": "the big air on the kicker",
+   "answers": [
+    {
+     "clip": "CLIP_05",
+     "start": 17.65,
+     "end": 18.55,
+     "moment": "air-05-18"
+    }
+   ],
+   "confidence": "medium",
+   "note": "The only kicker-like feature in the bin; the airs are all small (0.3-0.4 s). A reasonable second answer is the skier flying over the camera."
+  },
+  {
+   "id": "f02",
+   "query": "skier jumping over the camera",
+   "answers": [
+    {
+     "clip": "CLIP_10",
+     "start": 24.95,
+     "end": 25.9,
+     "moment": "air-10-25"
+    }
+   ],
+   "confidence": "high"
+  },
+  {
+   "id": "f03",
+   "query": "wearer catches air off a roller or lip",
+   "answers": [
+    {
+     "clip": "CLIP_05",
+     "start": 17.65,
+     "end": 18.55,
+     "moment": "air-05-18"
+    },
+    {
+     "clip": "CLIP_12",
+     "start": 46.55,
+     "end": 47.4,
+     "moment": "air-12-46"
+    },
+    {
+     "clip": "CLIP_12",
+     "start": 50.55,
+     "end": 51.15,
+     "moment": "air-12-50"
+    },
+    {
+     "clip": "CLIP_02",
+     "start": 102.1,
+     "end": 103.0,
+     "moment": "air-02-102"
+    },
+    {
+     "clip": "CLIP_04",
+     "start": 224.5,
+     "end": 225.5,
+     "moment": "air-04-224"
+    },
+    {
+     "clip": "CLIP_06",
+     "start": 30.1,
+     "end": 30.65,
+     "moment": "air-06-30"
+    }
+   ],
+   "confidence": "high",
+   "note": "R11's six wearer airs; a hit on any of them counts."
+  },
+  {
+   "id": "f04",
+   "query": "someone falls",
+   "answers": [
+    {
+     "clip": "CLIP_01",
+     "start": 69.0,
+     "end": 73.0,
+     "moment": "fall-01-68"
+    },
+    {
+     "clip": "CLIP_04",
+     "start": 269.75,
+     "end": 272.75,
+     "moment": "cam-snow-04-270"
+    },
+    {
+     "clip": "CLIP_11",
+     "start": 143.0,
+     "end": 146.6,
+     "moment": "fall-11-143"
+    },
+    {
+     "clip": "CLIP_01",
+     "start": 83.0,
+     "end": 111.0,
+     "moment": "fall-01-down"
+    }
+   ],
+   "confidence": "high",
+   "note": "Low-confidence extras (fall-02-10, fall-10-31) are NOT included; a model that returns them is not penalised for hit@3 but is not credited."
+  },
+  {
+   "id": "f05",
+   "query": "the camera goes into the snow",
+   "answers": [
+    {
+     "clip": "CLIP_04",
+     "start": 269.75,
+     "end": 272.75,
+     "moment": "cam-snow-04-270"
+    }
+   ],
+   "confidence": "high"
+  },
+  {
+   "id": "f06",
+   "query": "person buried in deep powder",
+   "answers": [
+    {
+     "clip": "CLIP_01",
+     "start": 83.0,
+     "end": 111.0,
+     "moment": "fall-01-down"
+    },
+    {
+     "clip": "CLIP_01",
+     "start": 69.0,
+     "end": 73.0,
+     "moment": "fall-01-68"
+    }
+   ],
+   "confidence": "high"
+  },
+  {
+   "id": "f07",
+   "query": "falling into the stream / water",
+   "answers": [
+    {
+     "clip": "CLIP_01",
+     "start": 69.0,
+     "end": 73.0,
+     "moment": "fall-01-68"
+    },
+    {
+     "clip": "CLIP_01",
+     "start": 83.0,
+     "end": 111.0,
+     "moment": "fall-01-down"
+    },
+    {
+     "clip": "CLIP_01",
+     "start": 66.0,
+     "end": 112.0,
+     "moment": "water-01-none"
+    }
+   ],
+   "confidence": "high",
+   "note": "There is no water; the 'stream' is a snow gully. The answer is the snow fall; a model that returns water footage elsewhere is wrong."
+  },
+  {
+   "id": "f08",
+   "query": "wipeout on the lift line, lying on his back looking at the chairlift",
+   "answers": [
+    {
+     "clip": "CLIP_11",
+     "start": 143.0,
+     "end": 146.6,
+     "moment": "fall-11-143"
+    }
+   ],
+   "confidence": "high"
+  },
+  {
+   "id": "f09",
+   "query": "ski patrol",
+   "answers": [
+    {
+     "clip": "CLIP_09",
+     "start": 109.9,
+     "end": 122.9,
+     "moment": "talk-09-patrol"
+    }
+   ],
+   "confidence": "high",
+   "note": "Speech-only; no patroller on screen."
+  },
+  {
+   "id": "f10",
+   "query": "riding the chairlift",
+   "answers": [
+    {
+     "clip": "CLIP_03",
+     "start": 0.0,
+     "end": 40.0,
+     "moment": "lift-03-ride"
+    }
+   ],
+   "confidence": "high",
+   "note": "Other lift shots (under the chairs at CLIP_10 5-24, CLIP_12 0-12 handling) are not counted answers."
+  },
+  {
+   "id": "f11",
+   "query": "chairlift top station / unloading",
+   "answers": [
+    {
+     "clip": "CLIP_07",
+     "start": 0.0,
+     "end": 9.0,
+     "moment": "lift-07-station"
+    }
+   ],
+   "confidence": "medium"
+  },
+  {
+   "id": "f12",
+   "query": "pocket pizza",
+   "answers": [
+    {
+     "clip": "CLIP_03",
+     "start": 18.3,
+     "end": 21.0,
+     "moment": "talk-03-pizza"
+    }
+   ],
+   "confidence": "medium"
+  },
+  {
+   "id": "f13",
+   "query": "people cheering",
+   "answers": [
+    {
+     "clip": "CLIP_11",
+     "start": 174.5,
+     "end": 176.5,
+     "moment": "cheer-11-175"
+    },
+    {
+     "clip": "CLIP_04",
+     "start": 91.0,
+     "end": 93.6,
+     "moment": "cheer-04-91"
+    }
+   ],
+   "confidence": "medium",
+   "note": "Word-based ('Woo!'); no audio tagger run."
+  },
+  {
+   "id": "f14",
+   "query": "group stopped at the trail map",
+   "answers": [
+    {
+     "clip": "CLIP_06",
+     "start": 8.0,
+     "end": 15.0,
+     "moment": "stopped-06-sign"
+    }
+   ],
+   "confidence": "high"
+  },
+  {
+   "id": "f15",
+   "query": "selfie / close-up of a face talking to camera",
+   "answers": [
+    {
+     "clip": "CLIP_02",
+     "start": 14.0,
+     "end": 31.0,
+     "moment": "faces-02-selfie"
+    },
+    {
+     "clip": "CLIP_03",
+     "start": 0.0,
+     "end": 40.0,
+     "moment": "lift-03-ride"
+    }
+   ],
+   "confidence": "medium",
+   "note": "CLIP_03 17-23 also has the seatmate's face close-up."
+  },
+  {
+   "id": "f16",
+   "query": "lens covered by a glove, camera being handled",
+   "answers": [
+    {
+     "clip": "CLIP_12",
+     "start": 0.0,
+     "end": 6.0,
+     "moment": "neg-12-1"
+    },
+    {
+     "clip": "CLIP_07",
+     "start": 12.0,
+     "end": 20.0,
+     "moment": "neg-07-14"
+    },
+    {
+     "clip": "CLIP_11",
+     "start": 252.0,
+     "end": 261.0,
+     "moment": "neg-11-256"
+    },
+    {
+     "clip": "CLIP_04",
+     "start": 253.0,
+     "end": 256.5,
+     "moment": "neg-04-254"
+    },
+    {
+     "clip": "CLIP_02",
+     "start": 9.3,
+     "end": 12.5,
+     "moment": "fall-02-10"
+    }
+   ],
+   "confidence": "medium"
+  },
+  {
+   "id": "f17",
+   "query": "whiteout, lens full of snow",
+   "answers": [
+    {
+     "clip": "CLIP_01",
+     "start": 69.0,
+     "end": 73.0,
+     "moment": "fall-01-68"
+    },
+    {
+     "clip": "CLIP_02",
+     "start": 9.3,
+     "end": 12.5,
+     "moment": "fall-02-10"
+    },
+    {
+     "clip": "CLIP_01",
+     "start": 70.5,
+     "end": 73.5
+    }
+   ],
+   "confidence": "medium"
+  },
+  {
+   "id": "f18",
+   "query": "tree skiing in powder",
+   "answers": [
+    {
+     "clip": "CLIP_09",
+     "start": 119.0,
+     "end": 128.0,
+     "moment": "neg-09-123"
+    },
+    {
+     "clip": "CLIP_09",
+     "start": 62.0,
+     "end": 80.0
+    },
+    {
+     "clip": "CLIP_01",
+     "start": 56.0,
+     "end": 66.0
+    }
+   ],
+   "confidence": "medium",
+   "note": "Also CLIP_09 60-80 and CLIP_01 56-66, windows I viewed but did not label separately."
+  },
+  {
+   "id": "f19",
+   "query": "view over the valley",
+   "answers": [
+    {
+     "clip": "CLIP_08",
+     "start": 143.0,
+     "end": 146.5,
+     "moment": "scenic-08-143"
+    }
+   ],
+   "confidence": "low",
+   "note": "Subjective."
+  },
+  {
+   "id": "f20",
+   "query": "someone asks 'you good?'",
+   "answers": [
+    {
+     "clip": "CLIP_10",
+     "start": 31.9,
+     "end": 35.2
+    }
+   ],
+   "confidence": "low",
+   "note": "Transcript 31.9-35.2 CLIP_10 'I think you missed me you good'."
+  },
+  {
+   "id": "f21",
+   "query": "person in a blue jacket",
+   "answers": [
+    {
+     "clip": "CLIP_05",
+     "start": 9.0,
+     "end": 11.5
+    },
+    {
+     "clip": "CLIP_04",
+     "start": 20.0,
+     "end": 23.5
+    },
+    {
+     "clip": "CLIP_06",
+     "start": 8.0,
+     "end": 15.0
+    },
+    {
+     "clip": "CLIP_06",
+     "start": 311.0,
+     "end": 317.7
+    }
+   ],
+   "confidence": "low",
+   "note": "Weak query on purpose; blue jackets appear in several clips. Answers below are the ones I viewed with a clearly blue jacket in frame."
+  },
+  {
+   "id": "f22",
+   "query": "hard crash at speed with spray",
+   "answers": [
+    {
+     "clip": "CLIP_04",
+     "start": 269.75,
+     "end": 272.75,
+     "moment": "cam-snow-04-270"
+    },
+    {
+     "clip": "CLIP_04",
+     "start": 86.7,
+     "end": 88.0,
+     "moment": "other-04-87"
+    }
+   ],
+   "confidence": "medium"
+  }
+ ]
+}

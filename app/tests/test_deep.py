@@ -429,10 +429,14 @@ def test_a_deep_look_runs_as_a_job_writes_its_file_and_is_never_bought_twice(
         assert again["projected_usd"] == 0.0 and len(backend.seen) == 1
 
         # the rank believes it: the coarse jump claim at 2-3 was a fall, so contradicted
-        ranked = c.get("/api/project").json()["events"]
+        proj = c.get("/api/project").json()
+        ranked = proj["events"]
         assert [e for e in ranked if e["source"] == "deep look"][0][
             "why_ranked"]["confirmation"] == "deep"
-        assert [e for e in ranked if e["source"] == "sheet"][0][
+        # ... and the contradicted coarse jump is no longer asserted at all (wave 20
+        # VERIFY: a claim with no telemetry or checker behind it moves to the unsupported list)
+        assert not [e for e in ranked if e["source"] == "sheet"]
+        assert [e for e in proj["events_unsupported"] if e["source"] == "sheet"][0][
             "why_ranked"]["confirmation"] == "contradicted"
         # the Ask's inventory carries the beats for those seconds
         moments = c.get("/api/project").json()["clips"]["CLIP_A.MP4"]["visual"]["moments"]

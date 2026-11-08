@@ -1,0 +1,267 @@
+{
+ "bin": "killington-neutral",
+ "note": "written by tools/eval_understanding.py --write-baseline",
+ "headline": {
+  "recall_high": 0.889,
+  "recall_karl": 0.6,
+  "recall_air": 0.8,
+  "recall_fall": 1.0,
+  "negatives_asserted": 4,
+  "negatives_total": 19,
+  "fa_per_neg_min": 2.35,
+  "find_overlap": 0.632,
+  "find_iou": 0.421,
+  "find_union_overlap": 0.789,
+  "find_union_iou": 0.474
+ },
+ "layers": {
+  "index_raw": {
+   "recall": {
+    "air_who:other": [
+     1.0,
+     1
+    ],
+    "air_who:wearer": [
+     0.0,
+     4
+    ],
+    "conf:high": [
+     0.333,
+     9
+    ],
+    "conf:low": [
+     1.0,
+     1
+    ],
+    "conf:medium": [
+     0.5,
+     2
+    ],
+    "extra:camera-toss": [
+     0.0,
+     1
+    ],
+    "extra:water": [
+     0.0,
+     1
+    ],
+    "karl_ok": [
+     0.6,
+     5
+    ],
+    "kind:air": [
+     0.2,
+     5
+    ],
+    "kind:fall": [
+     0.5,
+     4
+    ]
+   },
+   "negatives_asserted": [
+    14,
+    19
+   ],
+   "false_events": 14,
+   "neg_minutes": 2.55,
+   "fa_per_neg_min": 5.48,
+   "unmatched_events": 18,
+   "events": 37
+  },
+  "asserted": {
+   "recall": {
+    "air_who:other": [
+     0.0,
+     1
+    ],
+    "air_who:wearer": [
+     1.0,
+     4
+    ],
+    "conf:high": [
+     0.889,
+     9
+    ],
+    "conf:low": [
+     0.0,
+     1
+    ],
+    "conf:medium": [
+     1.0,
+     2
+    ],
+    "extra:camera-toss": [
+     0.0,
+     1
+    ],
+    "extra:water": [
+     0.0,
+     1
+    ],
+    "karl_ok": [
+     0.6,
+     5
+    ],
+    "kind:air": [
+     0.8,
+     5
+    ],
+    "kind:fall": [
+     1.0,
+     4
+    ]
+   },
+   "negatives_asserted": [
+    4,
+    19
+   ],
+   "false_events": 6,
+   "neg_minutes": 2.55,
+   "fa_per_neg_min": 2.35,
+   "unmatched_events": 61,
+   "events": 80
+  },
+  "felt": {
+   "recall": {
+    "air_who:other": [
+     0.0,
+     1
+    ],
+    "air_who:wearer": [
+     1.0,
+     4
+    ],
+    "conf:high": [
+     0.778,
+     9
+    ],
+    "conf:low": [
+     0.0,
+     1
+    ],
+    "conf:medium": [
+     1.0,
+     2
+    ],
+    "extra:camera-toss": [
+     0.0,
+     1
+    ],
+    "extra:water": [
+     0.0,
+     1
+    ],
+    "karl_ok": [
+     0.4,
+     5
+    ],
+    "kind:air": [
+     0.8,
+     5
+    ],
+    "kind:fall": [
+     0.75,
+     4
+    ]
+   },
+   "negatives_asserted": [
+    1,
+    19
+   ],
+   "false_events": 3,
+   "neg_minutes": 2.55,
+   "fa_per_neg_min": 1.17,
+   "unmatched_events": 64,
+   "events": 78
+  },
+  "confirmed": {
+   "recall": {
+    "air_who:other": [
+     0.0,
+     1
+    ],
+    "air_who:wearer": [
+     0.0,
+     4
+    ],
+    "conf:high": [
+     0.0,
+     9
+    ],
+    "conf:low": [
+     0.0,
+     1
+    ],
+    "conf:medium": [
+     0.0,
+     2
+    ],
+    "extra:camera-toss": [
+     0.0,
+     1
+    ],
+    "extra:water": [
+     0.0,
+     1
+    ],
+    "karl_ok": [
+     0.0,
+     5
+    ],
+    "kind:air": [
+     0.0,
+     5
+    ],
+    "kind:fall": [
+     0.0,
+     4
+    ]
+   },
+   "negatives_asserted": [
+    0,
+    19
+   ],
+   "false_events": 0,
+   "neg_minutes": 2.55,
+   "fa_per_neg_min": 0.0,
+   "unmatched_events": 0,
+   "events": 0
+  }
+ },
+ "find": {
+  "hit3_overlap": [
+   0.632,
+   19
+  ],
+  "hit3_iou03": [
+   0.421,
+   19
+  ],
+  "low_hit3_overlap": [
+   0.333,
+   3
+  ],
+  "low_hit3_iou03": [
+   0.0,
+   3
+  ]
+ },
+ "find_union": {
+  "hit3_overlap": [
+   0.789,
+   19
+  ],
+  "hit3_iou03": [
+   0.474,
+   19
+  ],
+  "low_hit3_overlap": [
+   0.333,
+   3
+  ],
+  "low_hit3_iou03": [
+   0.0,
+   3
+  ]
+ }
+}

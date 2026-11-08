@@ -316,17 +316,32 @@ def test_video_effects():
     assert "has its Crop already" in refused({"op": "effect", "id": "s1", "kind": "crop"}, seeded)
     assert actions.describe({"op": "effect", "id": "s1", "kind": "crop", "params": {"left": 20}}, seeded) \
         == "Shot 1 (CLIP_A): Crop — Left 20 %"
+    # wave 19, EFFECTS2: Crop's Zoom as Premiere's checkbox (true / false said too); the
+    # Transform's Anchor Point in a 1920×1080 frame's px; a Scale Width unticks Uniform Scale
+    op = accepted({"op": "effect", "id": "s1", "kind": "crop", "params": {"left": 10, "zoom": True}})
+    assert op["params"] == {"left": 10.0, "zoom": "on"}
+    assert actions.describe(op, state()) == "Shot 1 (CLIP_A): add Crop — Left 10 %, Zoom"
+    op = accepted({"op": "effect", "id": "s2", "kind": "transform",
+                   "params": {"ancx": 480, "scale_width": 50, "skew": 12}, "keys": {"skew_axis": [[0, 0], [1, 90]]}})
+    assert op["params"] == {"uniform": "off", "ancx": 480.0, "scale_width": 50.0, "skew": 12.0}
+    assert actions.describe(op, state()) == ("Shot 2 (CLIP_B): add Transform — Scale Height and Width apart, "
+                                              "Anchor Point X 480 px, Scale Width 50, Skew 12°, Skew Axis keyframes 0° → 90°")
+    op = accepted({"op": "effect", "id": "s2", "kind": "transform", "params": {"uniform": False, "scale": 40}})
+    assert op["params"] == {"uniform": "off", "scale": 40.0}
     assert "effect" in actions.FAMILIES["effect_controls"]
     text = actions.schema_text()
     for word in ("Transform › Crop", "Distort › Transform", "Blur & Sharpen › Gaussian Blur",
-                 "posx", "blurriness", "dimensions both|horizontal|vertical", '"remove"'):
+                 "posx", "ancx", "skew_axis", "zoom off|on", "uniform on|off",
+                 "blurriness", "dimensions both|horizontal|vertical", '"remove"'):
         assert word in text, word
 
 
 @pytest.mark.parametrize("op,why", [
     ({"op": "effect", "id": "s1", "kind": "mosaic"}, "unknown video effect"),
     ({"op": "effect", "id": "s1", "kind": "crop", "params": {"left": 120}}, "Crop Left is 0 to 100"),
-    ({"op": "effect", "id": "s1", "kind": "crop", "params": {"zoom": 1}}, "Crop has no 'zoom'"),
+    ({"op": "effect", "id": "s1", "kind": "crop", "params": {"angle": 1}}, "Crop has no 'angle'"),
+    ({"op": "effect", "id": "s1", "kind": "crop", "params": {"zoom": 1}}, "Crop zoom is one of off, on"),
+    ({"op": "effect", "id": "s1", "kind": "transform", "params": {"skew": 80}}, "Transform Skew is -70 to 70"),
     ({"op": "effect", "id": "s1", "kind": "gaussian_blur", "params": {"dimensions": "diagonal"}}, "one of both"),
     ({"op": "effect", "id": "s1", "kind": "gaussian_blur", "keys": {"blurriness": [[9, 1]]}}, "outside the shot"),
     ({"op": "effect", "id": "s1", "kind": "gaussian_blur", "keys": {"dimensions": [[0, 1]]}}, "no stopwatch"),

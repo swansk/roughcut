@@ -23,6 +23,10 @@ from pathlib import Path
 ROLE_SKELETON = "skeleton"
 ROLE_ANALYSIS = "analysis"
 ROLE_JUDGE = "judge"
+#   verify    the footage-event checker (wave 20, roughcut/verify.py): one levelled
+#             contact strip plus the event's facts per call, many calls, a yes/no with
+#             a reason. Sonnet: Opus showed no gain at twice the price (R12)
+ROLE_VERIFY = "verify"
 
 # Two tiers, Karl, 2026-10-03: *"opus for the deeper analysis, sonnet for quick"*.
 # Deep is every call whose answer is a judgement about the footage — the Ask, the
@@ -36,6 +40,7 @@ _DEFAULT_MODELS = {
     ROLE_SKELETON: DEEP_MODEL,
     ROLE_ANALYSIS: QUICK_MODEL,
     ROLE_JUDGE: DEEP_MODEL,
+    ROLE_VERIFY: QUICK_MODEL,
 }
 
 

@@ -49,6 +49,83 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-08 ~16:30: **FIND3 (`51342e7`, Find + 3080 0.79) and DIARIZE (`848dcab`, re-merged by its lane; speakers stage)
+  merged; all wave 20 lanes in. 8766 deployed on `848dcab`** (gates GREEN 2/2, holds 17-44 ms, understanding line incl.
+  "Find + 3080 0.79"). Lead fixes: conftest puts the repo root on sys.path (test_find / test_find_union / test_verify failed
+  to collect alone). The free local stage finished on Karl's bin (12 sidecars). Gap found: VERIFY never joins the 3080's
+  checks into events (0 'local' certainty) and `bool(localvlm.available())` is always true — sent back to VERIFY. Next:
+  that fix; then PLAY10 / WORKER at load <= 4; then the full gate and judge 16. Pending Karl: the Claude checker run.
+- 2026-11-08 ~17:30: **EVAL merged (`9d38376`; the gate's understanding line: recall 0.89, 4 of 19 negatives asserted, Find
+  0.63) and LOCALGPU merged (`012a42c`, gates GREEN 3 of 4 — one 246 ms "idle (select)" hold during a 0.28 s GET
+  /api/firstpass: watch — base 2 of 2)**; 8766 deployed on `012a42c`: Hybrid effective = hybrid, the 3080 available. The
+  free local stage is running on Karl's bin (job 11ec3474, $0). DIARIZE finished but conflicts in 7 files (journal stages,
+  server): its lane is merging redesign into its branch. FIND3 launched from `012a42c`. Pending Karl: the Claude checker
+  run on his bin (~40 calls; suggested after the weekly reset).
+- 2026-11-08 ~16:00: **TELEM (fixed), K5UI (+ live-data fixes) and VERIFY merged; 8766 deployed on `4d5267e`** after quick
+  gates GREEN 2/2 (holds 21-64 ms; one RED on `50ac50a` was journey step 24's export-size estimate, -37 %, unrelated: watch).
+  Lead fixes: `clip_coverage` now ranks with the felt sidecar (the board saw 0 felt moments); test_verify imports the package.
+  On Karl's bin: 258 moments (74 felt by telemetry), Hybrid effective = Claude (no local stack yet), "Check 28 claims ·
+  $1.24"; his K5 run now reads "only re-ranked". The felt sidecars were built by a free telemetry-only re-run (job
+  82855811, $0). Still running: LOCALGPU, DIARIZE. Launched: EVAL. FIND3 after LOCALGPU.
+- 2026-11-08 ~14:50: **TELEM merged (`a85300b`) but NOT deployed**: quick gate journey RED 2 of 3 (loop hold 852 / 216 ms,
+  "nothing in the server ran") vs base `0fef473` GREEN 2 of 2 (27 ms): the felt build is pure Python on a stage thread and
+  holds the GIL (the reconcile "reopen once" rebuilds every bin at boot). TELEM is moving the build out of process; deploy
+  8766 only after its fix is merged and 3 quick gates are GREEN. 8766 still serves `0fef473`'s server. Lane DIARIZE launched
+  (pyannote community-1; Karl's HF token in ~/.config/roughcut/hf-token, access confirmed).
+- 2026-11-08 ~14:30 (box clock): Karl: "merge deploy for now and then keep working". **EFFECTS2 + LOOPHOLD merged**
+  (`9773355`, `0fef473`; CHANGELOG by union). Quick gate `0fef473` **GREEN** in 100 s (screens, journey 24 steps 53 s, boot
+  0.66 s, hygiene; ~/roughcut-loop/gate-0fef473-20261108T1422). **8766 restarted on `0fef473`** (v5 proxies already built).
+  foxtrot rebooted ~14:10 (8766 had been down). **Wave 20 launched** (judge/WAVE20.md): TELEM, LOCALGPU, VERIFY, K5UI in
+  roughcut-wt/w20-<lane> from `0fef473`; FIND3 + EVAL after TELEM and LOCALGPU merge. PLAY10 / WORKER relaunch after wave 20's
+  lanes, at load <= 4. Tick cron recreated (session-only). Karl has a HuggingFace token ready for pyannote (speaker labels).
+- 2026-11-06 ~22:20 (box clock): **RESUMED by Karl** ("let's resume that work ... continue the work against the goals"). Tick
+  cron recreated (session-only, :13/:43). Karl opened 8766 via the launcher at 21:43: it now serves THIS worktree live
+  (`389df7e`, server and pages agree; v5 proxies rebuilding into /mnt/roughcut/work/app-redesign), so **no merges into
+  this worktree until Karl says he is done looking** (or a frozen snapshot serves 8766). Box load 40-55 all evening
+  (Wandfall tourney/bossbench/alive tests), weekly usage 67% with 2 days left: lanes run fewer at a time.
+  - **POLISH13 recheck: LOAD, not a regression.** Frozen copies `~/roughcut-loop/recheck-w19/{base=13b256b,merge=389df7e}`,
+    5 interleaved runs a side at load 22-62: test_import_snap's two cases 10/10 green both sides; test_index_panel_ui
+    `…retunes_a_clip…` failed base 3/5, merge 1/5 (a fixed 10 s `wait_for_selector('#progress .job[data-kind="index"]')`
+    timeout at load > ~50). Resume step 1 closed. Follow-up: that 10 s wait.
+  - **EFFECTS2 (punch 8): DONE on its branch, ready to merge** (`5e7899a`, 4 commits, tree clean). Crop (+Zoom), Transform
+    (Anchor, Uniform Scale/Width, Skew/Axis), H/V Flip, Mirror, Black & White in the bin + Effect Controls with keyframes;
+    Program == export (test_crop_transform frame compare, mean luma diff 0.97-1.43 vs plain 1.20); AI op EDL == hand op
+    (test_actions_ui 36/36). The test_ui_flow music-duck failure: 1 in a 67-test file run; alone 4/4 branch, 3/3 base at
+    load 45-47 = load flake (small sample; watch in the full gate). Proposed log: dims 7 and 15, bar unchanged.
+  - **LOOPHOLD (punch 7): committed `96c3b5d`, Done= NOT met.** lock_resident now locks every private anon map (Python
+    arenas merged into 4-8 MiB maps were skipped), relocks every 5 s, the loop never writes the log (writer thread),
+    `/api/debug/pageout` behind ROUGHCUT_DEBUG_PAGEOUT=1; test_loop_hold.py 2 tests, mutant fails both. First pass + 4 GB
+    dd + reclaim, 3 pairs at load 42-55: base slowest hold 37-46 s, fix 0.26-1.3 s; the residue reads as scheduler
+    starvation (idle select, 2-24 faults). Its PROPOSED bar change (judge by faults-per-hold, not raw slowest_loop on a
+    loaded box) is the judge's to rule on in verdict 16: NOT adopted by the lead. Owed: ~17 more pairs, a quiet-box run,
+    gate boot-check integration.
+  - **PLAY10 (`880b072`) and WORKER (uncommitted grade.js prototype): HELD** until load <= 8; their Done= bars are timing at
+    load <= 4.
+- 2026-10-21 ~00:05 (box clock): **PAUSED by Karl** ("pause, turning off compute for night"). The tick cron is deleted;
+  every lane is stopped and its processes killed (no lane server, browser or port 9050-9104 left; LOOPHOLD's stress.bin and
+  STRESS.now deleted). **POLISH13 merged** (`redesign-w19-polish13` @ `50aaa08`) on its own green runs (124 passed), BUT on
+  the merged tree 3 tests failed at load 16-27 during LOOPHOLD's 4 GB stress: test_import_snap's
+  `…slow_snapshot_rebuild_never_holds_a_request` and `…clip_list_answers_from_what_is_known_during_an_import`, and
+  test_index_panel_ui's `…retunes_a_clip_and_reruns_a_selection`; the base-vs-merge A/B was stopped before it ran. **Resume
+  step 1: rerun those two files interleaved on a quiet box, merge vs `13b256b`.** Lanes at the pause (their worktrees
+  `roughcut-wt/w19-<lane>` keep everything; resume each with its brief + "continue from your branch"):
+  PLAY10 `880b072` (2 commits: a cut out of / into a slowed shot holds no frame; a dissolve out of a slowed shot plays
+  evenly; tree clean; it was finishing item 2: unverified, no report yet); WORKER: no commit, an uncommitted grade.js
+  prototype (a read-back path in the worker); LOOPHOLD: no commit, an uncommitted server.py memory-lock rewrite + a new
+  test_loop_hold.py; EFFECTS2 `5e7899a` (4 commits: Crop and Transform as Premiere has them, Horizontal / Vertical Flip,
+  Mirror, Black & White; it was A/B-ing one test_ui_flow music-duck failure). Karl still owes: the 8766 restart (frozen
+  snapshot of the judged rev, v5 proxies prebuilt into its /mnt/roughcut work copy) and whether to split the loop's
+  2026-10-14..20 rows out of his ledger. To resume: recreate the tick cron (prompt in this file's Cadence), then the steps
+  above; the next judge is verdict 16.
+- 2026-10-21 ~00:00 (box clock): **VERDICT 15 FAIL on `5138865`** (1-5, 8-16 at 9; 7 at 8; 6 at 7; the judge's gate GREEN
+  in 3452 s, 1 flaky, both perf runs passed at load 6.7 / 7.2; Karl's ledger untouched at 2144 lines: punch 9 done).
+  Blockers: K2-K4 (Karl's), dimension 6 (a cut out of a 0.5x shot freezes 116-133 ms 4/4; dissolves with a slowed side hold
+  16/16; the 30.5 fps cap). Rulings: the cadence deviation acceptable once, not a precedent and not toward a PASS; INDEX2 x2,
+  UNDO5, POLISH12, REDO2, FRAME59 honest; PLAY9's dissolve half lenient but honestly logged; the 30.5 cap honest; the lead's
+  worker-clock half-speed bar honestly logged but lenient (fails even that at load 5-9). Verdict 14 punch 2, 5, 6, 7, 8, 9
+  done; 3 done on the judge's measure. **Wave 19** (judge/WAVE19.md) from `2600864`: PLAY10 (2, 3), WORKER (4, 5, 6),
+  LOOPHOLD (7), EFFECTS2 (8), POLISH13 (9, 10). Punch 1 (8766 from a frozen snapshot, v5 proxies prebuilt) waits for
+  Karl's yes; FOR-KARL names `5138865`.
 - 2026-10-20 ~21:30 (box clock): **PLAY9b merged** (`bfad8d3`: a play's first frame gets the pacer's margin when it is
   not the parked one: the real cause of the FRAME59 x PLAY9 half-speed failures; test_cut_frames 3/10 vs 0/10). The lead
   set the half-speed bar on the worker's clock, one held frame a case (`5138865`, logged LOOSER; 10/10 runs). **Lead full

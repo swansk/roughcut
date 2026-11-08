@@ -80,7 +80,8 @@
  *   vfxAct(act, id, seg?)     a section's button: 'off' | 'up' | 'down' | 'reset' | 'clear'
  *   vfxChoice(id, key, v, seg?)  a section's select (Blur Dimensions)
  *   vfxOp(op, seg)            the AI's `effect` op through the paths above (actions.js)
- *   vfxLook()                 the CSS the Program wears for the shot on it now
+ *   vfxLook()                 the shot on the Program now: its stages (what the grade
+ *                             canvas draws) and their CSS stand-in (where none draws)
  *   set / value / keys / animate also take a video effect's `<param>@<id>` (`left@crop`,
  *   `posx@transform`; groups `pos@transform`, `blurriness@gaussian_blur`)
  */
@@ -242,7 +243,8 @@
     if (GROUPS[group]) return GROUPS[group];
     const a = atOf(group);
     if (!a) return null;
-    return a[0] === 'pos' ? [`position_x@${a[1]}`, `position_y@${a[1]}`] : [group];
+    const pair = { pos: 'position', anc: 'anchor', ctr: 'center' }[a[0]];
+    return pair ? [`${pair}_x@${a[1]}`, `${pair}_y@${a[1]}`] : [group];
   }
   function groupName(group) {
     if (GROUP_NAME[group]) return GROUP_NAME[group];
@@ -250,7 +252,7 @@
     const seg = cur();
     const e = a && seg ? vfxEntry(seg, a[1]) : null;
     const k = e ? VFX[e.kind] : null;
-    const prm = k ? (a[0] === 'pos' ? { label: 'Position' } : k.params.find((x) => x.key === a[0])) : null;
+    const prm = k ? (PAIR_LABEL[a[0]] ? { label: PAIR_LABEL[a[0]] } : k.params.find((x) => x.key === a[0])) : null;
     return k && prm ? `${k.name.toLowerCase()} ${prm.label.toLowerCase()}` : String(group);
   }
   const keysOf = (seg, kp) => {
@@ -278,7 +280,7 @@
     return keys[n - 1][1];
   }
   const valAt = (seg, kp, t) => { const k = keysOf(seg, kp); return k ? interp(k, t) : staticOf(seg, kp); };
-  const kround = (kp, v) => (kp.startsWith('position') ? Math.round(v * 1e6) / 1e6 : Math.round(v * 1000) / 1000);
+  const kround = (kp, v) => (/^(position|anchor|center)/.test(kp) ? Math.round(v * 1e6) / 1e6 : Math.round(v * 1000) / 1000);
   function setKeys(seg, kp, list) {
     const c = { ...ctl(seg) };
     const keys = { ...(c.keys || {}) };
@@ -344,7 +346,9 @@
   function keyValue(seg, kp, v) {
     const t = keyT(seg);
     const a = atOf(kp);
-    const grp = kp.startsWith('position') ? (a ? groupKps(`pos@${a[1]}`) : GROUPS.pos) : [kp];
+    const grp = kp.startsWith('position') ? (a ? groupKps(`pos@${a[1]}`) : GROUPS.pos)
+      : a && kp.startsWith('anchor') ? groupKps(`anc@${a[1]}`)
+      : a && kp.startsWith('center') ? groupKps(`ctr@${a[1]}`) : [kp];
     const other = grp.filter((k) => k !== kp && keysOf(seg, k)).map((k) => [k, valAt(seg, k, t)]);
     putKey(seg, kp, t, v);
     other.forEach(([k, ov]) => { if (!keysOf(seg, k).some((x) => sameT(x[0], t))) putKey(seg, k, t, ov); });
@@ -512,21 +516,17 @@
    *                                                   what differs from the default
    *   controls.keys['<param>@<id>'] = [[t, v], …]     a keyed parameter (Motion's schema)
    *
-   * The Program shows them as CSS on the picture's layers (the video buffers and the grade
-   * canvas, not the designed effects' canvas: the render draws those after the stack):
-   * a Transform is one more transform in the picture's CSS transform, after Motion's
-   * (Premiere draws Motion last); a Crop is the picture's clip-path — a polygon, so a
-   * Crop under a Transform crops the moved frame — and an Edge Feather its mask's ramps;
-   * a Gaussian Blur and a Sharpen are drawn by the grade canvas's shader after the grade
-   * (wave 16, VFXPLAY; verdict 12 punch 2: grade.js's stages from `vfxLook`'s `stages`, THE
-   * formulas, at Playback Resolution while playing). They were a CSS blur() and an SVG
-   * feConvolveMatrix on the picture's layers, which the software compositor ran on every
-   * frame: a sharpened shot played at 5-7 fps. That CSS stays only where no grade canvas
-   * draws: the videos while the canvas is off (no WebGL, the grade toggled off with G) and
-   * the poster still. Crop and Transform stay CSS (the compositor's clip and transform, no
-   * filter pass, composed with Motion's own CSS). Not exact: a Crop ABOVE a Gaussian Blur
-   * shows its edge sharp (the blur is drawn before the clip; the export blurs the edge); an
-   * Edge Feather under a Transform shows hard. */
+   * The Program's grade canvas draws the whole stack in its shader, after the grade and in the
+   * stack's order (grade.js's stages from `vfxLook`'s `stages`, THE formulas, at Playback
+   * Resolution while playing): Gaussian Blur and Sharpen since wave 16 (VFXPLAY; verdict 12
+   * punch 2: a CSS blur() and an SVG feConvolveMatrix on the picture's layers, which the
+   * software compositor ran on every frame, played a sharpened shot at 5-7 fps), Crop and
+   * Transform since wave 19 (EFFECTS2; verdict 15 punch 8: they were the picture's CSS
+   * clip-path, mask and transform, so a Crop above a Blur showed its edge sharp, a Feather
+   * under a Transform hard, and the export's bilinear warp was not the compositor's). The
+   * designed effects' canvas is not the stack's: the render draws those after it. CSS stays
+   * as the stand-in where no grade canvas draws (`apply`): the videos while the canvas is off
+   * (no WebGL, the grade toggled off with G) and the poster still. */
   const VFX_MIME = 'application/x-roughcut-video-effect';
   const VFX = {
     gaussian_blur: { name: 'Gaussian Blur', folder: 'Blur & Sharpen',
@@ -541,23 +541,55 @@
       params: [{ key: 'amount', label: 'Sharpen Amount', lo: 0, hi: 500, dflt: 0, step: 1, digits: 0, unit: '',
                  hover: 'how much of the picture\'s fine detail is added back: 100 doubles it' }],
       choices: {} },
+    // Distort › Transform and Transform › Crop with Premiere's parameters, in its row order
+    // (`rows`: a pair row `anc` / `pos`, a choice, else a number), wave 19 EFFECTS2
     transform: { name: 'Transform', folder: 'Distort',
-      what: 'moves, scales, turns and fades the picture, apart from Motion',
-      params: [{ key: 'position_x', label: 'Position', lo: -10, hi: 10, dflt: 0.5 },
+      what: 'moves, scales, skews, turns and fades the picture, apart from Motion',
+      params: [{ key: 'anchor_x', label: 'Anchor Point', lo: -10, hi: 10, dflt: 0.5,
+                 hover: 'the picture\'s point that Position places and Scale, Skew and Rotation turn about' },
+               { key: 'anchor_y', label: 'Anchor Point', lo: -10, hi: 10, dflt: 0.5 },
+               { key: 'position_x', label: 'Position', lo: -10, hi: 10, dflt: 0.5,
+                 hover: 'where the Anchor Point lands in the frame' },
                { key: 'position_y', label: 'Position', lo: -10, hi: 10, dflt: 0.5 },
                { key: 'scale', label: 'Scale', lo: 0, hi: 1000, dflt: 100, step: 0.1, digits: 1, unit: '' },
+               { key: 'scale_width', label: 'Scale Width', lo: 0, hi: 1000, dflt: 100, step: 0.1, digits: 1, unit: '',
+                 hover: 'the width\'s scale, apart from the height\'s (Uniform Scale off)' },
+               { key: 'skew', label: 'Skew', lo: -70, hi: 70, dflt: 0, step: 0.1, digits: 1, unit: '°',
+                 hover: 'slants the picture: + leans its top right, along the Skew Axis' },
+               { key: 'skew_axis', label: 'Skew Axis', lo: -3600, hi: 3600, dflt: 0, step: 0.1, digits: 1, unit: '°',
+                 hover: 'the direction the Skew slants along: 0° across, 90° down' },
                { key: 'rotation', label: 'Rotation', lo: -3600, hi: 3600, dflt: 0, step: 0.1, digits: 1, unit: '°' },
                { key: 'opacity', label: 'Opacity', lo: 0, hi: 100, dflt: 100, step: 0.1, digits: 1, unit: ' %' }],
-      choices: {} },
+      choices: { uniform: { label: 'Uniform Scale', check: true, options: [['on', 'Uniform Scale'], ['off', 'Scale Height and Width']] } },
+      rows: ['anc', 'pos', 'uniform', 'scale', 'scale_width', 'skew', 'skew_axis', 'rotation', 'opacity'] },
     crop: { name: 'Crop', folder: 'Transform',
-      what: 'trims the frame\'s edges to black, with a soft edge if you feather it',
+      what: 'trims the frame\'s edges to black, with a soft edge if you feather it, or Zoom to fill the frame with the rest',
       params: [{ key: 'left', label: 'Left', lo: 0, hi: 100, dflt: 0, step: 0.1, digits: 1, unit: ' %' },
                { key: 'top', label: 'Top', lo: 0, hi: 100, dflt: 0, step: 0.1, digits: 1, unit: ' %' },
                { key: 'right', label: 'Right', lo: 0, hi: 100, dflt: 0, step: 0.1, digits: 1, unit: ' %' },
                { key: 'bottom', label: 'Bottom', lo: 0, hi: 100, dflt: 0, step: 0.1, digits: 1, unit: ' %' },
                { key: 'feather', label: 'Edge Feather', lo: 0, hi: 1000, dflt: 0, step: 0.1, digits: 0, unit: '',
                  hover: 'a soft edge inside the crop, in pixels of a 1920×1080 frame' }],
-      choices: {} },
+      choices: { zoom: { label: 'Zoom', check: true, options: [['off', 'Off'], ['on', 'Zoom']],
+                         hover: 'stretches what the crop keeps to fill the frame' } },
+      rows: ['left', 'top', 'right', 'bottom', 'zoom', 'feather'] },
+    // Distort › Mirror (wave 19, EFFECTS2): a line through the Reflection Center at the Reflection Angle
+    mirror: { name: 'Mirror', folder: 'Distort',
+      what: 'reflects one side of the picture onto the other, about a line through the Reflection Center',
+      params: [{ key: 'center_x', label: 'Reflection Center', lo: -10, hi: 10, dflt: 0.5,
+                 hover: 'a point on the line the picture is reflected about' },
+               { key: 'center_y', label: 'Reflection Center', lo: -10, hi: 10, dflt: 0.5 },
+               { key: 'angle', label: 'Reflection Angle', lo: -3600, hi: 3600, dflt: 0, step: 0.1, digits: 1, unit: '°',
+                 hover: 'the line\'s turn: 0° reflects the left side onto the right, 90° the top onto the bottom' }],
+      choices: {}, rows: ['ctr', 'angle'] },
+    // Image Control › Black & White (wave 19, EFFECTS2): no parameters, as Premiere's
+    black_white: { name: 'Black & White', folder: 'Image Control', what: 'turns the picture to greys: each pixel its luma',
+      params: [], choices: {}, rows: [] },
+    // Transform › Horizontal Flip and Vertical Flip (wave 19, EFFECTS2): no parameters, as Premiere's
+    horizontal_flip: { name: 'Horizontal Flip', folder: 'Transform', what: 'mirrors the picture left to right',
+      params: [], choices: {}, rows: [] },
+    vertical_flip: { name: 'Vertical Flip', folder: 'Transform', what: 'turns the picture upside down (top to bottom)',
+      params: [], choices: {}, rows: [] },
   };
   const VFX_MAX = 16;
   const vfxList = (seg) => (Array.isArray(ctl(seg).vfx) ? ctl(seg).vfx.filter((e) => e && VFX[e.kind]) : []);
@@ -604,18 +636,25 @@
   }
 
   /* Its numbers, as Motion's are: a blue value to drag or type, a stopwatch each. The
-   * Transform's Position reads in pixels of a 1920×1080 frame, as Motion's does. */
+   * Transform's Position and Anchor Point read in pixels of a 1920×1080 frame, as Motion's
+   * Position does: a pair row each (`posx` / `posy`, `ancx` / `ancy`; one stopwatch, the
+   * group `pos@<id>` / `anc@<id>`). */
+  const VFX_PAIRS = { posx: ['position', 'x', 'pos'], posy: ['position', 'y', 'pos'],
+                      ancx: ['anchor', 'x', 'anc'], ancy: ['anchor', 'y', 'anc'],
+                      ctrx: ['center', 'x', 'ctr'], ctry: ['center', 'y', 'ctr'] };
+  const PAIR_LABEL = { pos: 'Position', anc: 'Anchor Point', ctr: 'Reflection Center' };
   const vfxProps = new Map();
   function vfxProp(ui, id, kind) {
     const ck = `${ui}@${id}|${kind}`;
     if (vfxProps.has(ck)) return vfxProps.get(ck);
     const K = VFX[kind];
-    const posAxis = ui === 'posx' ? 'x' : ui === 'posy' ? 'y' : null;
-    const key = posAxis ? `position_${posAxis}` : ui;
+    const pair = VFX_PAIRS[ui] || null;
+    const posAxis = pair ? pair[1] : null;
+    const key = pair ? `${pair[0]}_${posAxis}` : ui;
     const d = vfxDef(kind, key);
     if (!K || !d) return null;
     const size = posAxis === 'x' ? FRAME_W : posAxis === 'y' ? FRAME_H : 1;
-    const label = posAxis ? 'Position' : d.label;
+    const label = pair ? PAIR_LABEL[pair[2]] : d.label;
     const p = {
       key: `${ui}@${id}`, sec: 'vfx', vfx: id, label, unit: posAxis ? '' : d.unit,
       lo: d.lo * size, hi: d.hi * size, step: posAxis ? 1 : d.step, digits: posAxis ? 1 : d.digits,
@@ -625,8 +664,8 @@
       get: (seg) => { const e = vfxEntry(seg, id); return (e ? vfxValue(e, key) : d.dflt) * size; },
       set: (seg, v) => vfxPut(seg, id, key, kround(key, clamp(v, d.lo * size, d.hi * size) / size)),
     };
-    if (posAxis) p.pos = [`posx@${id}`, `posy@${id}`];
-    keyed(p, `${key}@${id}`, posAxis ? `pos@${id}` : `${key}@${id}`);
+    if (pair) p.pos = [`${pair[2]}x@${id}`, `${pair[2]}y@${id}`];
+    keyed(p, `${key}@${id}`, pair ? `${pair[2]}@${id}` : `${key}@${id}`);
     if (posAxis) {                                  // keyed() reads a pixel value: scale it
       const kp = `${key}@${id}`;
       p.get = (seg) => (keysOf(seg, kp) ? valAt(seg, kp, shownT(seg)) * size
@@ -824,11 +863,49 @@
     if (cm.getAttribute('kernelMatrix') !== km) cm.setAttribute('kernelMatrix', km);
     return `url(#ecvs${i})`;
   }
+  /* A Transform's map in a W × H frame's pixels (y down), roughcut/vfx.py THE formula: a
+   * point p of the picture lands at q = P + R(θ)·K·S·(p − A) — P its Position, A its Anchor
+   * Point (fractions of the frame), S = diag(Scale Width, Scale) / 100, K the Skew of κ along
+   * the Skew Axis α, K = R(−α)·[[1, −tan κ], [0, 1]]·R(α), R(φ) = [[cos φ, −sin φ], [sin φ,
+   * cos φ]] (clockwise on screen). As [a, b, c, d, e, f]: q = (a·x + c·y + e, b·x + d·y + f),
+   * the CSS matrix's order (grade.js's renderer `xfMap` and vfx.py `transform_affine` are its
+   * twins). `v`: {x, y, ax, ay, sx, sy, r, sk, sa} (scales as factors, angles in degrees). */
+  function xfAffine(v, W, H) {
+    const d = Math.PI / 180;
+    const t = Math.tan(v.sk * d), ca = Math.cos(v.sa * d), sa = Math.sin(v.sa * d);
+    const c = Math.cos(v.r * d), s = Math.sin(v.r * d);
+    const k11 = 1 - t * ca * sa, k12 = -t * ca * ca, k21 = t * sa * sa, k22 = 1 + t * ca * sa;
+    const a = (c * k11 - s * k21) * v.sx, cc = (c * k12 - s * k22) * v.sy;
+    const b = (s * k11 + c * k21) * v.sx, dd = (s * k12 + c * k22) * v.sy;
+    const Ax = v.ax * W, Ay = v.ay * H;
+    return [a, b, cc, dd, v.x * W - (a * Ax + cc * Ay), v.y * H - (b * Ax + dd * Ay)];
+  }
+  /* A frame map F (frame px) as CSS on a layer the frame's size, about its centre: the
+   * translate of the centre, then the matrix (the translate's % are of the layer's box) */
+  function cssOf(F) {
+    const q = at(F, [FW / 2, FH / 2]);
+    return `translate(${r4((q[0] - FW / 2) / FW * 100)}%, ${r4((q[1] - FH / 2) / FH * 100)}%) `
+      + `matrix(${[F[0], F[1], F[2], F[3]].map((x) => r4(x * 1e2) / 1e2).join(', ')}, 0, 0)`;
+  }
   /* `css` false (grade.js's per-frame `adjust`): the stages only, no SVG filter made or
-   * touched. `stages` is what grade.js's renderer draws after the grade (wave 16, VFXPLAY):
-   * {k: 'sharp', a: Amount/100} and {k: 'blur', sx, sy: σ in px of the 1920 × 1080 frame,
-   * less the Transforms above it}, top of the stack first; `filter` is their CSS stand-in for
-   * the layers no grade canvas draws (`apply`). */
+   * touched. `stages` is what grade.js's renderer draws after the grade, in the stack's order
+   * (wave 16 VFXPLAY: Sharpen and Gaussian Blur; wave 19 EFFECTS2: Crop and Transform too, so
+   * the Program draws THE formulas in the export's order, any stack exact):
+   *   {k: 'sharp', a: Amount/100}
+   *   {k: 'blur', sx, sy: σ in px of the 1920 × 1080 frame}
+   *   {k: 'crop', l, t, r, b: the sides as fractions of the frame, f: Edge Feather in px of a
+   *    1920-wide frame, z: 1 when Zoom stretches the kept box to the frame}
+   *   {k: 'xf', x, y, ax, ay: Position and Anchor Point (fractions), sx, sy: the scales
+   *    (factors), r, sk, sa: Rotation, Skew, Skew Axis (degrees), op: Opacity / 100}
+   *   {k: 'flip', h, v: 1 for a Horizontal / Vertical Flip}
+   *   {k: 'mirror', cx, cy: the Reflection Center (fractions), a: the Reflection Angle (degrees)}
+   *   {k: 'bw'}: Black & White
+   * `transform`, `clip`, `mask`, `filter` and `opacity` are their CSS stand-in, for the
+   * layers no grade canvas draws (`apply`: the videos while the canvas is off — no WebGL,
+   * the grade toggled off with G — and the poster still): the compositor's transform and
+   * clip, a mask for a feather, a CSS / SVG filter for the blur and the sharpen. Not exact:
+   * there a Crop above a Gaussian Blur shows its edge sharp and an Edge Feather under a
+   * Transform shows hard (the canvas draws both exactly). */
   function vfxLook(seg, css = true) {
     const list = seg && !isOv(seg) ? vfxList(seg).filter((e) => !e.off) : [];
     if (!list.length) return null;
@@ -843,23 +920,34 @@
       if (Math.abs(area(poly)) < before - 0.01) clipped = true;
     };
     const back = (P) => { const Mi = inv(M); return Mi ? P.map((p) => at(Mi, p)) : null; };
+    // a frame map after the ones above: the picture moved by it, and what it moves off the
+    // frame gone (the stage's output is the frame, as the export's is)
+    const moveBy = (F) => {
+      if (css) tf.push(cssOf(F));
+      M = mul(F, M);
+      const fr = back(FRAME_POLY);
+      if (!fr) { poly = []; clipped = true; return false; }
+      cut(fr);
+      return true;
+    };
     for (const e of list) {
       if (e.kind === 'transform') {
-        const px = val(e, 'position_x'), py = val(e, 'position_y'), s = val(e, 'scale') / 100, r = val(e, 'rotation');
-        op *= clamp(val(e, 'opacity'), 0, 100) / 100;
-        if (px === 0.5 && py === 0.5 && s === 1 && r === 0) continue;
-        const th = r * Math.PI / 180, co = Math.cos(th) * s, si = Math.sin(th) * s;
-        const T = [co, si, -si, co, px * FW - (co * FW / 2 - si * FH / 2), py * FH - (si * FW / 2 + co * FH / 2)];
-        tf.push(`translate(${r4((px - 0.5) * 100)}%, ${r4((py - 0.5) * 100)}%) rotate(${r4(r)}deg) scale(${r4(s)})`);
-        M = mul(T, M);
-        const fr = back(FRAME_POLY);
-        if (!fr) { poly = []; clipped = true; break; }
-        cut(fr);
+        const v = { x: val(e, 'position_x'), y: val(e, 'position_y'), ax: val(e, 'anchor_x'), ay: val(e, 'anchor_y'),
+                    sy: Math.max(0, val(e, 'scale')) / 100, r: val(e, 'rotation'), sk: val(e, 'skew'), sa: val(e, 'skew_axis') };
+        v.sx = vfxValue(e, 'uniform') === 'off' ? Math.max(0, val(e, 'scale_width')) / 100 : v.sy;
+        const o = clamp(val(e, 'opacity'), 0, 100) / 100;
+        const still = v.x === v.ax && v.y === v.ay && v.sx === 1 && v.sy === 1 && v.r === 0 && v.sk === 0;
+        if (still && o >= 1) continue;
+        stages.push({ k: 'xf', ...Object.fromEntries(Object.entries(v).map(([k, x]) => [k, r4(x * 100) / 100])), op: r4(o) });
+        op *= o;
+        if (!still && !moveBy(xfAffine(v, FW, FH))) break;
       } else if (e.kind === 'crop') {
         const L = clamp(val(e, 'left'), 0, 100), T = clamp(val(e, 'top'), 0, 100);
         const R = clamp(val(e, 'right'), 0, 100), B = clamp(val(e, 'bottom'), 0, 100);
         const F = Math.max(0, val(e, 'feather'));
+        const z = vfxValue(e, 'zoom') === 'on';
         if (L <= 0 && T <= 0 && R <= 0 && B <= 0 && F <= 0) continue;
+        stages.push({ k: 'crop', l: r4(L / 100), t: r4(T / 100), r: r4(R / 100), b: r4(B / 100), f: r4(F), z: z ? 1 : 0 });
         const x0 = L * FW / 100, x1 = FW - R * FW / 100, y0 = T * FH / 100, y1 = FH - B * FH / 100;
         if (x1 <= x0 || y1 <= y0) { poly = []; clipped = true; break; }
         const rect = back([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
@@ -871,6 +959,19 @@
           masks.push(`linear-gradient(to right, transparent ${r4(l)}%, #000 ${r4(l + fx)}%, #000 ${r4(r - fx)}%, transparent ${r4(r)}%)`,
             `linear-gradient(to bottom, transparent ${r4(t)}%, #000 ${r4(t + fy)}%, #000 ${r4(b - fy)}%, transparent ${r4(b)}%)`);
         }
+        // Zoom: the kept box stretched to the frame
+        if (z && !moveBy([FW / (x1 - x0), 0, 0, FH / (y1 - y0), -x0 * FW / (x1 - x0), -y0 * FH / (y1 - y0)])) break;
+      } else if (e.kind === 'mirror') {
+        // (no CSS stand-in: where no grade canvas draws, the picture shows unmirrored)
+        stages.push({ k: 'mirror', cx: r4(val(e, 'center_x') * 100) / 100, cy: r4(val(e, 'center_y') * 100) / 100,
+                      a: r4(val(e, 'angle') * 100) / 100 });
+      } else if (e.kind === 'black_white') {
+        stages.push({ k: 'bw' });
+        if (css) filters.push('grayscale(1)');           // CSS's grayscale is Rec. 709's luma too
+      } else if (e.kind === 'horizontal_flip' || e.kind === 'vertical_flip') {
+        const hz = e.kind === 'horizontal_flip';
+        stages.push({ k: 'flip', h: hz ? 1 : 0, v: hz ? 0 : 1 });
+        if (!moveBy(hz ? [-1, 0, 0, 1, FW, 0] : [1, 0, 0, -1, 0, FH])) break;
       } else if (e.kind === 'sharpen') {
         const amt = Math.max(0, val(e, 'amount'));
         if (amt <= 0.05) continue;
@@ -880,11 +981,12 @@
       } else {
         const bl = Math.max(0, val(e, 'blurriness'));
         if (bl <= 0.05) continue;
-        // σ in the frame's px, less the Transforms above it (the picture is drawn before them)
-        const sf = bl / Math.sqrt(Math.abs(M[0] * M[3] - M[1] * M[2]) || 1);
         const dim = vfxValue(e, 'dimensions');
-        stages.push({ k: 'blur', sx: dim === 'vertical' ? 0 : r4(sf), sy: dim === 'horizontal' ? 0 : r4(sf) });
+        // the stage blurs the frame where the stack has it (in the frame's own px)
+        stages.push({ k: 'blur', sx: dim === 'vertical' ? 0 : r4(bl), sy: dim === 'horizontal' ? 0 : r4(bl) });
         if (css) {
+          // a CSS filter is drawn before the layer's transform: σ less the Transforms above it
+          const sf = bl / Math.sqrt(Math.abs(M[0] * M[3] - M[1] * M[2]) || 1);
           const sg = sf * monitorWidth() / FW;
           filters.push(dim === 'both' ? `blur(${r4(sg)}px)`
             : axisBlur(nb, dim === 'horizontal' ? sg : 0, dim === 'vertical' ? sg : 0));
@@ -920,24 +1022,29 @@
     const po = ((c.opacity ?? 100) / 100) * (v ? v.opacity : 1);
     const picO = Math.abs(po - 1) > 1e-6 ? String(r4(po)) : '';
     const clip = v ? v.clip : '', mask = v ? v.mask : '', filter = v ? v.filter : '';
-    // Sharpen and Gaussian Blur (wave 16, VFXPLAY; verdict 12 punch 2): the grade canvas draws
-    // them in its shader (grade.js's stages), so the canvas never wears their CSS filter (the
-    // software compositor ran it on every frame: 5-7 fps), and the videos wear it only while
-    // the canvas is off (no WebGL, the grade toggled off with G) — and the poster still, at rest
+    // The grade canvas draws the whole stack in its shader (grade.js's stages: Sharpen and
+    // Gaussian Blur since wave 16, VFXPLAY — their CSS filter on the canvas was the software
+    // compositor's on every frame, 5-7 fps; Crop and Transform since wave 19, EFFECTS2, so any
+    // stack is THE formulas in the export's order), so the canvas wears only Motion's CSS. So
+    // do the videos while it is on: they are under it, the same box, and covered (grade.js
+    // `cover`). The CSS stand-in is theirs only while the canvas is off (no WebGL, the grade
+    // toggled off with G) — and the poster still's, at rest.
     const gc = document.getElementById('gradeCanvas');
     const canvasOn = !!(gc && gc.classList.contains('on'));
     const key = `${transform}|${opacity}|${picT}|${picO}|${clip}|${mask}|${filter}|${canvasOn}`;
     if (key !== lastStyle) {
       lastStyle = key;
       PICTURE.forEach((s) => document.querySelectorAll(s).forEach((el) => {
-        el.style.transform = picT;
-        el.style.opacity = picO;
-        el.style.clipPath = clip;
-        el.style.filter = el === gc || (canvasOn && el.tagName === 'VIDEO') ? '' : filter;
-        el.style.webkitMaskImage = mask;
-        el.style.maskImage = mask;
-        el.style.webkitMaskComposite = mask ? 'source-in' : '';
-        el.style.maskComposite = mask ? 'intersect' : '';
+        const drawn = el === gc || (canvasOn && el.tagName === 'VIDEO');
+        const mk = drawn ? '' : mask;
+        el.style.transform = drawn ? transform : picT;
+        el.style.opacity = drawn ? opacity : picO;
+        el.style.clipPath = drawn ? '' : clip;
+        el.style.filter = drawn ? '' : filter;
+        el.style.webkitMaskImage = mk;
+        el.style.maskImage = mk;
+        el.style.webkitMaskComposite = mk ? 'source-in' : '';
+        el.style.maskComposite = mk ? 'intersect' : '';
       }));
       OVER.forEach((s) => document.querySelectorAll(s).forEach((el) => {
         el.style.transform = transform;
@@ -1485,6 +1592,12 @@
     root.querySelectorAll('select[data-vfxsel]').forEach((el) => {
       el.addEventListener('change', () => vfxChoice(el.dataset.id, el.dataset.vfxsel, el.value));
       el.addEventListener('keydown', (e) => e.stopPropagation());
+    });
+    root.querySelectorAll('input.ec-vcheck[data-vfxsel]').forEach((el) => {
+      el.addEventListener('change', () => {
+        if (!vfxChoice(el.dataset.id, el.dataset.vfxsel, el.checked ? 'on' : 'off')) el.checked = !el.checked;
+      });
+      el.addEventListener('keydown', (e) => { if (e.key !== ' ') e.stopPropagation(); });
     });
   }
 
@@ -2039,22 +2152,36 @@
     const K = VFX[e.kind];
     const id = e.id;
     const hov = (ui) => (vfxProp(ui, id, e.kind) || {}).hover || '';
+    const uniform = !K.choices.uniform || vfxValue(e, 'uniform') !== 'off';
+    const order = K.rows || [...K.params.map((d) => d.key), ...Object.keys(K.choices)];
     let rows = '';
-    if (e.kind === 'transform') {
-      rows += animRow(`pos@${id}`, 'Position', valInput(`posx@${id}`, 'X') + valInput(`posy@${id}`, 'Y'),
-        `posx@${id},posy@${id}`, hov('posx'));
-    }
-    K.params.forEach((d) => {
-      if (d.key.startsWith('position')) return;
-      rows += animRow(`${d.key}@${id}`, d.label, valInput(`${d.key}@${id}`), `${d.key}@${id}`, hov(d.key));
-    });
-    Object.entries(K.choices).forEach(([key, c]) => {
-      const v = vfxValue(e, key);
-      rows += `<div class="ec-row ec-vsel${v !== c.options[0][0] ? ' changed' : ''}" data-row="${key}@${id}" title="${esc(`${K.name} › ${c.label} · ${RENDERED}`)}">
+    order.forEach((r) => {
+      if (PAIR_LABEL[r]) {                  // Position / Anchor Point: x and y, one stopwatch
+        rows += animRow(`${r}@${id}`, PAIR_LABEL[r], valInput(`${r}x@${id}`, 'X') + valInput(`${r}y@${id}`, 'Y'),
+          `${r}x@${id},${r}y@${id}`, hov(`${r}x`));
+        return;
+      }
+      const c = K.choices[r];
+      if (c) {
+        const v = vfxValue(e, r);
+        const title = esc(`${K.name} › ${c.label}${c.hover ? ` — ${c.hover}` : ''} · ${RENDERED}`);
+        // a checkbox for an on / off one (Premiere's Zoom, Uniform Scale), else a select (Blur
+        // Dimensions)
+        const ctl = c.check
+          ? `<input type="checkbox" class="ec-vcheck" data-vfxsel="${r}" data-id="${esc(id)}"${v === 'on' ? ' checked' : ''} aria-label="${esc(c.label)}">`
+          : `<select class="ec-vchoice" data-vfxsel="${r}" data-id="${esc(id)}" aria-label="${esc(c.label)}">${c.options.map(([val, name]) =>
+            `<option value="${val}"${val === v ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select>`;
+        rows += `<div class="ec-row ec-vsel${v !== c.options[0][0] ? ' changed' : ''}" data-row="${r}@${id}" title="${title}">
           <span class="ec-name">${esc(c.label)}</span>
-          <span class="ec-vals"><select class="ec-vchoice" data-vfxsel="${key}" data-id="${esc(id)}" aria-label="${esc(c.label)}">${c.options.map(([val, name]) =>
-            `<option value="${val}"${val === v ? ' selected' : ''}>${esc(name)}</option>`).join('')}</select></span>
+          <span class="ec-vals">${ctl}</span>
           <span></span></div>`;
+        return;
+      }
+      const d = vfxDef(e.kind, r);
+      if (!d) return;
+      if (r === 'scale_width' && uniform) return;      // only apart from the height's
+      const label = r === 'scale' && !uniform ? 'Scale Height' : d.label;
+      rows += animRow(`${r}@${id}`, label, valInput(`${r}@${id}`), `${r}@${id}`, hov(r));
     });
     return rows;
   }

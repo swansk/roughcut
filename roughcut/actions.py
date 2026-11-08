@@ -59,11 +59,18 @@ THE OPS (each maps to the human path named after the arrow)
                                                  value typed in its section (effects.set),
                                                  keys as `keys` does, `on` its fx toggle,
                                                  `remove` its Clear. kind crop (Left / Top
-                                                 / Right / Bottom %, feather px), transform
-                                                 (posx / posy px, scale %, rotation °,
-                                                 opacity %), gaussian_blur (blurriness px,
-                                                 dimensions both|horizontal|vertical),
-                                                 sharpen (amount: Sharpen Amount 0..500)
+                                                 / Right / Bottom %, feather px, zoom
+                                                 off|on), transform (ancx / ancy and posx /
+                                                 posy px, scale %, uniform on|off with
+                                                 scale_width %, skew / skew_axis °,
+                                                 rotation °, opacity %), gaussian_blur
+                                                 (blurriness px, dimensions both|horizontal|
+                                                 vertical), sharpen (amount: Sharpen Amount
+                                                 0..500), mirror (ctrx / ctry px, angle °),
+                                                 horizontal_flip, vertical_flip,
+                                                 black_white (no values);
+                                                 an on|off one also takes true / false
+                                                 (wave 19, EFFECTS2)
   Lumetri Color
     curve         {id, channel, points}      → effects.curve  channel master|r|g|b;
                                                  points [[x, y], …] on 0..1, x increasing
@@ -184,16 +191,22 @@ OVERLAY_PROPS = ("posx", "posy", "scale", "rotation", "opacity")
 CURVE_CHANNELS = {"master": "RGB master", "r": "red", "g": "green", "b": "blue"}
 
 
+# The Transform's pairs as its Effect Controls rows show them: pixels of a 1920×1080 frame
+VFX_PAIRS = {"position_x": ("posx", "Position X", FRAME_W), "position_y": ("posy", "Position Y", FRAME_H),
+             "anchor_x": ("ancx", "Anchor Point X", FRAME_W), "anchor_y": ("ancy", "Anchor Point Y", FRAME_H),
+             "center_x": ("ctrx", "Reflection Center X", FRAME_W), "center_y": ("ctry", "Reflection Center Y", FRAME_H)}
+
+
 def vfx_params(kind: str) -> dict[str, tuple[str, float, float, str]]:
     """A video effect's numbers as its Effect Controls section shows them (the `effect`
-    op's units): key → (label, lo, hi, unit). The Transform's Position is in pixels of a
-    1920×1080 frame (`posx` / `posy`), as Motion's is; the rest are vfx.py's own."""
+    op's units): key → (label, lo, hi, unit). The Transform's Position and Anchor Point are
+    in pixels of a 1920×1080 frame (`posx` / `posy`, `ancx` / `ancy`), as Motion's Position
+    is; the rest are vfx.py's own."""
     out: dict[str, tuple[str, float, float, str]] = {}
     for p in vfxmod.KINDS[kind].params:
-        if p.key == "position_x":
-            out["posx"] = ("Position X", p.lo * FRAME_W, p.hi * FRAME_W, " px")
-        elif p.key == "position_y":
-            out["posy"] = ("Position Y", p.lo * FRAME_H, p.hi * FRAME_H, " px")
+        if p.key in VFX_PAIRS:
+            ui, label, size = VFX_PAIRS[p.key]
+            out[ui] = (label, p.lo * size, p.hi * size, " px")
         else:
             out[p.key] = (p.label, p.lo, p.hi, p.unit)
     return out
@@ -222,11 +235,11 @@ def schema_text() -> str:
     props = ", ".join(f"{k} ({v[1]:g}..{v[2]:g}{v[3].strip() and ' ' + v[3].strip()})"
                       for k, v in SET_PROPS.items())
     kinds = ", ".join(f"{k} ({v})" for k, v in TRANSITION_KINDS.items())
-    vfx = "; ".join(
-        f"{k} ({K.folder} › {K.name}: "
-        + ", ".join(f"{u} {lo:g}..{hi:g}{unit.rstrip()}" for u, (_, lo, hi, unit) in vfx_params(k).items())
-        + "".join(f", {c} {'|'.join(opts)}" for c, opts in K.choices.items()) + ")"
-        for k, K in vfxmod.KINDS.items())
+    def _vfx_line(k: str, K) -> str:
+        bits = [f"{u} {lo:g}..{hi:g}{unit.rstrip()}" for u, (_, lo, hi, unit) in vfx_params(k).items()]
+        bits += [f"{c} {'|'.join(opts)}" for c, opts in K.choices.items()]
+        return f"{k} ({K.folder} › {K.name}" + (f": {', '.join(bits)}" if bits else ", no values") + ")"
+    vfx = "; ".join(_vfx_line(k, K) for k, K in vfxmod.KINDS.items())
     sizes = "|".join(f'"{k}"' for k in EXPORT_SIZES)
     rates = "|".join(f'"{k}"' for k in EXPORT_RATES)
     return f"""\
@@ -1048,6 +1061,8 @@ def _c_effect(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
     words: list[str] = []
     for k, v in params.items():
         if k in K.choices:
+            if k in vfxmod.SWITCHES and isinstance(v, bool):
+                v = "on" if v else "off"            # Premiere's checkbox, said as true / false
             if v not in K.choices[k]:
                 raise Refused(f"{K.name} {k} is one of {', '.join(K.choices[k])}")
             cp[k] = v
@@ -1062,6 +1077,12 @@ def _c_effect(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
     keys = raw.get("keys") or {}
     if not isinstance(keys, dict):
         raise Refused("`keys` is {param: [[t, value], …]}")
+    # a Scale Width is the width's apart from the height's: Uniform Scale off first, as its
+    # row shows only with that box unchecked
+    if ("uniform" in K.choices and "uniform" not in cp and ("scale_width" in cp or "scale_width" in keys)
+            and (have is None or vfxmod.value(have, "uniform") != "off")):
+        cp = {"uniform": "off", **cp}
+        words.insert(0, vfxmod.CHOICE_LABELS["uniform"]["off"])
     ck: dict = {}
     length = dur(seg)
     last = max(0.0, _jround((length - 1.0 / sim.rate) * sim.rate) / sim.rate)

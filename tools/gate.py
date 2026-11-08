@@ -41,6 +41,12 @@ Checks (each one line in summary.md, exit 0 only if all are green):
            bin whose proxy just landed, the colour measurement patched to 10 s; green when
            the timeline's blocks and the Program frame are up in <= BOOT_CUT_MAX_S. No
            record (--quick, a narrowed suite) runs the test alone first.
+  understanding  tools/eval_understanding.py (wave 20 EVAL): recall of Karl's checked Killington
+           events (air, fall...), negatives still asserted, false events per negative minute and
+           Find hit@3, scored offline from the preview copy's sidecars against
+           research/R12-understanding/eval/baseline.json; a regression fails, an improvement
+           suggests updating the baseline; skipped (green, with the reason) when the preview
+           work dir is absent. No model call, ~1 s.
   hygiene  no model ID literal outside roughcut/config.py; no `import anthropic` outside
            roughcut/inference; no Windows path literal in code.
 --quick skips the full suite (screens + journey + hygiene, ~2 min; the journey alone is
@@ -442,6 +448,22 @@ def boot_check(snap: Path, run_dir: Path, env: dict) -> tuple[bool, str]:
                    f"{'' if green else ' — ' + str(rec.get('outcome')).upper()}")
 
 
+def understanding_check(snap: Path, run_dir: Path, env: dict) -> tuple[bool, str]:
+    """Footage understanding (wave 20 EVAL): tools/eval_understanding.py scores what the planner
+    and the board assert on the Killington preview copy's sidecars (offline, no model call, a
+    second or two) against Karl's checked test set and the committed baseline. Skipped, with the
+    reason, when that work dir is not on this machine (CI, a lane's box); red on a regression."""
+    work = Path(os.environ.get("ROUGHCUT_UNDERSTANDING_WORK", "/mnt/roughcut/work/app-redesign"))
+    if not (work / "telemetry" / "killington-neutral").is_dir():
+        return True, f"skipped: no Killington preview work dir at {work}"
+    log = run_dir / "understanding.log"
+    rc = run([sys.executable, "tools/eval_understanding.py", "--work", str(work), "--check",
+              "--out", str(run_dir / "understanding")], snap, log, env, timeout=120)
+    lines = [ln for ln in log.read_text(errors="replace").splitlines() if ln.startswith("understanding:")]
+    line = lines[-1][len("understanding:"):].strip() if lines else f"no result (rc={rc}); see {log}"
+    return rc == 0, line
+
+
 def main() -> int:
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     quick = "--quick" in sys.argv
@@ -551,6 +573,9 @@ def main() -> int:
     # ---- boot (verdict 7 blocker 3) ----
     if browser_ok:
         results.append(("boot", *boot_check(snap, run_dir, env)))
+
+    # ---- understanding (wave 20 EVAL): skipped without the Killington preview work dir ----
+    results.append(("understanding", *understanding_check(snap, run_dir, env)))
 
     # ---- hygiene ----
     problems = []

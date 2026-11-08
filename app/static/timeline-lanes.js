@@ -48,7 +48,10 @@
  *   bin       the pass's keeps NOT in the cut as faint outlines after the last shot of
  *             their clip (else after the end), width to length — drag one onto V1. No
  *             label and no clip name on them (M16): an outline is a drag path, the
- *             tooltip says what it is.
+ *             tooltip says what it is. The lane's own name is in the track-header
+ *             column at its row, as the ghost's is: "Keeps · N not in the cut", and the
+ *             lane and its name say on hover what it holds (verdict 15, punch 9: at fit
+ *             zoom at 1920 it read as unlabelled dashed boxes under A2).
  *
  * Drop from outside: a kept row, a Find result or an `available` outline dragged onto
  * the timeline carries `application/x-roughcut-shot` = `{clip, start, end, why}` and
@@ -76,7 +79,7 @@
   const H = { ghost: 40, bin: 22, gap: 2 };   // gap: the foundation's ROW_GAP between rows
   const GHOST_MIN = 80;                // the ghost lane is V1's height, never under this (verdict 4)
 
-  const el = { ghost: null, ghostHead: null, a1: null, bin: null, over: null, arrows: null, drop: null };
+  const el = { ghost: null, ghostHead: null, a1: null, bin: null, binHead: null, over: null, arrows: null, drop: null };
   let adrag = null;                    // a drag on A1 (the pair, or an unlinked sound alone)
   let odrag = null;                    // a drag on V2 (a clip laid over the cut)
   let mounted = false;
@@ -180,6 +183,11 @@
   border-left: 2px solid var(--good); border-top: 1px solid #22222a; font-size: 11px; line-height: 15px; }
 #tl .tl-ghead b { color: var(--text); font-weight: 600; }
 #tl .tl-ghead span { color: var(--dim); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#tl .tl-bhead { position: absolute; left: 0; right: 0; display: flex; align-items: center; gap: 5px; padding: 0 7px;
+  box-sizing: border-box; overflow: hidden; pointer-events: auto; cursor: help; background: #18191d;
+  border-left: 2px dashed hsl(210 22% 46%); border-top: 1px solid #22222a; font-size: 11px; line-height: 14px; }
+#tl .tl-bhead b { flex: none; color: var(--text); font-weight: 600; }
+#tl .tl-bhead span { color: var(--dim); font-size: 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 #tl .tl-xlane button.rv { font-size: 12px; font-weight: 700; line-height: 16px; width: 20px; height: 18px; padding: 0; margin: 0;
   border-radius: 3px; border: 1px solid var(--line); background: rgba(13, 13, 17, .9); color: var(--dim); cursor: pointer; }
 #tl .tl-xlane button.rv.ok[aria-pressed=true] { color: var(--good); border-color: var(--good); }
@@ -282,6 +290,7 @@
     // the pass's keeps not in the cut: after the last shot of their clip, else after the end
     el.bin.hidden = !list.length || !avail.length;
     el.bin.replaceChildren();
+    paintBinHead(el.bin.hidden ? 0 : avail.length);
     const lastEnd = new Map();
     let start = 0;
     for (const seg of list) { start += tl.dur(seg); lastEnd.set(seg.clip, start); }
@@ -302,6 +311,23 @@
       el.bin.appendChild(d);
       cursor.set(anchor, at + len);
     }
+  }
+
+  /* The keeps lane's name in the track-header column, at its row (the foundation lays out
+   * `heads.bin`), and what it holds on hover there and over the lane itself — the
+   * outlines keep their own words. */
+  function paintBinHead(n) {
+    const words = n ? `Keeps not in the cut: ${n === 1 ? 'a kept range' : `${n} kept ranges`} from Selects`
+      + ' that the cut does not use, each an outline as long as it is, after the last shot of its clip'
+      + ' (else after the end) — drag one onto V1 to add it' : '';
+    if (el.bin.title !== words) el.bin.title = words;
+    const h = el.binHead;
+    if (!h) return;
+    h.style.display = n ? '' : 'none';
+    if (!n) return;
+    const info = `${n} not in the cut`;
+    if (h.lastChild.textContent !== info) h.lastChild.textContent = info;
+    if (h.title !== words) h.title = words;
   }
 
   /* ------------------------------------------------------------ A2: the music bed */
@@ -1432,6 +1458,14 @@
       el.ghostHead.style.display = 'none';
       heads.appendChild(el.ghostHead);
       tl.el.heads.ghost = el.ghostHead;
+      // the keeps lane's name, the same way, under A2
+      el.binHead = div('tl-bhead');
+      el.binHead.dataset.lane = 'bin';
+      el.binHead.dataset.testid = 'keeps-lane-head';
+      el.binHead.innerHTML = '<b>Keeps</b><span></span>';
+      el.binHead.style.display = 'none';
+      heads.appendChild(el.binHead);
+      tl.el.heads.bin = el.binHead;
     }
     el.a1 = tl.el.tracks && tl.el.tracks.A2;      // the bed's row: the foundation's A2
     el.bin = lane('bin', H.bin, '');

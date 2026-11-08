@@ -16,6 +16,12 @@ Run with:
 """
 
 from __future__ import annotations
+import sys as _sys
+from pathlib import Path as _Path
+
+# The repo root on sys.path for every test file, so one run alone imports `roughcut`
+# (test_find, test_find_union and test_verify only collected after another file put it there).
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 
 import json
 import subprocess
@@ -31,6 +37,18 @@ def pytest_configure(config):
     # There is no pyproject/pytest.ini, so the marker for tests that need a real model
     # (skipped unless ROUGHCUT_LIVE=1) is registered here rather than warned about.
     config.addinivalue_line("markers", "live: needs the real model; run with ROUGHCUT_LIVE=1")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def no_local_gpu():
+    """The local GPU stage (wave 20) is off for the whole suite: the suite must pass on a
+    CPU-only machine, and on this one it must not load a 12 GB card for a fake index. The
+    tests of the stage itself switch it on with a fake CLI (test_localvlm.py)."""
+    mp = pytest.MonkeyPatch()
+    mp.setenv("ROUGHCUT_LOCALGPU", "0")
+    mp.setenv("ROUGHCUT_NO_DIARIZE", "1")
+    yield
+    mp.undo()
 
 
 @pytest.fixture(scope="session", autouse=True)

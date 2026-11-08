@@ -4462,7 +4462,7 @@ function keepRow(s, cols) {
   // the quote, ellipsized; no thumbnail (the list view's, not the icon view's).
   const cell = (k) => {
     if (k === 'name') {
-      return `<td class="name"><span class="n">${who}<span class="w${s.note ? ' note' : ''}">${
+      return `<td class="name"><span class="n">${who}${s.whole ? '' : certSlot(s.clip, s.start, s.end)}<span class="w${s.note ? ' note' : ''}">${
         s.hero ? '<span class="hero">★</span> ' : ''}${escapeHtml(keepLabel(s))}</span>${pv}</span></td>`;
     }
     if (k === 'clip') return `<td>${escapeHtml(stem(s.clip))}</td>`;
@@ -5594,6 +5594,12 @@ function proposalNotesHtml(plan) {
   return parts.join('');
 }
 
+/* A shot's certainty chip (K5): an empty slot that /modules/firstpass.js fills with how
+ * sure the moment under the shot is and who settled it (`rcCertainty`, POST /api/certainty). */
+function certSlot(clip, a, b) {
+  return `<span class="certslot" data-cert-clip="${escapeHtml(String(clip))}" data-cert-in="${a}" data-cert-out="${b}"></span>`;
+}
+
 /* One row per proposed shot: ✓ / ✗, the number, the clip, Source In / Out at the clip's
  * own rate, and the why (one line; the row's hover and a click have it whole). */
 function proposalTableHtml(plan, reviewable) {
@@ -5622,7 +5628,7 @@ function proposalTableHtml(plan, reviewable) {
       + `<td class="pn">${String(i + 1).padStart(2, '0')}</td>`
       + `<td class="pc">${escapeHtml(clipLabel(s.clip))}${spd === 1 ? '' : ` ${spd}×`}</td>`
       + `<td class="tc">${keepTc(s.in, s.clip)}</td><td class="tc">${keepTc(s.out, s.clip)}</td>`
-      + `<td class="pw">${f && f.flags.length ? '<span class="pflag">⚠</span>' : ''}${tag}${escapeHtml(s.why || '')}</td></tr>`;
+      + `<td class="pw">${f && f.flags.length ? '<span class="pflag">⚠</span>' : ''}${tag}${certSlot(s.clip, s.in, s.out)}${escapeHtml(s.why || '')}</td></tr>`;
   });
   // the cut's shots the proposal drops, struck, after the proposed ones: the ghost lane's
   // match (by id, else by clip and overlap) when it has drawn this plan, else by range

@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import tempfile
 import base64
 import contextvars
 import ctypes
@@ -79,10 +80,14 @@ from roughcut import flow as flowmod  # noqa: E402
 from roughcut import deep as deepmod  # noqa: E402
 from roughcut import firstpass as fpmod  # noqa: E402
 from roughcut import procscope  # noqa: E402
+from roughcut import telemetry_events  # noqa: E402
 from roughcut import fxcheck  # noqa: E402
 from roughcut import dirwatch  # noqa: E402
 from roughcut import tracks as tracksmod  # noqa: E402
 from roughcut import media as mediamod  # noqa: E402
+from roughcut import verify as verifymod  # noqa: E402
+from roughcut import gpulock, localvlm  # noqa: E402     # wave 20 LOCALGPU: the 3080 as a stage
+from roughcut import speakers as speakersmod  # noqa: E402     # wave 20 DIARIZE: who said what
 
 # Stop means stop (verdict 3, punch 5): a job thread inside a `procscope.active` block
 # starts its tools in their own process groups, and its cancel kills them.
@@ -120,7 +125,7 @@ def _glibc():
 
 _LIBC = _glibc()
 MEM: dict = {"arenas": None, "trims": 0, "trimmed_mb": 0.0, "last_trim_mb": None, "thread": None,
-             "locked_mb": None}
+             "locked_mb": None, "lock_on": False}
 try:
     _ARENAS = int(os.environ.get("ROUGHCUT_MALLOC_ARENAS", MALLOC_ARENAS))   # 0: glibc's own
 except ValueError:
@@ -161,11 +166,41 @@ def mem_trim() -> float | None:
 
 
 def _mem_trim_loop() -> None:
+    """Every RELOCK_S what has been mapped since is locked (`lock_resident`); every
+    MEM_TRIM_S the allocator's free memory goes back first — its arenas unlocked for the
+    trim (a locked page is never handed back) and relocked after (`mem_cycle`)."""
+    waited = 0.0
     while True:
-        time.sleep(MEM_TRIM_S)
-        mem_trim()
-        if MEM.get("locked_mb"):
-            lock_resident(heap=False)
+        time.sleep(RELOCK_S)
+        waited += RELOCK_S
+        trim = waited >= MEM_TRIM_S
+        if trim:
+            waited = 0.0
+        mem_cycle(trim)
+
+
+def mem_cycle(trim: bool = True) -> None:
+    """One turn of the trim thread: (when `trim`) hand malloc's free pages back, then lock
+    what the process runs on again (when locking is on). A trim leaves a locked page where
+    it is (madvise refuses it): the heap's top and an empty arena still go back, and the
+    free pages inside a locked arena stay, reused by the next allocations. Only when that
+    free memory grows past TRIM_LOCKED_MB are malloc's maps unlocked for the trim, and
+    relocked straight after it (`unlock_malloc`, `relock`): a page unlocked is one the
+    kernel may take, so that window is opened rarely and kept short."""
+    locking = bool(MEM.get("lock_on"))
+    if trim:
+        free = _malloc_free_mb() if locking else None
+        if free is not None and free >= TRIM_LOCKED_MB:
+            ranges = unlock_malloc()
+            try:
+                mem_trim()
+            finally:
+                relock(ranges)
+            MEM["unlocked_trims"] = MEM.get("unlocked_trims", 0) + 1
+        else:
+            mem_trim()
+    if locking:
+        lock_resident(again=True)
 
 
 def start_mem_trim() -> None:
@@ -181,62 +216,207 @@ def start_mem_trim() -> None:
 # burst at the pass's end runs, unused for minutes) are as swappable, and the judge's holds
 # at that burst were 0.4-0.9 s with the process all but off the CPU. So once the server is
 # configured, before it serves, those pages are locked as they are (`mlock2`, MLOCK_ONFAULT:
-# nothing not already resident is read in): the main heap, the main thread's stack, the
-# small anonymous maps (the allocator's 1 MiB object arenas) and the shared libraries' —
-# never a thread's 64 MB malloc arena, a thread stack or a big buffer, which the trim hands
-# back instead; and every MEM_TRIM_S the object arenas Python has made since (Killington,
-# wave 16: a 497 ms garbage collection that faulted 119 pages back in). ~120 MB mapped;
-# within RLIMIT_MEMLOCK or not at all (ROUGHCUT_MLOCK=0: off).
+# nothing not already resident is read in, and what is touched later stays), and every
+# RELOCK_S what has been mapped since.
+#
+# Verdict 15 punch 7: a 2.5 s hold (36 major faults) in FastAPI's per-request
+# `_get_param_aliases` while 10 GB of files were copied, with "locked 131 MB" printed. The
+# lock missed most of what the loop touches (wave 19 LOOPHOLD, measured with every page the
+# kernel could take taken — cgroup `memory.reclaim` on the server's scope, or MADV_PAGEOUT —
+# and one round of the board's reads): Python's 1 MiB object arenas are mapped side by side
+# and the kernel merges them, so the startup ones (module dicts, functions, classes, code:
+# 9 216 + 4 564 of the module-level objects) sat in one 8 MiB and one 4 MiB map, which the
+# old "small maps only" rule (< 4 MiB, to leave big buffers out) skipped; and a thread's
+# malloc arena (the dict tables and strings a worker thread made, which the loop reads) and
+# the main heap's growth were never locked. One round of reads after the reclaim faulted
+# 2 484 pages back (1 936 in those maps, 545 in the thread arena); with a 4 GB dd beside
+# it, holds of 1-17 s ("faults", up to 1 495 major faults). Now every private anonymous map
+# is locked — the main heap, the object arenas whatever their map's size, the threads'
+# malloc arenas and stacks — except a big map that is mostly untouched (a library's
+# reserve, e.g. OpenBLAS's 192 MB of thread buffers: locked on fault, a matrix product
+# would pin it) and the shared libraries' and interpreter's code as before. A locked page
+# is never handed back by a trim (madvise refuses it), so each MEM_TRIM_S the malloc-owned
+# maps are unlocked, trimmed and relocked (`mem_cycle`): what is still in use is locked
+# again, what was free is gone. Within RLIMIT_MEMLOCK (most important first: what stops
+# at the limit is a thread's stack) or not at all (ROUGHCUT_MLOCK=0: off).
 MLOCK_ONFAULT = 1
-LOCK_SMALL_MAP = 4 << 20
+LOCK_SPARSE_MAP = 4 << 20       # an anonymous map this big is locked only when it is in use:
+LOCK_SPARSE_SHARE = 0.25        # at least this share of it resident
 GLIBC_HEAP_MAX = 64 << 20       # a 64-bit glibc's thread arena heap (HEAP_MAX_SIZE)
+GUARD_MAX = 64 << 10            # a thread stack's guard below it (glibc: one page)
+TRIM_LOCKED_MB = 32.0           # free inside locked arenas worth unlocking them for a trim
+LOCK_REFUSALS = 4               # refusals in a row that mean RLIMIT_MEMLOCK, not a race
+try:
+    RELOCK_S = float(os.environ.get("ROUGHCUT_RELOCK_S", "5"))
+except ValueError:
+    RELOCK_S = 5.0
+RELOCK_S = max(0.1, RELOCK_S)
+PAGE = os.sysconf("SC_PAGE_SIZE") if hasattr(os, "sysconf") else 4096
 
 
-def lock_resident(heap: bool = True) -> float | None:
-    """Lock the pages resident now that the loop runs on (see above); returns the MB of
-    mappings locked, None where it cannot be done (not glibc, off, or refused). Asked
-    again (`heap` False: the trim thread, every MEM_TRIM_S) it locks what has been mapped
-    since — the object arenas Python made since, a library imported late — and leaves the
-    main heap's growth to the trim."""
-    if _LIBC is None or os.environ.get("ROUGHCUT_MLOCK", "1") == "0":
-        return None
-    try:
-        mlock2 = _LIBC.mlock2
-        mlock2.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
-        maps = Path("/proc/self/maps").read_text().splitlines()
-    except (AttributeError, OSError):
-        return None
-    exe = os.path.realpath(sys.executable)
+def _maps() -> list[tuple[int, int, str, str]]:
+    """/proc/self/maps as (start, end, perms, name)."""
     vmas = []
-    for line in maps:
+    for line in Path("/proc/self/maps").read_text().splitlines():
         parts = line.split(maxsplit=5)
         if len(parts) < 5:
             continue
         a, b = (int(x, 16) for x in parts[0].split("-"))
         vmas.append((a, b, parts[1], parts[5].strip() if len(parts) > 5 else ""))
-    # glibc's thread arenas: 64 MB windows, each starting on a 64 MB boundary
+    return vmas
+
+
+def _arena_windows(vmas) -> set[int]:
+    """glibc's thread arenas: a 64 MB window on a 64 MB boundary whose maps run unbroken to
+    its end (the part in use read-write, the rest reserved)."""
     win = GLIBC_HEAP_MAX
-    heaps = {a for a, _b, _p, name in vmas if not name and a % win == 0}
+    out: set[int] = set()
+    for i, (a, b, perms, name) in enumerate(vmas):
+        if name or a % win or b - a > win or perms.startswith("---"):
+            continue
+        j = i
+        while (j + 1 < len(vmas) and not vmas[j + 1][3] and vmas[j + 1][0] == vmas[j][1]
+               and vmas[j + 1][1] <= a + win):
+            j += 1
+        if vmas[j][1] == a + win:
+            out.add(a)
+    return out
+
+
+def _resident_share(a: int, b: int) -> float:
+    """The share of [a, b) resident now (`mincore`); 1.0 where it cannot say."""
+    n = max(1, (b - a + PAGE - 1) // PAGE)
+    vec = (ctypes.c_ubyte * n)()
+    try:
+        f = _LIBC.mincore
+        f.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_void_p]
+        if f(a, b - a, vec) != 0:
+            return 1.0
+    except (AttributeError, OSError, ctypes.ArgumentError):
+        return 1.0
+    return 1.0 - bytes(vec).count(0) / n
+
+
+def _lock_plan(vmas) -> list[tuple[int, int, int, str]]:
+    """What `lock_resident` locks, most important first: (rank, start, end, kind)."""
+    exe = os.path.realpath(sys.executable)
+    wins = _arena_windows(vmas)
+    plan = []
+    prev = None
+    for a, b, perms, name in vmas:
+        below, prev = prev, (a, b, perms, name)
+        if perms.startswith("---") or perms[3:4] == "s":
+            continue                                  # a guard, a reservation, a shared map
+        if name == "[heap]":
+            plan.append((0, a, b, "malloc"))
+        elif name == "[stack]":
+            plan.append((0, a, b, "stack"))
+        elif name.startswith("["):
+            continue                                  # [vvar], [vdso], [vsyscall]
+        elif name:
+            if name == exe or ".so" in Path(name).name:
+                plan.append((0, a, b, "code"))
+            # else: a data file someone mapped, not code
+        elif a in wins:
+            # a thread's malloc arena: the whole window, its reserve too, so that what the
+            # arena grows into later is locked as it is touched (mprotect keeps the flags)
+            plan.append((1, a, a + GLIBC_HEAP_MAX, "malloc"))
+        elif (a - a % GLIBC_HEAP_MAX) in wins:
+            continue                                  # the rest of a window, locked with it
+        elif (below is not None and below[1] == a and below[2].startswith("---")
+              and below[1] - below[0] <= GUARD_MAX and not below[3]):
+            plan.append((2, a, b, "stack"))           # a thread's stack, above its guard
+        elif b - a < LOCK_SPARSE_MAP or _resident_share(a, b) >= LOCK_SPARSE_SHARE:
+            plan.append((0, a, b, "objects"))         # object arenas, a buffer in use
+        # else: a big map mostly untouched — a library's reserve — is left alone
+    plan.sort(key=lambda r: r[0])
+    return plan
+
+
+def lock_resident(again: bool = False) -> float | None:
+    """Lock the pages resident now that the process runs on (see above); returns the MB of
+    mappings locked, None where it cannot be done (not glibc, off, or refused). Asked
+    `again` (the trim thread, every RELOCK_S) it locks what has been mapped since — the
+    object arenas Python made since, the heap's and the arenas' growth, a new thread's
+    stack, a library imported late."""
+    if _LIBC is None or os.environ.get("ROUGHCUT_MLOCK", "1") == "0":
+        return None
+    try:
+        mlock2 = _LIBC.mlock2
+        mlock2.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+        plan = _lock_plan(_maps())
+    except (AttributeError, OSError, ValueError):
+        return None
     done = 0
+    kinds: dict[str, int] = {}
+    refused = 0
+    for _rank, a, b, kind in plan:
+        if mlock2(a, b - a, MLOCK_ONFAULT) != 0:
+            # a map gone since /proc/self/maps was read (a buffer freed, a thread ended)
+            # is refused like the limit is (ENOMEM both): past LOCK_REFUSALS in a row it is
+            # the limit, and what is locked stays
+            refused += 1
+            MEM["lock_refused"] = MEM.get("lock_refused", 0) + 1
+            if refused >= LOCK_REFUSALS:
+                break
+            continue
+        refused = 0
+        done += b - a
+        kinds[kind] = kinds.get(kind, 0) + (b - a)
+    mb = round(done / 2**20, 1) if done else None
+    if again:
+        MEM["relocks"] = MEM.get("relocks", 0) + 1
+    if mb is not None:
+        MEM["lock_on"] = True
+    if mb is not None or not again:
+        MEM["locked_mb"] = mb
+        MEM["locked_kinds"] = {k: round(v / 2**20, 1) for k, v in kinds.items()}
+    return mb
+
+
+def unlock_malloc() -> list[tuple[int, int]]:
+    """Unlock what malloc manages — the main heap and the threads' arenas, their parts in
+    use — so a trim can hand its free pages back (madvise refuses a locked page). Returns
+    the ranges unlocked, for `relock`."""
+    if _LIBC is None:
+        return []
+    try:
+        munlock = _LIBC.munlock
+        munlock.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+        vmas = _maps()
+    except (AttributeError, OSError, ValueError):
+        return []
+    wins = _arena_windows(vmas)
+    out = []
     for a, b, perms, name in vmas:
         if perms.startswith("---"):
-            continue                                  # a guard or a reservation
-        if name in ("[heap]", "[stack]"):
-            if not heap:
-                continue
-        elif not name:
-            if b - a >= LOCK_SMALL_MAP or (a - a % win) in heaps:
-                continue                              # a malloc arena, a thread stack, a buffer
-        elif not (name == exe or ".so" in Path(name).name):
-            continue                                  # a data file someone mapped: not code
-        if mlock2(a, b - a, MLOCK_ONFAULT) != 0:
-            break                                     # past RLIMIT_MEMLOCK: what is locked stays
-        done += b - a
-    if heap:
-        MEM["locked_mb"] = round(done / 2**20, 1) if done else None
-    else:
-        MEM["relocks"] = MEM.get("relocks", 0) + 1
-    return round(done / 2**20, 1) if done else None
+            continue
+        if name == "[heap]" or (not name and (a - a % GLIBC_HEAP_MAX) in wins):
+            if munlock(a, b - a) == 0:
+                out.append((a, b))
+    return out
+
+
+def relock(ranges) -> None:
+    """Lock `ranges` again, as they are (what a trim took away is simply not there)."""
+    if _LIBC is None:
+        return
+    mlock2 = _LIBC.mlock2
+    mlock2.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+    for a, b in ranges:
+        mlock2(a, b - a, MLOCK_ONFAULT)
+
+
+def _malloc_free_mb() -> float | None:
+    """MB free inside malloc's arenas (glibc `mallinfo2`), None where it cannot say."""
+    if _LIBC is None:
+        return None
+    try:
+        f = _LIBC.mallinfo2
+        f.restype = _MallInfo2
+        return f().fordblks / 2**20
+    except (AttributeError, OSError):
+        return None
 
 
 class _MallInfo2(ctypes.Structure):
@@ -251,7 +431,10 @@ def mem_stats() -> dict:
     and resident locked, and the process's swap."""
     out: dict = {"arenas_max": MEM["arenas"], "trims": MEM["trims"],
                  "trimmed_mb": MEM["trimmed_mb"], "last_trim_mb": MEM["last_trim_mb"],
-                 "locked_mb": MEM.get("locked_mb"), "relocks": MEM.get("relocks", 0)}
+                 "locked_mb": MEM.get("locked_mb"), "relocks": MEM.get("relocks", 0),
+                 "locked_kinds": MEM.get("locked_kinds"),
+                 "unlocked_trims": MEM.get("unlocked_trims", 0),
+                 "lock_refused": MEM.get("lock_refused", 0)}
     try:
         for line in Path("/proc/self/smaps_rollup").read_text().splitlines():
             k, _, v = line.partition(":")
@@ -1010,7 +1193,12 @@ def load_visual(clip: str) -> dict:
     # joining it. An inventory that still lists a backflip the 1s read found to be a
     # glove over the lens teaches the Ask exactly the wrong thing (R10). A deep look's
     # beats replace both for the seconds it read (INTAKE M15).
-    return {"moments": events.merge_moments(d.get("moments", []), fine, deep),
+    # Wave 20 VERIFY: a jump / fall / crash / inverted claim with no telemetry and no
+    # checker verdict behind it is kept in the record (`unsupported`) but is not asserted
+    # to the planner or the board (roughcut/verify.py).
+    moments, held = verifymod.demote(events.merge_moments(d.get("moments", []), fine, deep),
+                                     clip, verify_state())
+    return {"moments": moments, "unsupported": held,
             "unusable": d.get("unusable", []) + fine.get("unusable", []),
             "summary": d.get("summary", "")}
 
@@ -1326,6 +1514,12 @@ def ensure_segment_ids(edl: dict) -> bool:
     return changed
 
 
+def _asserted_events() -> tuple[list[dict], list[dict]]:
+    """The ranked events split into those the planner and the board may state and the
+    index claims nothing backs (wave 20 VERIFY demotion)."""
+    return verifymod.demote_ranked(events.load(STATE["visual"]), verify_state())
+
+
 def project_payload() -> dict:
     edl = read_edl()
     ensure_segment_ids(edl)               # persisted at open (configure) and on every save;
@@ -1368,6 +1562,7 @@ def project_payload() -> dict:
     for clip in sorted(referenced - clips.keys()):
         if not edits.is_generated(clip) and clip_path(clip).is_file():
             clips[clip] = unheard_clip(clip, used=True)
+    asserted_events, held_events = _asserted_events()
     return {
         "title": edl.get("title", ""),
         "variant": edl.get("variant", ""),
@@ -1380,7 +1575,8 @@ def project_payload() -> dict:
         # question is "what are the biggest things in this footage" and that is not a
         # per-clip question. Capped: the board shows 40 and the Ask reads 14, so a
         # 400-event bin does not put 400 rows through every poll.
-        "events": events.load(STATE["visual"])[:60],
+        "events": asserted_events[:60],
+        "events_unsupported": held_events[:60],
         "proxies_ready": STATE.get("proxies_ready", False),
         "edl_path": str(STATE["edl"]),
         "cut": cut_name_of(edl, STATE["edl"]),
@@ -2074,7 +2270,7 @@ async def api_save(request: Request) -> JSONResponse:
         try:
             answer_ask(body["answer"])
         except (HTTPException, OSError, ValueError) as exc:
-            print(f"  !! save: the answer it carried was not recorded: {exc}", flush=True)
+            say(f"  !! save: the answer it carried was not recorded: {exc}")
     # `ids`: {tmp-N: minted id}, so the board re-keys its new shots from this reply
     return JSONResponse({"ok": True, "saved": len(clean), "ids": minted})
 
@@ -2120,8 +2316,38 @@ def note_request(row: dict) -> None:
     if row["ms"] >= SLOW_MS:
         SLOW.append(row)
         del SLOW[:-SLOW_KEEP]
-        print(f"  !! slow request: {row['ms']:.0f} ms {row['method']} {row['path']} "
-              f"({row['handler']})", flush=True)
+        say(f"  !! slow request: {row['ms']:.0f} ms {row['method']} {row['path']} "
+            f"({row['handler']})")
+
+
+# The loop never writes the log itself (wave 19 LOOPHOLD, verdict 15 punch 7): stdout is a
+# file under a judge's or a lane's run, and with a 4 GB dd beside the board one "slow
+# request" line held the loop 245 ms in write() (the sampler: `note_request`), the disk's
+# queue full of the dd's writeback. Lines said on the loop go to a queue a thread prints.
+_SAY: dict = {"q": None, "thread": None, "lock": threading.Lock()}
+
+
+def _say_loop(q) -> None:
+    while True:
+        line = q.get()
+        try:
+            print(line, flush=True)
+        except (OSError, ValueError):
+            pass
+
+
+def say(line: str) -> None:
+    """Print `line` from a thread, never from the caller (the event loop): in order, and
+    as soon as the writer thread gets to it."""
+    if _SAY["thread"] is None:
+        with _SAY["lock"]:
+            if _SAY["thread"] is None:
+                import queue
+                q = _SAY["q"] = queue.SimpleQueue()
+                t = threading.Thread(target=_say_loop, args=(q,), name="log", daemon=True)
+                t.start()
+                _SAY["thread"] = t
+    _SAY["q"].put(line)
 
 
 _HERE_ROOT = str(HERE.parent)
@@ -2357,11 +2583,11 @@ async def _loop_lag() -> None:
                 SLOW.append(row)
                 del SLOW[:-SLOW_KEEP]
                 w = row["where"] or {}
-                print(f"  !! the event loop was held {lag:.0f} ms"
-                      + (f" ({w.get('cause')}: rq {w.get('rq_ms')} ms, {w.get('majflt')} faults, "
-                         f"gc {w.get('gc_ms')} ms)" if w.get("cause") else "")
-                      + (f" — loop at {w.get('loop')}" if w.get("loop") else "")
-                      + (f"; ran: {'; '.join(w['busy'])}" if w.get("busy") else ""), flush=True)
+                say(f"  !! the event loop was held {lag:.0f} ms"
+                    + (f" ({w.get('cause')}: rq {w.get('rq_ms')} ms, {w.get('majflt')} faults, "
+                       f"gc {w.get('gc_ms')} ms)" if w.get("cause") else "")
+                    + (f" — loop at {w.get('loop')}" if w.get("loop") else "")
+                    + (f"; ran: {'; '.join(w['busy'])}" if w.get("busy") else ""))
 
 
 def _watch_loop() -> None:
@@ -2544,6 +2770,44 @@ def api_debug_slow(heap: int = 0) -> JSONResponse:
                          # settled (`snap_respond`, `late_respond`), by what they asked for
                          "late_answers": dict(SNAP["late"]),
                          "over_budget": list(OVER_BUDGET), "slow": list(SLOW)})
+
+
+MADV_PAGEOUT = 21
+
+
+def _rollup_mb() -> dict:
+    out: dict = {}
+    try:
+        for line in Path("/proc/self/smaps_rollup").read_text().splitlines():
+            k, _, v = line.partition(":")
+            if k in ("Rss", "Swap", "Locked"):
+                out[k.lower() + "_mb"] = round(int(v.split()[0]) / 1024, 1)
+    except (OSError, ValueError, IndexError):
+        pass
+    return out
+
+
+@app.post("/api/debug/pageout")
+def api_debug_pageout() -> JSONResponse:
+    """Tests and the gate only (ROUGHCUT_DEBUG_PAGEOUT=1; otherwise 404): hand the kernel
+    every page of this process it can take, now — MADV_PAGEOUT over every mapping, the
+    anonymous pages to swap and the file pages dropped; a locked page stays. What a box
+    under page-cache pressure does to a board over minutes, at once, so a test can see what
+    the next requests have to read back (wave 19 LOOPHOLD, verdict 15 punch 7). Answers the
+    maps advised and the process's resident, swapped and locked MB before and after."""
+    if os.environ.get("ROUGHCUT_DEBUG_PAGEOUT") != "1" or _LIBC is None:
+        raise HTTPException(404, "not on")
+    madvise = _LIBC.madvise
+    madvise.argtypes = [ctypes.c_void_p, ctypes.c_size_t, ctypes.c_int]
+    before = _rollup_mb()
+    n = ok = 0
+    for a, b, perms, name in _maps():
+        if perms.startswith("---") or name in ("[vvar]", "[vdso]", "[vsyscall]"):
+            continue
+        n += 1
+        if madvise(a, b - a, MADV_PAGEOUT) == 0:
+            ok += 1
+    return JSONResponse({"maps": n, "advised": ok, "before": before, "after": _rollup_mb()})
 
 
 @app.post("/api/snap")
@@ -2978,6 +3242,28 @@ def _find_job(job: str, query: str, clips: dict, ranked: list[dict]) -> None:
     entry.finish("done", detail=f"{n} match{'es' if n != 1 else ''} found")
 
 
+def _rerank_job(job: str, query: str, rows: list[dict]) -> None:
+    """The Claude rerank of the union's top rows (wave 20 FIND3): one call, run off the event
+    loop in its own thread, same job shape as the model Find so the client polls it alike."""
+    entry = FINDS[job]
+    try:
+        thumbs = find.thumb_maker(_verify_video, Path(tempfile.gettempdir()) / "roughcut-find-thumbs")
+        entry.note("looking at the top candidates")
+        got = find.rerank(query, rows, thumbs)
+    except inference.BudgetExceeded as exc:
+        entry.update(code=429)
+        entry.finish("failed", detail=str(exc))
+        return
+    except (inference.InferenceError, ValueError) as exc:
+        entry.update(code=502)
+        entry.finish("failed", detail=str(exc))
+        return
+    entry["found"] = {"matches": _match_rows(got["matches"]), "notes": got.get("notes", ""),
+                      "usage": got.get("usage", {})}
+    entry.complete("write")
+    entry.finish("done", detail="reranked")
+
+
 @app.get("/api/find/price")
 def api_find_price() -> JSONResponse:
     """What *Ask the model* costs on this bin, before anything is typed (INTAKE I16.0f:
@@ -2989,7 +3275,9 @@ def api_find_price() -> JSONResponse:
         return JSONResponse({"usd": None,
                              "why": "no analysed clips yet — run the audio pass first",
                              **config.cost_terms()})
-    return JSONResponse({"usd": find.projected_usd(clips), **config.cost_terms()})
+    return JSONResponse({"usd": find.projected_usd(clips),
+                         "rerank_usd": find.rerank_projected_usd(),
+                         "rerank": find.rerank_policy(verify_state()["mode"]), **config.cost_terms()})
 
 
 @app.post("/api/find")
@@ -3012,9 +3300,37 @@ async def api_find(request: Request) -> JSONResponse:
     clips, payload = _ask_clips(drop_junk=True)
     if not clips:
         raise HTTPException(400, "no analysed clips yet — run the audio pass first")
-    matches = find.lexical(query, clips)
-    resp: dict = {"matches": _match_rows(matches), "job": None,
-                  "deep_projected_usd": find.projected_usd(clips), **config.cost_terms()}
+    # The free layers: words, plus the 3080's frame search when it is installed. The latter is
+    # a subprocess that waits for the GPU lock, so it runs off the event loop.
+    ctx = local_context()
+    found = await asyncio.to_thread(
+        find.search, query, clips, local=body.get("local", True) is not False,
+        local_search=lambda t, k=3, **_: localvlm.search_ex(t, k, ctx=ctx))
+    policy = find.rerank_policy(verify_state()["mode"])
+    resp: dict = {"matches": _match_rows(found["matches"]), "job": None, "local": found["local"],
+                  "deep_projected_usd": find.projected_usd(clips),
+                  "rerank": {**policy, "usd": find.rerank_projected_usd()}, **config.cost_terms()}
+    if body.get("rerank") and body.get("deep"):
+        raise HTTPException(400, "pick one: the rerank or the whole-bin model search")
+    if body.get("rerank"):
+        if not policy["allowed"]:
+            raise HTTPException(409, "Local only never spends a Claude call - switch the bin to "
+                                     "Hybrid or Claude only to rerank")
+        if not found["matches"]:
+            raise HTTPException(400, "nothing to rerank")
+        running = next((f for f in FINDS.values() if f["state"] not in progress.TERMINAL), None)
+        if running is not None:
+            raise HTTPException(409, "a model search is already running - "
+                                     f"{running.get('detail') or running['label']}")
+        refuse_past_cap("the rerank", resp["rerank"]["usd"])
+        job = uuid.uuid4().hex[:8]
+        FINDS[job] = progress.Job(
+            "find", f"Ranking - {query[:48]}", id=job, state="running", found=None,
+            code=0, query=query, detail="looking at the top candidates")
+        FINDS[job].set_estimate(20.0, [progress.milestone("write", "judging the candidates", 1.0)],
+                                source="measured")
+        threading.Thread(target=_rerank_job, args=(job, query, found["matches"]), daemon=True).start()
+        resp["job"] = job
     if body.get("deep"):
         running = next((f for f in FINDS.values()
                         if f["state"] not in progress.TERMINAL), None)
@@ -4131,12 +4447,18 @@ def _snap_build(name: str, fn: Callable[[], dict], live: Callable[[], object]) -
 
 def _snap_rebuild(name: str, fn: Callable[[], dict], live: Callable[[], object]):
     """The rebuild of `name`'s answer running now, or a new one: one at a time, unless
-    the running one began before a client's write (that request reads its write back)."""
+    the running one began before a client's write (that request reads its write back) or
+    before a change in what a late answer must share (`_snap_lag_view`: the CLI's word, the
+    first pass, the code, the backend, the settings, the bin). Wave 19 (verdict 15 punch
+    10): a status read that began after the CLI signed out joined the build begun while it
+    was signed in and answered "signed in", unmarked — a late answer by another door."""
     fut = SNAP["builds"].get(name)
     writes = SNAP["writes"]
-    if fut is None or fut.done() or getattr(fut, "writes", None) != writes:
+    view = _snap_lag_view(_snap_key())
+    if fut is None or fut.done() or getattr(fut, "writes", None) != writes \
+            or getattr(fut, "view", None) != view:
         fut = SNAP["builds"][name] = _snap_pool().submit(_snap_build, name, fn, live)
-        fut.writes = writes
+        fut.writes, fut.view = writes, view
     return fut
 
 
@@ -4530,6 +4852,9 @@ def firstpass_plan(mode: str | None = None, keep=None, *, facts: dict | None = N
     ]
     return {"mode": mode, "steps": steps, "keep": keep_rows, "replace": replace_rows,
             "locked": locked, "cost": fpmod.cost_words(ix_usd + cut_usd),
+            # wave 20 VERIFY: the Claude checks on the events the cut uses, priced first
+            "verify": verifymod.first_pass_price(verify_state()["mode"], footage_clips(),
+                                                 verifymod.load_state(verify_path())),
             # verdict 4: the ranges the editor rejected — a run will not propose them again
             "rejected": [{k: r.get(k) for k in ("clip", "in", "out")} for r in fpmod.rejections(edl)],
             "produces": "a proposed rough cut you accept, discard or adjust"}
@@ -4739,6 +5064,168 @@ def firstpass_payload() -> dict:
     return out
 
 
+# ---- what the first pass did, in this bin's numbers (Karl's K5, wave 20) ----------------
+#
+#   GET  /api/firstpass/account[?job=<ask id>]   per step: what it does / is doing / did, at
+#        what granularity (flow.pass_account), and how sure the moments are — counts by
+#        certainty for the bin and for the cut (the proposal `job`, else the cut on the
+#        timeline). Reads files; never calls a model.
+#   POST /api/certainty {shots: [{clip, in, out}]}   the certainty chip of each shot's
+#        moment (flow.certainty): {level, chip, name, title} or null where no moment rests
+#        under the shot (a spoken line, say).
+
+_COV: dict = {"at": 0.0, "covs": None}
+_COV_TTL_S = 3.0
+
+
+def bin_coverage() -> list[dict]:
+    """Every clip's coverage (moments, layers) — a few seconds of reuse so a panel polling
+    its account does not re-rank the bin each time."""
+    if _COV["covs"] is not None and time.time() - _COV["at"] < _COV_TTL_S:
+        return _COV["covs"]
+    covs = []
+    for c in footage_clips():
+        try:
+            covs.append(clip_coverage(c))
+        except (OSError, ValueError, KeyError):
+            continue
+    _COV.update(at=time.time(), covs=covs)
+    return covs
+
+
+def _layer_model(layer: dict) -> str | None:
+    """The model a layer was read with: the sidecar's own record, else what its role maps
+    to today (older sidecars recorded only the role). None when neither is known: the
+    words then say nothing, never a role id."""
+    if layer.get("model"):
+        return str(layer["model"])
+    try:
+        return config.model_for(str(layer.get("role") or ""))
+    except ValueError:
+        return None
+
+
+def index_ran_of(rec: dict | None) -> bool | None:
+    """Did the finished run read any footage? The record's own `produced.index_ran`; for a
+    record that predates it, inferred: a re-run whose index is complete in its record, with
+    no clip new to it, only re-ranked and re-cut. None when it cannot be told."""
+    if not rec:
+        return None
+    produced = rec.get("produced") or {}
+    if produced.get("index_ran") is not None:
+        return bool(produced["index_ran"])
+    c = produced.get("index") or {}
+    n = int(c.get("clips") or 0)
+    whole = n and all(int(c.get(k) or 0) >= int(c.get(need) or n) for k, need in
+                      (("listened", "clips"), ("looked", "look_need"),
+                       ("close", "close_need"), ("proxied", "clips")))
+    base, names = rec.get("base_names"), rec.get("clip_names")
+    fresh = isinstance(base, list) and isinstance(names, list) and set(names) - set(base)
+    if rec.get("mode") == "rerun" and whole and not fresh:
+        return False
+    return None
+
+
+def account_inputs(covs: list[dict]) -> dict:
+    """The numbers `flow.pass_account` words, summed off the layers' own records."""
+    heard = [c["layers"]["heard"] for c in covs if c["layers"]["heard"]["read"]]
+    looked = [c["layers"]["coarse"] for c in covs if c["layers"]["coarse"]["read"]]
+    closed = [c["layers"]["close"] for c in covs if c["layers"]["close"]["read"]]
+    first = (looked or [{}])[0]
+    near = (closed or [{}])[0]
+    ivs: dict = {}
+    for lk in looked:
+        if lk.get("interval_s"):
+            k = str(float(lk["interval_s"]))
+            ivs[k] = ivs.get(k, 0) + 1
+    out = {
+        "clips": len(covs),
+        "minutes": round(sum(float(c.get("duration") or 0) for c in covs) / 60.0, 1),
+        "heard": {"clips": len(heard), "words": sum(int(h.get("words") or 0) for h in heard),
+                  "model": next((h["model"] for h in heard if h.get("model")), None),
+                  "timed": any(h.get("words") for h in heard)},
+        "looked": {"clips": len(looked), "frames": sum(len(lk.get("frames") or []) for lk in looked),
+                   "intervals": ivs, "interval_s": look_interval(), "width": first.get("width"),
+                   "cols": first.get("cols"), "rows": first.get("rows"),
+                   "model": _layer_model(first) if first else None},
+        "close": {"clips": len(closed),
+                  "windows": sum(len(c.get("windows") or []) for c in closed),
+                  "seconds": sum(float(w[1]) - float(w[0]) for c in closed
+                                 for w in c.get("windows") or []),
+                  "interval_s": near.get("interval_s"), "width": near.get("width"),
+                  "model": _layer_model(near) if near else None},
+        "deep": {"spans": sum(len(c["layers"]["deep"]["spans"]) for c in covs)},
+        "motion": {"clips": sum(1 for c in covs if c["layers"]["motion"].get("cached")),
+                   "hz": events.MOTION_HZ},
+        "moments": sum(len(c.get("moments") or []) for c in covs),
+    }
+    try:                       # lanes LOCALGPU / VERIFY put these on the Index report
+        rep = _snapped("index_clips", index_clips_payload)
+        if isinstance(rep.get("local"), dict):
+            out["local"] = rep["local"]
+        if rep.get("mode") in flowmod.MODE_WORDS:
+            out["mode"] = rep["mode"]
+    except Exception:  # noqa: BLE001 — the account is words; a report error never blocks it
+        pass
+    return out
+
+
+def _cut_shots(job: str | None) -> tuple[list[dict], str]:
+    """The shots the certainty is read for: a proposal's (by Ask job), else the cut."""
+    if job:
+        for r in _ask_records():
+            if r.get("job") == job and (r.get("plan") or {}).get("segments"):
+                return r["plan"]["segments"], "proposal"
+    return fpmod._segments(read_edl()), "cut"
+
+
+@app.get("/api/firstpass/account")
+def api_firstpass_account(job: str | None = None) -> JSONResponse:
+    covs = bin_coverage()
+    a = account_inputs(covs)
+    st = firstpass_payload()
+    prop = st.get("proposal") or {}
+    produced = st.get("produced") or {}
+    cut = (st.get("counts") or {}).get("cut") or {}
+    steps0 = ((st.get("would") or {}).get("steps") or [{}])
+    run = {"state": st.get("state"), "stage": st.get("stage"),
+           "index_complete": bool(steps0) and steps0[0].get("needed") is False,
+           "index_ran": index_ran_of(_fp_record()) if st.get("state") in ("done", "stale-after-edits") else None,
+           "counts": (st.get("counts") or {}).get("index"),
+           "picks": produced.get("picks"), "shots": (produced.get("cut") or {}).get("shots"),
+           "cut_detail": cut.get("detail")}
+    out = flowmod.pass_account(a, run)
+    moments = {c["clip"]: c.get("moments") or [] for c in covs}
+    every = [m for ms in moments.values() for m in ms]
+    shots, src = _cut_shots(job or (prop.get("job") if prop.get("pending") else None))
+    rows = [flowmod.shot_moment(moments.get(s.get("clip"), []), float(s["in"]), float(s["out"]))
+            for s in shots if "in" in s and "out" in s]
+    in_cut = flowmod.certainty_counts([m for m in rows if m])
+    out["certainty"] = {
+        "bin": flowmod.certainty_counts(every), "bin_words": flowmod.certainty_words(
+            flowmod.certainty_counts(every), "moments"),
+        "cut": in_cut if in_cut["total"] else None, "cut_source": src,
+        "cut_shots": len(rows),
+        "cut_words": flowmod.certainty_words(in_cut, f"of the {len(rows)} shots rest on a moment")
+        if in_cut["total"] else ""}
+    out["inputs"] = {k: a[k] for k in ("clips", "minutes", "moments")}
+    return JSONResponse(out)
+
+
+@app.post("/api/certainty")
+async def api_certainty(request: Request) -> JSONResponse:
+    body = await request.json()
+    covs = {c["clip"]: c.get("moments") or [] for c in bin_coverage()}
+    out = []
+    for s in (body.get("shots") or [])[:400]:
+        try:
+            m = flowmod.shot_moment(covs.get(s.get("clip"), []), float(s["in"]), float(s["out"]))
+        except (KeyError, TypeError, ValueError):
+            m = None
+        out.append(flowmod.certainty(m) if m else None)
+    return JSONResponse({"shots": out})
+
+
 @app.post("/api/firstpass")
 async def api_firstpass_post(request: Request) -> JSONResponse:
     """Run (or re-run) the first pass: index what isn't done → picks → a proposed cut,
@@ -4760,7 +5247,8 @@ async def api_firstpass_post(request: Request) -> JSONResponse:
             would = firstpass_plan(body.get("mode"), body.get("keep"))
         except ValueError as exc:
             raise HTTPException(400, str(exc))
-        refuse_past_cap("the first pass", float(would["cost"]["usd"]))
+        refuse_past_cap("the first pass",
+                        float(would["cost"]["usd"]) + float(would["verify"].get("usd") or 0))
         job = uuid.uuid4().hex[:8]
         FIRSTPASS[job] = {
             "id": job, "state": "running", "mode": would["mode"], "keep": would["locked"],
@@ -4915,6 +5403,22 @@ def _firstpass_job(job: str) -> None:
         _firstpass_walk(job, fp)
 
 
+def _fp_verify(fp: dict, plan: dict, locked: list[str]) -> dict:
+    """The first pass's check step (wave 20 VERIFY): after the cut is proposed, Claude
+    checks the events it uses (and the heroes and airs, <= 40 calls), and the shots are
+    re-timed from the verdicts. Never fails the pass: the cut stands either way."""
+    st = verifymod.load_state(verify_path())
+    try:
+        return verifymod.verify_cut(
+            plan, footage_clips(), st, mode=st["mode"], video_of=_verify_video,
+            workdir=_verify_workdir(), save=_verify_save, locked=locked,
+            duration_of=clip_duration, cancelled=lambda: bool(fp.get("cancel")))
+    except Exception as exc:  # noqa: BLE001
+        return {"mode": st["mode"], "calls": 0, "usd": 0.0, "error": str(exc)[:200],
+                "said": "The Claude check of the cut's moments did not run "
+                        f"({str(exc)[:120]}); the cut stands as proposed."}
+
+
 def _firstpass_walk(job: str, fp: dict) -> None:
     # The clips the last finished pass saw: what is new to this one, which its cut is
     # told about and its notes account for (verdict 9, punch 2). A run that stopped or
@@ -5001,6 +5505,7 @@ def _firstpass_walk(job: str, fp: dict) -> None:
 
         def finish(plan: dict) -> dict:
             plan = dict(plan)
+            verified = _fp_verify(fp, plan, locked)      # wave 20 VERIFY
             plan["segments"], left = fpmod.drop_rejected(plan["segments"], segments,
                                                          rejected)
             if segments and locked:
@@ -5016,7 +5521,11 @@ def _firstpass_walk(job: str, fp: dict) -> None:
                 "job": job, "mode": fp["mode"], "keep": locked,
                 "manual": [r for r in manual if r.get("id") in set(locked)],
                 "rejected": left,
-                "diff": fpmod.rerun_diff(segments, plan["segments"], locked, manual)}
+                "diff": fpmod.rerun_diff(segments, plan["segments"], locked, manual),
+                "verified": verified}
+            if verified.get("said"):
+                plan["notes"] = "\n\n".join(x for x in (
+                    str(plan.get("notes") or "").strip(), verified["said"]) if x)
             if new:
                 rows = fpmod.new_clip_rows(plan["segments"], new, plan.get("new_clips"),
                                            unavailable)
@@ -5061,6 +5570,8 @@ def _firstpass_walk(job: str, fp: dict) -> None:
                                  or [],
                                  "notes_ok": (plan.get("notes_check") or {}).get("ok", True)},
                        produced={"index": fp["steps"]["index"].get("counts"),
+                                 # K5: did this run read the footage, or only re-rank it?
+                                 "index_ran": fp["steps"]["index"]["state"] != "skipped",
                                  "picks": fp["picks"],
                                  "cut": {"shots": len(plan.get("segments") or []),
                                          "length_s": round(sum(edits.dur(s) for s in
@@ -5660,7 +6171,10 @@ def clip_coverage(clip: str) -> dict:
     motion = events.motion_cache(STATE["visual"], stem)
     audio = load_sidecar(clip)
     track = events.excitement(motion, (audio.get("tracks") or {}).get("onset") or [])
-    moments = events.rank_clip(clip, coarse, fine, track, events.MOTION_HZ, deep)
+    # The felt events (a sidecar read, never a build) so the board, the Index panel and
+    # the first pass's certainty counts see what the planner sees.
+    moments = events.rank_clip(clip, coarse, fine, track, events.MOTION_HZ, deep,
+                               felt=telemetry_events.telemetry_events(clip))
     return deepmod.coverage(clip, duration=clip_duration(clip), audio=audio,
                             coarse=coarse, fine=fine, deep=deep, motion=motion,
                             hz=events.MOTION_HZ, moments=moments,
@@ -6185,6 +6699,8 @@ def index_files() -> dict[str, dict[str, bool]]:
             "look": vis.exists(),
             "close": fine.exists(),
             "picks": bool(events_at and newest and events_at >= newest),
+            "local": local_sidecar(clip).exists(),
+            "speakers": speakers_done(clip),
         }
     return out
 
@@ -6224,6 +6740,196 @@ def _run_tool(cmd: list[str]) -> str:
 _STAGE_CTX = threading.local()
 
 
+# ------------------------------------------------------------------ the local GPU stage
+# Wave 20 (lane LOCALGPU): the RTX 3080 as an index stage. Per clip it embeds the frames for
+# Find (PE-Core) and asks Qwen3.5-4B whether the wearer fell at each telemetry moment worth
+# a look; the results are `<work>/local/<bin>/<stem>.local.json` (+ `.embed.npy`). It runs
+# after the coarse tier at nice 5, one job on the GPU at a time (the journal's `gpu` pool and
+# the GPU lock file), holds no clip back from release, and is optional by the same rule as
+# the telemetry: no GPU, no install, a failed run — the stage is *skipped* with the reason,
+# never failed, because a parked clip would stop the rest of its index.
+
+def local_dir() -> Path:
+    return STATE["work"] / "local" / STATE["footage"].name
+
+
+def local_sidecar(clip: str) -> Path:
+    return local_dir() / f"{Path(clip).stem}.local.json"
+
+
+def local_context() -> localvlm.Context:
+    return localvlm.bind(STATE["footage"], STATE["work"], TOOLS)
+
+
+@contextmanager
+def local_gpu_lock_for_audio():
+    """The audio pass shares the one card with the local stage: when the local stack is
+    installed it takes the GPU lock too (a no-op otherwise), so the two never run at once.
+    A Stop pressed while it is queued ends the wait (as a RuntimeError, the way a killed
+    tool fails, so the batch the audio pass holds is put back)."""
+    if not (localvlm.enabled() and localvlm.venv_python().exists()):
+        yield
+        return
+    scope = procscope.current()
+    try:
+        with gpulock.hold("asr", abort=(lambda: scope.cancelled) if scope is not None else None):
+            yield
+    except TimeoutError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
+def _local_facts(clip: str) -> dict:
+    """What the local stage found on a clip, for the Index panel's stage data: how many
+    moments it checked, how many falls it thinks likely, GPU seconds, peak VRAM."""
+    sc = localvlm.sidecar(clip, local_context())
+    if not sc:
+        return {}
+    ck = [c for c in sc.get("checks") or [] if c.get("q") == "fall"]
+    g = sc.get("gpu") or {}
+    return {"checks": len(sc.get("checks") or []), "likely_falls": sum(1 for c in ck if c.get("verdict") == "likely"),
+            "embedded": (sc.get("embed") or {}).get("n"), "gpu_s": g.get("gpu_s"),
+            "peak_vram_gb": g.get("peak_vram_gb"), "model": sc.get("model")}
+
+
+def _gate_local(j: journal.Journal, only):
+    """`only` (journal.next's narrowing) with the local stage held until every clip's
+    telemetry has settled: the stage runs the whole bin in one process (the models take
+    ~45 s to load), so it waits for all the candidates instead of starting on the first clip."""
+    def ready() -> bool:
+        return all(rec.get("missing") or rec.get("parked")
+                   or rec["stages"]["telemetry"]["state"] in journal.SETTLED
+                   for rec in j.clips.values())
+
+    def gated(clip: str, stage: str) -> bool:
+        if stage == "local" and not ready():
+            return False
+        return only is None or only(clip, stage)
+    return gated
+
+
+def _local_stage(j: journal.Journal, clip: str, allow) -> float:
+    a = localvlm.available()
+    if not a["ok"]:
+        raise _Skip("not available: " + a["why"])
+    ctx = local_context()
+    wanted = [c for c in footage_clips()
+              if c == clip or (c in j.clips
+                               and j.state(c, "local") in journal.RETRYABLE
+                               and j.state(c, "probe") in journal.SETTLED
+                               and j.state(c, "telemetry") in journal.SETTLED
+                               and (allow is None or allow(c, "local")))]
+    for other in wanted:
+        if other != clip:
+            j.start(other, "local")
+    again = any(j.clips[c]["stages"]["local"].get("force") for c in wanted if c in j.clips)
+    scope = procscope.current()
+    cancelled = lambda: scope is not None and scope.cancelled  # noqa: E731
+
+    def settle_others(res: dict | None, why: str | None) -> None:
+        for other in wanted:
+            if other == clip:
+                continue
+            stem = Path(other).stem
+            if res is not None and local_sidecar(other).exists() and stem in res["done"]:
+                j.finish(other, "local")
+            elif cancelled():
+                j.requeue(other, "local")
+            else:
+                j.skip(other, "local", "failed: " + ((res or {}).get("failed", {}).get(stem) or why or "no sidecar written")[:160])
+
+    try:
+        res = localvlm.run_index(wanted, ctx, force=again)
+    except localvlm.NotAvailable as exc:
+        settle_others(None, str(exc))
+        raise _Skip("not available: " + str(exc)[:160])
+    except (RuntimeError, OSError) as exc:
+        settle_others(None, str(exc))
+        if cancelled():
+            raise
+        raise _Skip("failed: " + str(exc)[:160])
+    settle_others(res, None)
+    if cancelled() and not (Path(clip).stem in res["done"] and local_sidecar(clip).exists()):
+        raise RuntimeError("stopped")          # a clip that landed before the Stop stays done
+    if Path(clip).stem not in res["done"] or not local_sidecar(clip).exists():
+        raise _Skip("failed: " + str(res["failed"].get(Path(clip).stem) or "no sidecar written")[:160])
+    return 0.0
+
+
+# ------------------------------------------------------------------ the speakers stage
+# Wave 20 (lane DIARIZE): who said what. After asr, per clip: `research/tools/diarize.py`
+# (pyannote community-1, its own uv environment, a separate process at nice 5, one GPU job
+# at a time through the GPU lock file it takes itself) writes speaker turns; this thread
+# only aligns them to the Whisper words (milliseconds of dict work) and rewrites the audio
+# sidecar with `speaker`/`wearer` on each utterance and a `speakers` summary. Optional by the
+# telemetry's rule: no HuggingFace token, no uv, a failed run — the stage is *skipped* with
+# the reason, never failed, and a clip is released without waiting on it (journal.BACKGROUND).
+
+def speakers_dir() -> Path:
+    return STATE["work"] / "speakers" / STATE["footage"].name
+
+
+def speakers_file(clip: str) -> Path:
+    return speakers_dir() / f"{Path(clip).stem}.speakers.json"
+
+
+def speakers_done(clip: str) -> bool:
+    """Files are the truth: the diarization result exists and is at least as new as the
+    sidecar it was aligned into (a re-heard clip's fresh sidecar makes it stale)."""
+    f = speakers_file(clip)
+    sc = STATE["sidecars"] / f"{Path(clip).stem}.audio.json"
+    try:
+        return f.stat().st_mtime >= sc.stat().st_mtime
+    except OSError:
+        return False
+
+
+def _speakers_facts(clip: str) -> dict:
+    """For the Index panel: how many voices and who is the wearer, from the sidecar."""
+    sp = (load_sidecar(clip).get("speakers")) or []
+    return {"voices": len(sp), "wearer": next((x["id"] for x in sp if x.get("wearer")), None)}
+
+
+def diarize_cmd(clip: str, out: Path) -> list[str]:
+    """The diarizer as a command — a function so the tests can replace it."""
+    return ["nice", "-n", "5", "uv", "run", "--quiet", str(TOOLS / "diarize.py"),
+            str(clip_path(clip)), "-o", str(out)]
+
+
+def _speakers_stage(j: journal.Journal, clip: str) -> float:
+    ok, why = speakersmod.available()
+    if not ok:
+        raise _Skip("not available — " + why)
+    sc_path = STATE["sidecars"] / f"{Path(clip).stem}.audio.json"
+    sc = read_json_file(sc_path) if sc_path.exists() else {}
+    if not sc:
+        raise RuntimeError("no audio sidecar to label")
+    speakers_dir().mkdir(parents=True, exist_ok=True)
+    final = speakers_file(clip)
+    if not any(u.get("words") for u in sc.get("transcript") or []):
+        diar = {"turns": [], "exclusive": [], "note": "nothing was said"}      # nothing to label
+    else:
+        part = final.with_name(final.name + ".part")
+        part.unlink(missing_ok=True)
+        r = subprocess.run(diarize_cmd(clip, part), capture_output=True, text=True,
+                           env={**os.environ, "PYTHONUNBUFFERED": "1"})
+        scope = procscope.current()
+        if scope is not None and scope.cancelled:
+            raise RuntimeError("stopped")
+        if r.returncode == speakersmod.NOT_AVAILABLE_RC:
+            raise _Skip("not available — add a HuggingFace token")
+        if r.returncode != 0 or not part.exists():
+            tail = (r.stderr or r.stdout or "").strip().splitlines()
+            raise _Skip("failed: " + (tail[-1][:160] if tail else f"exit {r.returncode}"))
+        diar = read_json_file(part)
+        part.unlink(missing_ok=True)
+    speakersmod.apply(sc, diar)
+    tmp = sc_path.with_name(sc_path.name + ".tmp")
+    tmp.write_text(json.dumps(sc, indent=1), encoding="utf-8")
+    os.replace(tmp, sc_path)
+    final.write_text(json.dumps(diar), encoding="utf-8")       # last: its mtime >= the sidecar's
+    return 0.0
+
+
 def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
     """Run one stage for one clip with the existing tools. Returns the cost in USD.
     Raises on failure; the caller records it and the journal decides on retries.
@@ -6249,6 +6955,16 @@ def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
             raise RuntimeError("the telemetry tool wrote no summary")
         if d.get("error") or not d.get("gpmd"):
             raise _Skip(str(d.get("error") or "no usable gpmd stream")[:120])
+        # The timed events (wave 20, roughcut/telemetry_events.py): airs, impacts, speed
+        # drops, stops and lifts with their numbers, cached on the file's signature.
+        try:
+            # Out of process: pure Python, ~1 s a clip, and on a worker thread it would hold
+            # the GIL against the event loop. Requests only ever read the sidecar.
+            _run_tool(["nice", "-n", "19", sys.executable,
+                       str(HERE.parent / "roughcut" / "telemetry_events.py"), "build", clip, str(clip_path(clip)), str(telemetry_dir()),
+                       *(["--force"] if forced else [])])
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"the felt events failed: {exc}") from exc
         return 0.0
     if stage == "asr":
         # One tool run over every clip still waiting on it, not one per clip: the
@@ -6265,7 +6981,8 @@ def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
         # heard again (the Index panel): the tool re-hears the clips it is given
         again = any(j.clips[c]["stages"]["asr"].get("force") for c in wanted if c in j.clips)
         try:
-            _run_tool(analyze_cmd(skip, again))
+            with local_gpu_lock_for_audio():
+                _run_tool(analyze_cmd(skip, again))
         except RuntimeError as exc:
             scope = procscope.current()
             for other in wanted:
@@ -6338,6 +7055,10 @@ def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
     if stage == "picks":
         rebuild_events()
         return 0.0
+    if stage == "local":
+        return _local_stage(j, clip, allow)
+    if stage == "speakers":
+        return _speakers_stage(j, clip)
     raise RuntimeError(f"no runner for stage {stage!r}")
 
 
@@ -6594,6 +7315,22 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
                 and str(st.get("last_error") or "").startswith("not integrated")
                 and has_telemetry(clip)):
             j.reopen(clip, "telemetry")
+        # A telemetry stage done before the felt events existed has no `.felt.json`: run it
+        # again (the tool's own cache makes that free, the events are pure Python).
+        if (st["state"] == "done" and has_telemetry(clip)
+                and not telemetry_events.sidecar_path(clip).exists()):
+            j.reopen(clip, "telemetry")
+        # The local stage skips itself when there is no GPU or no install; a later run on a
+        # machine where it is available takes the clip again (the reason says why it skipped).
+        lst = j.clips[clip]["stages"]["local"]
+        if (lst["state"] == "skipped" and str(lst.get("last_error") or "").startswith("not available")
+                and localvlm.available()["ok"]):
+            j.reopen(clip, "local")
+        # The speakers stage skips itself without a token; one added later takes the clip.
+        sps = j.clips[clip]["stages"]["speakers"]
+        if (sps["state"] == "skipped" and str(sps.get("last_error") or "").startswith("not available")
+                and speakersmod.available()[0]):
+            j.reopen(clip, "speakers")
     # Probes first, all of them: they are one ffprobe each, and with every probe settled
     # the audio pass can run as one batch over every clip instead of reloading its
     # model per clip as the priority walk would otherwise make it.
@@ -6712,7 +7449,7 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
             # the Program shows a 360p preview until a clip's 720p proxy lands) — once the
             # first pass's coarse tier, what its proposal waits on, is through.
             pick = _cut_proxy_next(j) if not coarse or j.coarse_ready() else None
-            only = _walk_only(entry)
+            only = _gate_local(j, _walk_only(entry))
             if pick is not None and only is not None and not only(pick, "proxy"):
                 pick = None
             if pick is not None:
@@ -6829,6 +7566,9 @@ IMPACT_SHOW_G = 5.0
 
 def telemetry_dir() -> Path:
     return STATE["work"] / "telemetry" / STATE["footage"].name
+
+
+telemetry_events.use_telemetry_dir(lambda: telemetry_dir())
 
 
 def telemetry_cmd(stem: str, force: bool = False) -> list[str]:
@@ -7252,9 +7992,11 @@ def api_index_status() -> JSONResponse:
     if not path.exists():
         return JSONResponse({"exists": False, "running": running is not None,
                              "interval_s": look_interval(),
+                             "mode": verify_mode_payload(),
                              "job": running["id"] if running else None})
     j = load_journal()
     return JSONResponse({"exists": True, "path": str(path), "order": j.order,
+                         "mode": verify_mode_payload(),
                          "paused_priced": j.paused_priced,
                          # what the pause holds, priced — the paused box says it
                          "waiting": journal_waiting(j),
@@ -7262,6 +8004,177 @@ def api_index_status() -> JSONResponse:
                          "progress": j.progress(), "released": j.released_clips(),
                          "running": running is not None,
                          "job": running["id"] if running else None})
+
+
+# ------------------------------------------------------------- wave 20: VERIFY
+# Claude as the event checker (roughcut/verify.py documents every field). The per-bin
+# mode lives beside the bin's index journal; the verdicts too, so a verdict is never
+# bought twice. Every check is a `verify`-role call through roughcut.inference: the
+# ledger, the cap and the price-first rule all apply.
+
+def verify_path() -> Path:
+    return verifymod.state_path(STATE["work"], STATE["footage"].name)
+
+
+def verify_state() -> dict:
+    return verifymod.load_state_cached(verify_path())
+
+
+def verify_mode_payload() -> dict:
+    return verifymod.mode_payload(verify_state()["mode"])
+
+
+def _verify_video(clip: str) -> Path:
+    """What the strips are cut from: the oriented 720p proxy when there is one, else the
+    clip itself (ffmpeg applies its rotation)."""
+    proxy = STATE["proxy_dir"] / f"{Path(clip).stem}.mp4"
+    return proxy if proxy.is_file() else clip_path(clip)
+
+
+def _verify_workdir() -> Path:
+    return STATE["work"] / "verify" / STATE["footage"].name
+
+
+def _verify_save(st: dict) -> None:
+    verifymod.merge_verdicts(verify_path(), st["verdicts"])
+
+
+def verify_events_rows() -> list[dict]:
+    """The bin's felt events with their certainty, for the Index panel."""
+    st = verify_state()
+    ok = verifymod.local_available()
+    return [verifymod.annotate_event(e, st, mode=st["mode"], local_ok=ok)
+            for e in verifymod.telemetry_events_for(footage_clips())]
+
+
+def verify_claims_held() -> list[dict]:
+    """Index claims nothing backs yet, as checkable rows (verdict-less)."""
+    held = {}
+    for clip in footage_clips():
+        v = load_visual(clip)
+        if v.get("unsupported"):
+            held[clip] = v["unsupported"]
+    return verifymod.claim_rows(held, verifymod.load_state(verify_path()))
+
+
+VERIFIES: dict[str, progress.Job] = {}
+
+
+@app.get("/api/index/mode")
+def api_index_mode() -> JSONResponse:
+    """The bin's footage-understanding mode: hybrid (default) | local | claude, and what
+    actually runs (`effective`) with the plain-words `note`."""
+    return JSONResponse(verify_mode_payload())
+
+
+@app.put("/api/index/mode")
+async def api_index_mode_put(request: Request) -> JSONResponse:
+    body = await request.json()
+    if not isinstance(body, dict) or "mode" not in body:
+        raise HTTPException(400, 'expected {"mode": "hybrid" | "local" | "claude"}')
+    try:
+        verifymod.set_mode(verify_path(), str(body["mode"]))
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    return JSONResponse(verify_mode_payload())
+
+
+def verify_payload() -> dict:
+    rows = verify_events_rows()
+    claims = verify_claims_held()
+    unsupported = []
+    for clip in footage_clips():
+        unsupported += [{**m, "clip": clip} for m in load_visual(clip).get("unsupported", [])]
+    live = next((j for j in VERIFIES.values()), None)
+    by = {}
+    for r in rows:
+        by[r["certainty"]] = by.get(r["certainty"], 0) + 1
+    return {"mode": verify_mode_payload(), "events": rows, "unsupported": unsupported,
+            "counts": {"events": len(rows), "by_certainty": by,
+                       "unsupported": len(unsupported), "claims_to_check": len(claims)},
+            "claims_check": verifymod.price(len(claims), "claims"),
+            "job": dict(live) if live else None}
+
+
+@app.get("/api/verify")
+def api_verify() -> JSONResponse:
+    return JSONResponse(verify_payload())
+
+
+def _verify_start(rows: list[dict], what: str) -> dict:
+    if not rows:
+        raise HTTPException(400, f"no {what} to check")
+    running = next((j for j in VERIFIES.values() if j["state"] not in progress.TERMINAL), None)
+    if running is not None:
+        raise HTTPException(409, "a check is already running")
+    quote = verifymod.price(len(rows), what)
+    refuse_past_cap(f"checking {len(rows)} {what}", float(quote["usd"]))
+    job = uuid.uuid4().hex[:8]
+    VERIFIES.clear()
+    VERIFIES[job] = progress.Job("verify", f"Checking {len(rows)} {what}", id=job,
+                                 state="running", done=0, total=len(rows), errors=[],
+                                 detail=f"0 of {len(rows)} checked")
+    threading.Thread(target=_verify_job, args=(job, rows), daemon=True).start()
+    return {"job": job, "price": quote}
+
+
+def _verify_job(job: str, rows: list[dict]) -> None:
+    entry = VERIFIES[job]
+    state = verifymod.load_state(verify_path())
+    events_all = verifymod.telemetry_events_for(footage_clips())
+
+    def on_done(e: dict, v: dict | None, err: str | None) -> None:
+        entry["done"] = entry.get("done", 0) + 1
+        entry["detail"] = f"{entry['done']} of {entry['total']} checked"
+        if err:
+            entry["errors"].append({"event_id": e["event_id"], "error": err})
+
+    try:
+        summary = verifymod.run_checks(
+            rows, video_of=_verify_video, workdir=_verify_workdir(), state=state,
+            save=_verify_save, duration_of=clip_duration, on_done=on_done,
+            neighbours_of=lambda e: [n for n in events_all if n["clip"] == e["clip"]
+                                     and abs(float(n["start"]) - float(e["start"])) <= 3.0])
+    except Exception as exc:  # noqa: BLE001 — a job must end in a state, not a trace
+        entry.finish("failed", detail=str(exc)[:200])
+        return
+    entry["summary"] = summary
+    entry.finish("done", detail=verifymod.verified_sentence(summary, state["mode"], 0, 0))
+
+
+@app.post("/api/verify/claims")
+async def api_verify_claims(request: Request) -> JSONResponse:
+    """"Check N claims · price": have Claude settle the index's unsupported jump / fall /
+    crash claims. Body `{ids?: [claim ids]}` (default: all). The price is in `price`
+    and in GET /api/verify `claims_check` before this is called."""
+    body = await request.json() if int(request.headers.get("content-length") or 0) else {}
+    rows = verify_claims_held()
+    ids = (body or {}).get("ids")
+    if isinstance(ids, list):
+        rows = [r for r in rows if r["event_id"] in set(map(str, ids))]
+    return JSONResponse(_verify_start(rows, "claims"))
+
+
+@app.post("/api/verify/events")
+async def api_verify_events(request: Request) -> JSONResponse:
+    """Have Claude check the felt (telemetry) events that have no verdict yet. Body
+    `{ids?: [event ids]}` (default: what the mode's routing would send, at most 40)."""
+    if verify_state()["mode"] == "local":
+        raise HTTPException(409, "this bin is in Local only mode: no Claude checks")
+    body = await request.json() if int(request.headers.get("content-length") or 0) else {}
+    st = verifymod.load_state(verify_path())
+    events_all = verifymod.telemetry_events_for(footage_clips())
+    ids = (body or {}).get("ids")
+    if isinstance(ids, list):
+        want = set(map(str, ids))
+        rows = [e for e in events_all if e["event_id"] in want
+                and e["event_id"] not in st["verdicts"]]
+    else:
+        rows = verifymod.route(events_all, mode=st["mode"], local_ok=verifymod.local_available(),
+                               used=[e["event_id"] for e in events_all
+                                     if verifymod.is_checkable(e)],
+                               limit=verifymod.CALLS_PER_RUN, verdicts=st["verdicts"])
+    return JSONResponse(_verify_start(rows, "moments"))
 
 
 INDEX_CANCEL_WAIT_S = 5.0
@@ -7331,12 +8244,18 @@ def api_index_cancel() -> JSONResponse:
 # runs only the (clip, stage) pairs it was asked for and their free prerequisites; joined
 # to a free run (an import's), only those priced pairs pass its hold.
 
-INDEX_PANEL_STAGES = ("asr", "look", "close", "telemetry", "proxy")
+INDEX_PANEL_STAGES = ("asr", "look", "close", "telemetry", "proxy", "local", "speakers")
 RERUN_ALIASES = {"asr": "asr", "hear": "asr", "heard": "asr", "look": "look", "looked": "look",
                  "close": "close", "close_looks": "close", "telemetry": "telemetry",
-                 "proxy": "proxy", "preview": "proxy", "previews": "proxy"}
+                 "proxy": "proxy", "preview": "proxy", "previews": "proxy",
+                 "local": "local", "gpu": "local", "3080": "local",
+                 "speakers": "speakers", "speaker": "speakers", "diarize": "speakers",
+                 "who_said_what": "speakers"}
 RERUN_WORDS = {"asr": "heard", "look": "looked at", "close": "looked at closely",
-               "telemetry": "telemetry read", "proxy": "previews built"}
+               "telemetry": "telemetry read", "proxy": "previews built",
+               "local": "checked on the 3080", "speakers": "told apart by voice"}
+# The Index panel's name for each stage (the UI words are lane K5UI's; the data carries them).
+STAGE_LABELS = {"local": "Local (3080)", "speakers": "Speakers"}
 # The re-run state of each index job, by id. Out of the job's own dict on purpose: sets do
 # not serialise, and /api/job/<id> hands the dict out whole.
 INDEX_RERUNS: dict[str, dict] = {}
@@ -7420,7 +8339,10 @@ def _scope_words(j: journal.Journal, entry) -> str:
     bad: list[str] = []
     for c, s in _scope_pairs(entry):
         st = j.clips.get(c, {}).get("stages", {}).get(s, {})
-        if st.get("state") in journal.SETTLED:
+        if s in ("local", "speakers") and st.get("state") == "skipped":
+            # the 3080 did not run (no GPU, not installed, a failed run): say so, not "checked"
+            bad.append(f"{STAGE_LABELS[s]}: {str(st.get('last_error') or 'skipped')[:70]}")
+        elif st.get("state") in journal.SETTLED:
             by.setdefault(s, []).append(Path(c).stem)
         elif st.get("state") in ("failed", "parked"):
             bad.append(f"{Path(c).stem} {RERUN_WORDS.get(s, s)}: {str(st.get('last_error') or 'failed')[:60]}")
@@ -7433,7 +8355,7 @@ def _scope_words(j: journal.Journal, entry) -> str:
         parts.append(f"{who} {RERUN_WORDS[s]} again")
     out = " · ".join(parts) or "nothing re-ran"
     if bad:
-        out += " — failed: " + "; ".join(bad[:3])
+        out += " — failed: " + "; ".join(list(dict.fromkeys(bad))[:3])
     return out
 
 
@@ -7569,7 +8491,9 @@ def rerun_plan(body: dict) -> dict:
               "look": lambda c: Path(c).stem in looked,
               "close": lambda c: Path(c).stem in closed,
               "telemetry": lambda c: (telemetry_dir() / f"{Path(c).stem.upper()}.telemetry.json").exists(),
-              "proxy": lambda c: (STATE["proxy_dir"] / f"{Path(c).stem}.mp4").exists()}
+              "proxy": lambda c: (STATE["proxy_dir"] / f"{Path(c).stem}.mp4").exists(),
+              "local": lambda c: local_sidecar(c).exists(),
+              "speakers": speakers_done}
     tele_known = STATE.get("telemetry") or {}
 
     def settled(clip: str, s: str) -> bool:
@@ -7774,7 +8698,8 @@ def _index_clips_disk() -> dict:
         paths = {"asr": STATE["sidecars"] / f"{stem}.audio.json",
                  "look": vis / f"{stem}.visual.json", "close": fine,
                  "telemetry": tdir / f"{stem.upper()}.telemetry.json",
-                 "proxy": pdir / f"{stem}.mp4"}
+                 "proxy": pdir / f"{stem}.mp4", "local": local_sidecar(clip),
+                 "speakers": speakers_file(clip)}
         stages = {}
         for s in INDEX_PANEL_STAGES:
             js = (rec or {}).get("stages", {}).get(s) or {}
@@ -7801,6 +8726,14 @@ def _index_clips_disk() -> dict:
                 v.update(windows=facts.get("windows"), moments=facts.get("moments"))
             if s == "telemetry" and not js and tele_known.get(clip) is False:
                 v.update(journal="skipped", error="no telemetry stream in the file")
+            if s == "speakers":
+                v["label"] = STAGE_LABELS["speakers"]
+                if mtime is not None:
+                    v.update(_speakers_facts(clip))
+            if s == "local":
+                v["label"] = STAGE_LABELS["local"]
+                if mtime is not None:
+                    v.update(_local_facts(clip))
             stages[s] = v
         f = (rec or {}).get("facts") or {}
         rows.append({
@@ -7898,10 +8831,10 @@ def index_clips_payload() -> dict:
     now = time.time()
     rows = []
     summary = {"clips": 0, "heard": 0, "looked": 0, "close": 0, "telemetry": 0,
-               "no_telemetry": 0, "previews": 0, "looked_at": {}, "cost_usd": 0.0,
+               "no_telemetry": 0, "previews": 0, "local": 0, "speakers": 0, "looked_at": {}, "cost_usd": 0.0,
                "running": 0, "queued": 0, "held": 0, "failed": 0}
     count = {"asr": "heard", "look": "looked", "close": "close", "telemetry": "telemetry",
-             "proxy": "previews"}
+             "proxy": "previews", "local": "local", "speakers": "speakers"}
     for r in disk["rows"]:
         stages = {}
         for s, v in r["stages"].items():

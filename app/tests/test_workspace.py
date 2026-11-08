@@ -382,6 +382,20 @@ OVERFLOW_JS = """() => {
   check('.ws-tabs, .ws-tab, .ws-tab *', false);
   check('.plist td, .plist th', false);
   check('.transport, .transport *', false);
+  // the Project List scrolled sideways (verdict 15, punch 9): no heading or cell half under
+  // the pinned Name ("ıfo" for Audio Info, "łz · Mono" for its cells, journey 15 and 17)
+  const list = document.querySelector('#projList table.plist');
+  const pin = list && list.querySelector('th[data-col=name]');
+  if (pin && shown(list)) {
+    const edge = pin.getBoundingClientRect().right;
+    for (const el of list.querySelectorAll('th:not([data-col=name]), td:not(.name)')) {
+      if (!shown(el)) continue;
+      const r = el.getBoundingClientRect();
+      if (r.left < edge - 0.5 && r.right > edge + 0.5) {
+        out.push(`#projList ${el.tagName} under the pinned Name: "${el.textContent.trim().slice(0, 30)}" ${r.left.toFixed(1)} < ${edge.toFixed(1)}`);
+      }
+    }
+  }
   return out;
 }"""
 
@@ -1392,3 +1406,86 @@ def test_the_index_panel_opens_at_a_working_size(live_server, project, browser, 
     assert errors == []
     pg.unroute_all(behavior="ignoreErrors")
     ctx.close()
+
+
+# Verdict 15, punch 9: the Project List view scrolled sideways (an import's selection, a
+# trackpad, the scrollbar) rested with a column half under the pinned Name: its heading read
+# "ıfo" and its cells "łz · Mono" (journey 15 and 17). A sideways scroll snaps to whole
+# columns: at rest, the first column past Name starts at Name's edge, the far end included.
+LIST_SCROLL_JS = """() => { const box = document.querySelector('#projList'), t = box.querySelector('table.plist');
+  const edge = t.querySelector('th[data-col=name]').getBoundingClientRect().right;
+  const first = [...t.querySelectorAll('th:not([data-col=name])')].map((th) => th.getBoundingClientRect())
+    .find((r) => r.right > edge + 0.5);
+  return { left: box.scrollLeft, max: box.scrollWidth - box.clientWidth, edge,
+           first: first ? first.left : null }; }"""
+
+
+def _list_at_rest(pg) -> dict:
+    """The list's sideways place once the scroll (and its snap) has finished."""
+    last = None
+    for _ in range(40):
+        pg.wait_for_timeout(150)
+        now = pg.evaluate(LIST_SCROLL_JS)
+        if last is not None and now["left"] == last["left"]:
+            return now
+        last = now
+    raise AssertionError(f"the list never came to rest: {last}")
+
+
+def _whole_columns(pg, where) -> dict:
+    s = _list_at_rest(pg)
+    assert pg.evaluate(OVERFLOW_JS) == [], where
+    assert s["first"] is not None and abs(s["first"] - s["edge"]) < 1, (where, s)
+    return s
+
+
+@pytest.mark.parametrize("size", VIEWPORTS, ids=lambda s: f"{s[0]}x{s[1]}")
+def test_the_project_list_scrolled_sideways_rests_on_whole_columns(live_server, project, browser, size):
+    """The overflow check of `test_no_chrome_is_cut_off` on the Project List view after a
+    sideways scroll: wheel turns of a part of a column each way, to the far end and back,
+    a scroll set mid-column, the selection an import makes (`rc:clips-changed`) and the
+    arrow keys. At rest no heading or cell is cut under the pinned Name, and the first
+    column past it starts at its edge; the import's selection and the arrows keep the
+    sideways place."""
+    pg = _open(browser, live_server, project, size)
+    pg.route("**/api/clips", _clips_with_one_unindexed)
+    pg.reload()
+    pg.wait_for_selector("#projList tr.row", timeout=15000)
+    if pg.locator("#projList table.plist").count() == 0:
+        pg.locator("[data-testid=project-view-list]").click()
+        pg.wait_for_selector("#projList table.plist", timeout=5000)
+    s0 = pg.evaluate(LIST_SCROLL_JS)
+    assert s0["max"] > 100 and s0["left"] == 0, s0             # wider than the panel: it scrolls
+    b = box(pg, "#projList")
+    pg.mouse.move(b["x"] + b["w"] * 0.7, b["y"] + 40)
+    seen = set()
+    for dx in (57, 57, 130, 211, -95, 4000, -61, -150):
+        pg.mouse.wheel(dx, 0)
+        s = _whole_columns(pg, (size, "wheel", dx))
+        seen.add(round(s["left"]))
+        if dx == 4000:
+            assert abs(s["left"] - s["max"]) < 1, s                # the far end: whole columns too
+    assert len(seen - {0}) >= 3, seen                          # it did scroll, to several places
+    # a scroll set mid-column: the third column past Name half under it
+    third = pg.evaluate("""() => { const t = document.querySelector('#projList table.plist');
+        const ths = [...t.querySelectorAll('th')]; const n = ths[0].getBoundingClientRect();
+        const r = ths[3].getBoundingClientRect(); return r.left - n.right + r.width / 2 + document.querySelector('#projList').scrollLeft; }""")
+    pg.evaluate(f"document.querySelector('#projList').scrollLeft = {third}")
+    s = _whole_columns(pg, (size, "mid-column"))
+    assert s["left"] > 0, s
+    # an import's selection: in view, the sideways place kept
+    pg.evaluate("window.dispatchEvent(new CustomEvent('rc:clips-changed', {detail: {added: ['CLIP_C.MP4']}}))")
+    pg.wait_for_function("!!document.querySelector(\"#projList tr.sel[data-clip='CLIP_C.MP4']\")", timeout=5000)
+    after = _whole_columns(pg, (size, "import"))
+    assert after["left"] == s["left"], ("import", s, after)
+    # the arrows walk the rows and keep it too
+    # a click on the pinned cell where it is (Playwright's own click scrolls it into view first)
+    n = box(pg, "#projList tr.sel td.name")
+    pg.mouse.click(n["x"] + n["w"] / 2, n["y"] + n["h"] / 2)
+    pg.keyboard.press("ArrowUp")
+    pg.keyboard.press("ArrowUp")
+    assert pg.evaluate("document.querySelector('#projList tr.sel').dataset.key") != "c|CLIP_C.MP4"
+    after = _whole_columns(pg, (size, "arrows"))
+    assert after["left"] == s["left"], ("arrows", s, after)
+    assert pg.errors == []
+    pg.context.close()

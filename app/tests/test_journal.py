@@ -19,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from roughcut import journal as J  # noqa: E402
 from roughcut.journal import Journal, JournalError  # noqa: E402
 
-FREE = ("probe", "telemetry", "asr")
+FREE = ("probe", "telemetry", "asr", "speakers")
 ALL_FILES = {"asr": True, "proxy": True, "look": True, "close": True, "picks": True}
 NO_FILES = {"asr": False, "proxy": False, "look": False, "close": False, "picks": False}
 
@@ -40,6 +40,8 @@ def _listen(j: Journal, clip: str, *, t: float = 0.0, facts: dict | None = None)
     """The free stages, done — the point at which a clip gets its priority."""
     for i, s in enumerate(FREE):
         _run(j, clip, s, t=t + i)
+    # the local GPU stage is optional: on a machine without the stack it skips itself
+    j.skip(clip, "local", "not available: no GPU", now=t + len(FREE))
     j.set_facts(clip, facts or {})
 
 
@@ -450,7 +452,7 @@ def test_progress_counts_cost_and_a_rolling_mean_eta(tmp_path):
     p = j.progress(now=0.0)
     assert p["clips"] == 3 and p["released"] == 0 and p["pct"] == 0.0
     assert p["eta_s"] is None and p["eta_source"] == "none"
-    assert p["total_stages"] == 21 and p["stages"]["probe"]["queued"] == 3
+    assert p["total_stages"] == 27 and p["stages"]["probe"]["queued"] == 3
 
     for c in ("A.MP4", "B.MP4", "C.MP4"):
         _listen(j, c, facts={"candidates": 3})
@@ -473,7 +475,7 @@ def test_progress_counts_cost_and_a_rolling_mean_eta(tmp_path):
     assert p["eta_by_kind"]["picks"] == pytest.approx(4.0)
     assert p["eta_s"] == pytest.approx(100.0), "the busiest pool is the ETA"
     assert p["eta_source"] == "measured" and p["eta_unmeasured"] == []
-    assert p["pct"] == pytest.approx(round(100 * 16 / 21, 1))
+    assert p["pct"] == pytest.approx(round(100 * 22 / 27, 1))
     rows = {r["clip"]: r for r in p["rows"]}
     assert rows["A.MP4"]["state"] == "released"
     assert rows["B.MP4"]["state"] == "indexing"
@@ -492,7 +494,7 @@ def test_progress_leaves_unmeasured_stages_out_of_the_eta_and_says_so(tmp_path):
     _run(j, "A.MP4", "probe", t=0.0, dur=1.0)
     p = j.progress(now=2.0)
     assert p["eta_s"] is None, "nothing left to run has been measured"
-    assert set(p["eta_unmeasured"]) == {"telemetry", "asr", "proxy", "look", "close", "picks"}
+    assert set(p["eta_unmeasured"]) == {"telemetry", "asr", "proxy", "look", "close", "picks", "local", "speakers"}
     _run(j, "A.MP4", "asr", t=2.0, dur=5.0)
     _run(j, "A.MP4", "telemetry", t=7.0, dur=1.0)
     _run(j, "A.MP4", "proxy", t=8.0, dur=20.0)
@@ -516,3 +518,22 @@ def test_reopen_puts_a_skipped_stage_back_in_the_queue(tmp_path):
     j.finish("A.MP4", "telemetry", now=3.0)
     assert j.state("A.MP4", "telemetry") == "done"
     assert any("reopened" in e["what"] for e in j.data["log"])
+
+
+def test_speakers_is_a_background_stage_offered_last_and_never_holds_a_clip_back(tmp_path):
+    """Wave 20 DIARIZE: who-said-what waits on the asr, queues behind everything a clip is
+    waiting on, and the clip is released without it."""
+    j = _journal(tmp_path, "A.MP4")
+    for s in ("probe", "telemetry", "asr"):
+        _run(j, "A.MP4", s, t=1.0)
+    j.skip("A.MP4", "local", "not available")
+    # the proxy (foreground) comes before the speakers (background) although speakers is ready
+    assert j.next(now=5.0) == ("A.MP4", "proxy")
+    j.start("A.MP4", "proxy", now=5.0)
+    assert j.next(now=6.0) == ("A.MP4", "speakers"), "an idle pool takes the background stage"
+    j.finish("A.MP4", "proxy", now=7.0)
+    _run(j, "A.MP4", "look", t=8.0)
+    _run(j, "A.MP4", "close", t=9.0)
+    _run(j, "A.MP4", "picks", t=10.0)
+    assert j.released("A.MP4"), "speakers still queued, the clip is released"
+    assert j.state("A.MP4", "speakers") == "queued"

@@ -113,7 +113,7 @@ def test_the_report_says_what_ran_on_each_clip(indexed):
         st = r["stages"]
         assert {k: v["state"] for k, v in st.items()} == {
             "asr": "done", "look": "done", "close": "done", "telemetry": "skipped",
-            "proxy": "done"}, (r["clip"], st)
+            "proxy": "done", "local": "skipped", "speakers": "skipped"}, (r["clip"], st)
         # when: the journal's own finish time, to the second
         for s in ("asr", "look", "close", "proxy"):
             assert st[s]["at"] == pytest.approx(j.clips[r["clip"]]["stages"][s]["finished"]), s

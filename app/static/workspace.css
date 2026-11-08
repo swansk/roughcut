@@ -458,6 +458,14 @@ table.plist .st.ok { color: var(--good); }
 #projList table.plist th[data-col=name] { z-index: 3; }
 #projList.hscrolled table.plist td.name,
 #projList.hscrolled table.plist th[data-col=name] { box-shadow: 1px 0 0 #38383e, 6px 0 6px -4px rgba(0,0,0,.85); }
+/* a sideways scroll rests on whole columns (verdict 15, punch 9; dock.js fitEnd): the list
+   snaps to a 1 px mark at each column's left edge, past the pinned Name (scroll-padding-left
+   is Name's width). Marks, not the headings: a heading larger than the room past Name
+   (Description at 1440) would let the list rest anywhere inside it; and beside the table,
+   not in a heading, whose overflow: hidden would make it the marks' own scroll container. */
+#projList.colsnap { scroll-snap-type: x mandatory; }
+#projList .colsnaps { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; }
+#projList .colsnaps i { position: absolute; top: 0; width: 1px; height: 1px; scroll-snap-align: none start; }
 #projList table.plist td.name .n { gap: 3px; }
 #projList table.plist td.name svg { width: 13px; height: 13px; color: #b4b4bd; }
 #projList table.plist td.name .nm { min-width: 0; white-space: nowrap; }
