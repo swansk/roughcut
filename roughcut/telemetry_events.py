@@ -384,6 +384,7 @@ def build_sidecar(clip: str, video: Path, directory: Path | str | None = None,
     d = _dir(directory)
     if d is None:
         raise ValueError("no telemetry directory registered")
+    d.mkdir(parents=True, exist_ok=True)
     path = sidecar_path(clip, d)
     sig = signature(video)
     if not force and path.exists():
@@ -517,7 +518,7 @@ def felt_words(clip: str, directory: Path | str | None = None) -> list[dict]:
     """Find's lexical rows: one {start, end, kind, notable, what} per event a query could mean."""
     out = []
     for e in telemetry_events(clip, directory):
-        if e["kind"] == "impact" and e.get("handling"):
+        if (e["kind"] == "impact" and e.get("handling")) or not _worth_saying(e):
             continue
         out.append({"start": e["start"], "end": e["end"], "kind": e["kind"],
                     "notable": e["kind"] == "air", "what": f"{e['text']} {_WORDS.get(e['kind'], '')}"})

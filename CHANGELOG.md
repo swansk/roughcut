@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- Wave 20 lane TELEM: the sidecar directory is made before the GPMF dump is written (a bin with no telemetry folder yet failed), and Find's felt words leave out a slowing that was only a turn.
 - **GoPro telemetry is first-class timed events (wave 20, lane TELEM).** `roughcut/telemetry_events.py` turns the GPMF streams into a per-clip `<STEM>.felt.json` sidecar (cached on the file signature): airs (|a| < 0.5 g for 0.25 s then a landing > 2.5 g, with air time, low g, landing g), impacts > 5 g (flagged "often handling" with no speed change, "air landing" when an air carries it), speed drops >= 3 m/s in 3 s (with the jolt and whether it stopped), stops, lifts (GPS climb), riding stretches, speed per second and camera roll (mount upright or inverted). Every event is `who: wearer`, `source: telemetry`, `status: felt`. It runs inside the existing telemetry index stage (and re-runs once on a bin whose stage predates it). `events.py` ranks the check-worthy ones as candidate moments (a sheet claim on the same air is folded in), `revise.py` adds a compact "felt:" line to each clip in the planner prompt, and Find's lexical match reads the same words. New `test_telemetry_events.py`: each rule and its near-miss.
 - Wave 20 lane TELEM: `roughcut/telemetry_events.py` stub and the event shape VERIFY and LOCALGPU build against (the rules follow).
 - Goal + wave 20: Karl says other riders' airs count as events; the test set marks each air's rider.
