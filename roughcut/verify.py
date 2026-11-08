@@ -130,6 +130,9 @@ CLAIM_FAMILY = {"jump": "air", "air": "air", "fall": "down", "crash": "down",
                 "camera-into-snow": "down", "inverted": "air"}
 # telemetry kinds that can back a fall / crash claim
 DOWN_TELEMETRY = {"impact", "speed_drop", "stopped"}
+# The demotion pass is the rule, not an option. A test that exercises the visual pipeline
+# with fabricated claims and no telemetry switches it off for itself (monkeypatch).
+DEMOTE = True
 SUPPORT_SLACK_S = 1.0               # a claim and a sensor event within this are the same seconds
 
 VERDICTS = ("confirm", "reject", "retime", "unsure")
@@ -856,6 +859,8 @@ def demote(moments: Sequence[dict], clip: str, state: dict,
     """Split one clip's index moments into (asserted, not asserted). Non-claims (talk,
     scenery, reaction...) pass through untouched. Claims keep their `claim_status`; the
     others are returned in the second list, never dropped."""
+    if not DEMOTE:
+        return list(moments), []
     tel = list(tel) if tel is not None else telemetry_events_for([clip])
     asserted, held = [], []
     for m in moments:
