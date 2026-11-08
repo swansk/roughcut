@@ -104,3 +104,27 @@ header #firstpass { flex: 0 0 auto; position: relative; display: flex;
 .fp-empty-btn svg { width: 13px; height: 13px; color: var(--accent, #4a9df8); }
 #progEmpty { flex-direction: column; gap: 10px; }
 #proposalNotes .fp-sentence { color: var(--text, #dcdcdf); font-weight: 600; margin-bottom: 4px; }
+
+/* ---------------------------------------------------------------- what it did (K5) */
+#firstpass .fp-headline { margin: 0 0 8px; padding: 6px 8px; background: #19191b;
+                          border-left: 2px solid var(--accent, #4a9df8); border-radius: 3px;
+                          color: var(--text, #dcdcdf); line-height: 1.4; }
+#firstpass .fp-steps .fp-swill { line-height: 1.4; }
+#firstpass .fp-cert { margin: 8px 0 2px; padding-top: 6px; border-top: 1px solid var(--line, #333337); }
+#firstpass .fp-certrow { display: flex; flex-wrap: wrap; align-items: baseline; gap: 3px 6px;
+                         margin-bottom: 4px; }
+#firstpass .fp-certlead { flex: 1 0 100%; color: var(--dim, #94949c); }
+
+/* the certainty chip: on a proposal's shot, a Selects row and in the panel's counts */
+.cert { display: inline-block; font-style: normal; font-size: 10px; line-height: 14px;
+        padding: 0 5px; margin-right: 4px; border-radius: 7px; white-space: nowrap;
+        vertical-align: baseline; background: #2a2a31; color: var(--dim, #94949c);
+        border: 1px solid #3a3a48; }
+.cert b { font-weight: 600; color: var(--text, #dcdcdf); }
+.cert.c-felt { border-color: #4a7fb5; color: #8cbbea; }
+.cert.c-local { border-color: #7a63b5; color: #b7a5ea; }
+.cert.c-claude { border-color: #4f9d6a; color: #8ed3a6; }
+.cert.c-once { border-color: #6a6a74; }
+.cert.c-unchecked { border-style: dashed; }
+.cert.c-unsupported, .cert.c-contradicted { border-color: #b5694a; color: #e2a187; }
+.certslot:empty { display: none; }

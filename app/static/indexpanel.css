@@ -107,3 +107,14 @@ table.ixt tr.empty td { padding: 8px; height: auto; }
 button.ix-open-link { display: inline; height: auto; padding: 0; border: 0; background: transparent;
                       color: var(--accent, #4a9df8); font: inherit; line-height: inherit; cursor: pointer; }
 button.ix-open-link:hover { background: transparent; text-decoration: underline; }
+
+/* Understanding (wave 20, K6): who looks at this bin's footage — one row under the bin's line */
+.ix-mode { flex: none; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px;
+           padding: 3px 8px; border-bottom: 1px solid #0f0f10; font-size: 11px; line-height: 15px; }
+.ix-mode[hidden] { display: none; }
+.ix-mode label { color: var(--dim); }
+.ix-mode select { padding: 1px 4px; font-size: 11px; height: 20px; }
+.ix-modeline { flex: 1 1 200px; min-width: 0; color: var(--dim); white-space: normal; }
+.ix-modeline.bad { color: var(--bad, #e46a6a); }
+table.ixt col.c-local { width: 64px; }
+table.ixt td.s-unavailable { color: var(--dim); font-style: italic; }

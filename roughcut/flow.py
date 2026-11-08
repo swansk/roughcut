@@ -643,3 +643,351 @@ def compute(facts: dict) -> dict:
     nxt = _next(stages, f, blocked)
     return {"stages": built, "next": nxt, "blockers": blocked,
             "running": any(s["state"] == "running" for s in built)}
+
+
+# ---------------------------------------------------------------- the first pass, in words (K5)
+#
+# Karl, 2026-11-07, after clicking Run first pass on Killington: "I am not really sure what
+# it is doing, or what level of indexing is being done e.g level of granularity." The
+# functions below word, for THIS bin and its numbers, what each step of the first pass does
+# now, what it did, and how finely the footage was looked at; and how sure each moment the
+# cut rests on is. Pure: they take dicts (the server reads the files, `/api/firstpass/account`)
+# and return strings, so the board and the tests share one set of words.
+#
+# The inputs (`account`), every key optional — a missing one drops its phrase, never raises:
+#   clips, minutes                 the bin: how many clips, how many minutes of footage
+#   heard   {clips, words, model, timed}                  speech to text, word timing
+#   looked  {clips, frames, intervals {s: clips}, interval_s, width, cols, rows, model}
+#   close   {clips, windows, seconds, interval_s, width, model}      the close looks
+#   deep    {spans}   motion {clips, hz}   moments (the bin's count)   picks
+#   local   {available, reason, state, checked, model}    the 3080 (lane LOCALGPU)
+#   mode    hybrid | local | claude                       the bin's understanding mode
+
+MODE_WORDS = {
+    "hybrid": ("Hybrid (3080 + Claude)",
+               "The 3080 looks at everything for free; Claude double-checks only the moments "
+               "the cut uses. Costs a few Claude calls."),
+    "local": ("Local only (3080, free)",
+              "Only the 3080 looks, free; nothing is double-checked, so events stay "
+              "unchecked. Costs nothing."),
+    "claude": ("Claude only",
+               "Claude reads the contact sheets and checks the events; the 3080 is not used. "
+               "Costs the most Claude calls."),
+}
+
+CERT_ORDER = ("felt", "local", "claude", "once", "unchecked", "unsupported", "contradicted")
+CERT_NAMES = {"felt": "felt by telemetry", "local": "checked by the 3080",
+              "claude": "checked by Claude", "once": "seen once",
+              "unchecked": "unchecked", "unsupported": "unsupported",
+              "contradicted": "contradicted"}
+CERT_CHIP = {"felt": "felt", "local": "3080", "claude": "Claude", "once": "seen once",
+             "unchecked": "unchecked", "unsupported": "unsupported",
+             "contradicted": "contradicted"}
+_REJECT = ("reject", "rejected", "deny", "denied", "refute", "refuted", "no", "false")
+_CONFIRM = ("confirm", "confirmed", "yes", "true", "retime", "retimed", "ok")
+
+
+def _n(x) -> str:
+    return f"{int(x):,}"
+
+
+def _model_name(m) -> str:
+    s = str(m or "").lower()
+    for k, v in (("sonnet", "Sonnet"), ("opus", "Opus"), ("haiku", "Haiku")):
+        if k in s:
+            return v
+    return str(m) if m else ""
+
+
+def _who(x) -> str | None:
+    """'claude' / 'local' from whatever a verdict calls its checker."""
+    s = str(x or "").lower()
+    if any(k in s for k in ("claude", "sonnet", "opus", "haiku")):
+        return "claude"
+    if any(k in s for k in ("local", "3080", "gpu", "qwen", "pe-core", "siglip")):
+        return "local"
+    return None
+
+
+def _verdict(m: dict) -> tuple[str, str | None]:
+    """(what the check said, who said it) from the verdict fields lane VERIFY writes on a
+    moment — read loosely: a string or a dict under `verdict`, `checked_by` / `settled_by`
+    beside it. ("", None) when the moment was never checked."""
+    v = m.get("verdict")
+    by = _who(m.get("checked_by") or m.get("settled_by"))
+    said = ""
+    if isinstance(v, dict):
+        said = str(v.get("verdict") or v.get("v") or v.get("result") or "").lower()
+        by = by or _who(v.get("by") or v.get("who") or v.get("checked_by") or v.get("model"))
+    elif v:
+        said = str(v).lower()
+    return said, by
+
+
+def _numbers(m: dict) -> str:
+    """The event's own numbers, as one phrase: "air 0.39 s · landing 3.1 g"."""
+    n = m.get("numbers") or m.get("facts")
+    if isinstance(n, str):
+        return n
+    if not n and isinstance(m.get("text"), str) and str(m.get("source")) == "telemetry":
+        return m["text"]          # lane TELEM's own compact line: "air 0.39 s at 46.62 (landing 4.0 g)"
+    if not isinstance(n, dict):
+        return ""
+    names = {"air_s": ("air", "s"), "landing_g": ("landing", "g"), "impact_g": ("impact", "g"),
+             "drop_ms": ("speed drop", "m/s"), "speed_drop": ("speed drop", "m/s")}
+    out = []
+    for k, v in n.items():
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            continue
+        label, unit = names.get(k, (k.replace("_", " "), ""))
+        out.append(f"{label} {v:g}{' ' + unit if unit else ''}")
+    return " · ".join(out)
+
+
+def certainty(m: dict) -> dict:
+    """How sure a moment is, and who settled it: {level, chip, name, title}.
+
+    level (CERT_ORDER): `felt` — a sensor measured it (source "telemetry", status "felt")
+    and nothing has looked since; `local` / `claude` — a check by the 3080 / by Claude
+    agreed (lane VERIFY's `verdict`, else a close or deep look's agreement is Claude's);
+    `once` — one close look and nothing else; `unchecked` — never looked at again;
+    `unsupported` / `contradicted` — a closer look found nothing there / something else."""
+    status = str(m.get("status") or "").lower()
+    source = str(m.get("source") or "").lower()
+    said, by = _verdict(m)
+    # lane VERIFY's one-word `certainty` (claude · local · telemetry · unchecked · unsure ·
+    # rejected) and `claim_status` (supported · unsupported · rejected) say who settled it
+    word = str(m.get("certainty") or "").lower()
+    if word in ("claude", "local") and said not in _REJECT:
+        by, said = word, (said if said in _CONFIRM else "confirm")
+    elif word == "rejected" or str(m.get("claim_status") or "").lower() == "rejected":
+        by, said = by or "claude", "reject"
+    elif word == "unsure":
+        said = "unsure"
+    if str(m.get("claim_status") or "").lower() == "unsupported" and status in ("", "unseen"):
+        status = "unsupported"
+    tele = source == "telemetry"
+    base = ("felt" if tele and status in ("", "felt", "unseen", "unchecked")
+            else "claude" if status in ("confirmed", "deep")
+            else "once" if status == "fine-only"
+            else "unsupported" if status == "unsupported"
+            else "contradicted" if status == "contradicted"
+            else "felt" if status == "felt" else "unchecked")
+    level, how = base, ""
+    if said in _REJECT:
+        level, how = "contradicted", f"rejected by {'Claude' if by == 'claude' else 'the 3080'}" \
+            if by else "rejected on a check"
+    elif said in _CONFIRM and by in ("claude", "local"):
+        level = by
+        how = f"{'confirmed' if said not in ('retime', 'retimed') else 'retimed'} by " \
+              f"{'Claude' if by == 'claude' else 'the 3080'}"
+    elif said == "unsure":
+        how = f"unsure after {'Claude' if by == 'claude' else 'the 3080'}'s check" if by \
+            else "unsure after a check"
+    if not how:
+        how = {"felt": "measured by the sensor, no look has checked it",
+               "claude": "a closer look agreed" if status == "confirmed" else "a deep look agreed",
+               "once": "one close look, nothing else saw it",
+               "unchecked": "not checked yet",
+               "unsupported": "a closer look found nothing there",
+               "contradicted": "a closer look disagreed"}[level]
+    origin = ("telemetry" if tele else "the contact sheets" if source in ("", "sheet")
+              else source)
+    title = " · ".join(x for x in (_numbers(m) or str(m.get("what") or ""), origin, how) if x)
+    return {"level": level, "chip": CERT_CHIP[level], "name": CERT_NAMES[level],
+            "title": title}
+
+
+def certainty_counts(moments: list[dict]) -> dict:
+    """{level: n} over `moments`, only levels that occur, plus `total`."""
+    out: dict = {}
+    for m in moments or []:
+        lv = certainty(m)["level"]
+        out[lv] = out.get(lv, 0) + 1
+    out["total"] = sum(v for k, v in out.items() if k != "total")
+    return out
+
+
+def certainty_words(counts: dict | None, subject: str = "moments") -> str:
+    """"188 moments: 1 checked by Claude · 89 unchecked · 65 seen once · …" """
+    c = counts or {}
+    total = int(c.get("total") or 0)
+    if not total:
+        return ""
+    parts = [f"{_n(c[k])} {CERT_NAMES[k]}" for k in CERT_ORDER if c.get(k)]
+    return f"{_n(total)} {subject}: " + " · ".join(parts)
+
+
+def shot_moment(moments: list[dict], start: float, end: float) -> dict | None:
+    """The moment a shot rests on: of those overlapping [start, end], the highest-scored."""
+    best, key = None, None
+    for m in moments or []:
+        try:
+            ov = min(end, float(m["end"])) - max(start, float(m["start"]))
+            zero = float(m["end"]) <= float(m["start"]) and start <= float(m["start"]) <= end
+        except (KeyError, TypeError, ValueError):
+            continue
+        if ov <= 0 and not zero:
+            continue
+        k = (float(m.get("score") or 0.0), ov)
+        if key is None or k > key:
+            best, key = m, k
+    return best
+
+
+def _clip_count(n: int, clips) -> str:
+    return f"{_n(n)} of {_n(clips)} clips" if clips and n < clips else _plural(int(n), "clip")
+
+
+def heard_words(a: dict) -> str:
+    h = a.get("heard") or {}
+    n = int(h.get("clips") or 0)
+    if not n:
+        return "not heard yet"
+    how = [f"{_n(h['words'])} words" if h.get("words") else "",
+           "every word timed" if h.get("timed", True) else "",
+           (f"Whisper {h['model']}" if h.get("model") and "whisper" not in str(h["model"]).lower()
+            else str(h.get("model") or ""))]
+    return f"heard {_clip_count(n, a.get('clips'))} ({', '.join(x for x in how if x)})" \
+        if any(how) else f"heard {_clip_count(n, a.get('clips'))}"
+
+
+def looked_words(a: dict) -> str:
+    lk = a.get("looked") or {}
+    n = int(lk.get("clips") or 0)
+    if not n:
+        return "not looked at yet"
+    how = interval_words(lk.get("intervals"), lk.get("interval_s")).replace("a frame", "1 frame")
+    grid = f"{lk['cols']}×{lk['rows']} contact sheets of {_n(lk['width'])} px frames" \
+        if lk.get("cols") and lk.get("rows") and lk.get("width") else ""
+    det = [f"{_n(lk['frames'])} frames" if lk.get("frames") else "", grid,
+           _model_name(lk.get("model"))]
+    det = ", ".join(x for x in det if x)
+    return f"looked at {how or 'each clip'}" + (f" ({det})" if det else "")
+
+
+def close_words(a: dict) -> str:
+    c = a.get("close") or {}
+    if not int(c.get("clips") or 0):
+        return "no close looks yet"
+    iv = float(c.get("interval_s") or 0)
+    rate = "1 frame/s" if iv == 1 else f"1 frame every {iv:g} s" if iv else ""
+    det = [f"{_plural(int(c['windows']), 'window')}" if c.get("windows") else "", rate,
+           f"{_n(c['width'])} px" if c.get("width") else "", _model_name(c.get("model"))]
+    det = ", ".join(x for x in det if x)
+    secs, mins = float(c.get("seconds") or 0), float(a.get("minutes") or 0)
+    span = (f"on {secs / 60:.0f} of {mins:.0f} min" if mins and secs else
+            f"on {_clip_count(int(c['clips']), a.get('clips'))}")
+    return f"close looks {span}" + (f" ({det})" if det else "")
+
+
+def local_words(a: dict) -> str:
+    lc = a.get("local")
+    if not isinstance(lc, dict) or not lc:
+        return ""
+    if lc.get("available") is False:
+        return f"3080 not available ({lc.get('reason') or 'no GPU found'})"
+    n = int(lc.get("checked") or 0)
+    return f"3080 checked {_plural(n, 'window')}" if n else ""
+
+
+def index_account(a: dict) -> str:
+    """What the index holds on this bin, with its granularity: one line."""
+    m = a.get("motion") or {}
+    parts = [heard_words(a), looked_words(a), close_words(a)]
+    deep = int((a.get("deep") or {}).get("spans") or 0)
+    if deep:
+        parts.append(f"{_plural(deep, 'deep look')}")
+    if m.get("clips") and m.get("hz"):
+        parts.append(f"motion tracked {float(m['hz']):g} times a second")
+    parts.append(local_words(a))
+    return " · ".join(p for p in parts if p)
+
+
+def index_plan(a: dict) -> str:
+    """What a fresh index would do, and how finely."""
+    iv = (a.get("looked") or {}).get("interval_s") or a.get("interval_s") or 4
+    return (f"hear every clip with speech to text (every word timed), look at 1 frame every "
+            f"{float(iv):g} s on contact sheets, then take close looks at the busiest seconds")
+
+
+def pass_account(a: dict, run: dict | None = None) -> dict:
+    """The first pass in words, per step, for this bin and this state.
+
+    `run`: state (never-run · running · done · stale-after-edits · stopped · failed), stage
+    (index · picks · cut, while running), index_ran (False when the finished run found the
+    index complete), index_complete (the index is done now), counts (the live index counts),
+    picks / shots (what the run produced), cut_detail (the Ask's live line).
+    Returns {steps [{key, name, state todo|now|done, text}], headline, now, rerank_only}."""
+    r = run or {}
+    state = r.get("state") or "never-run"
+    stage = r.get("stage") or "index"
+    live = state == "running"
+    ended = state in ("done", "stale-after-edits")
+    moments = a.get("moments")
+    complete = bool(r.get("index_complete"))
+    held = index_account(a)
+    counts = r.get("counts") or {}
+
+    # --- the index
+    if live and stage == "index":
+        ix_state = "now"
+        text = (f"hearing and looking at every clip — {counts.get('words') or 'starting'}. "
+                f"Doing: {index_plan(a)}.")
+    elif live or ended:
+        ix_state = "done"
+        ran = r.get("index_ran")
+        text = (f"already done — {held}" if ran is False
+                else f"ran — {held}" if ran else held)
+        if ran is False:
+            text += ". Nothing was re-watched"
+    elif complete and held:
+        ix_state = "done"
+        text = f"already done — {held}"
+    else:
+        ix_state = "todo"
+        text = f"will {index_plan(a)}"
+        if held and (a.get("heard") or {}).get("clips"):
+            text += f". Already: {held}"
+    # --- the picks
+    ranked = f"{_n(moments)} moments" if moments else "what the index found"
+    if live and stage == "picks":
+        pk_state, pk = "now", f"ranking {ranked} into picks"
+    elif live and stage == "cut" or ended:
+        pk_state = "done"
+        n = r.get("picks")
+        pk = f"ranked {ranked}" + (f" into {_plural(int(n), 'pick')}" if n else "")
+    else:
+        pk_state, pk = "todo", f"will rank {ranked} into picks (free, on this machine)"
+    # --- the cut
+    shots = r.get("shots")
+    if live and stage == "cut":
+        ct_state = "now"
+        ct = "writing the cut" + (f" — {r['cut_detail']}" if r.get("cut_detail") else "")
+    elif ended:
+        ct_state = "done"
+        ct = (f"wrote a {shots}-shot cut" if shots else "wrote a cut") \
+            + " (a proposal: nothing changes until you accept it)"
+    else:
+        ct_state = "todo"
+        ct = "will write a proposed cut from the picks; nothing changes until you accept it"
+    steps = [{"key": "index", "name": "Index", "state": ix_state, "text": text},
+             {"key": "picks", "name": "Picks", "state": pk_state, "text": pk},
+             {"key": "cut", "name": "Rough cut", "state": ct_state, "text": ct}]
+    rerank = ended and r.get("index_ran") is False
+    headline = ""
+    if rerank:
+        headline = ("This run only re-ranked the existing index and wrote the cut again: "
+                    "nothing was re-watched. To look again, use the Index panel.")
+    elif ended and r.get("index_ran"):
+        headline = "This run heard and looked at the footage first, then ranked and cut."
+    now = ""
+    if live:
+        cur = next((s for s in steps if s["state"] == "now"), None)
+        now = f"{cur['name']}: {cur['text']}" if cur else ""
+    mode = a.get("mode")
+    out = {"steps": steps, "headline": headline, "now": now, "rerank_only": rerank,
+           "index": held, "granularity": index_plan(a)}
+    if mode in MODE_WORDS:
+        out["mode"] = {"mode": mode, "label": MODE_WORDS[mode][0], "line": MODE_WORDS[mode][1]}
+    return out
