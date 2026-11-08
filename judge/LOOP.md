@@ -49,6 +49,12 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-08 ~14:30 (box clock): Karl: "merge deploy for now and then keep working". **EFFECTS2 + LOOPHOLD merged**
+  (`9773355`, `0fef473`; CHANGELOG by union). Quick gate `0fef473` **GREEN** in 100 s (screens, journey 24 steps 53 s, boot
+  0.66 s, hygiene; ~/roughcut-loop/gate-0fef473-20261108T1422). **8766 restarted on `0fef473`** (v5 proxies already built).
+  foxtrot rebooted ~14:10 (8766 had been down). **Wave 20 launched** (judge/WAVE20.md): TELEM, LOCALGPU, VERIFY, K5UI in
+  roughcut-wt/w20-<lane> from `0fef473`; FIND3 + EVAL after TELEM and LOCALGPU merge. PLAY10 / WORKER relaunch after wave 20's
+  lanes, at load <= 4. Tick cron recreated (session-only). Karl has a HuggingFace token ready for pyannote (speaker labels).
 - 2026-11-06 ~22:20 (box clock): **RESUMED by Karl** ("let's resume that work ... continue the work against the goals"). Tick
   cron recreated (session-only, :13/:43). Karl opened 8766 via the launcher at 21:43: it now serves THIS worktree live
   (`389df7e`, server and pages agree; v5 proxies rebuilding into /mnt/roughcut/work/app-redesign), so **no merges into
