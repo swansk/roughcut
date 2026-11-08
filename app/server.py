@@ -5021,6 +5021,39 @@ def bin_coverage() -> list[dict]:
     return covs
 
 
+def _layer_model(layer: dict) -> str | None:
+    """The model a layer was read with: the sidecar's own record, else what its role maps
+    to today (older sidecars recorded only the role). None when neither is known: the
+    words then say nothing, never a role id."""
+    if layer.get("model"):
+        return str(layer["model"])
+    try:
+        return config.model_for(str(layer.get("role") or ""))
+    except ValueError:
+        return None
+
+
+def index_ran_of(rec: dict | None) -> bool | None:
+    """Did the finished run read any footage? The record's own `produced.index_ran`; for a
+    record that predates it, inferred: a re-run whose index is complete in its record, with
+    no clip new to it, only re-ranked and re-cut. None when it cannot be told."""
+    if not rec:
+        return None
+    produced = rec.get("produced") or {}
+    if produced.get("index_ran") is not None:
+        return bool(produced["index_ran"])
+    c = produced.get("index") or {}
+    n = int(c.get("clips") or 0)
+    whole = n and all(int(c.get(k) or 0) >= int(c.get(need) or n) for k, need in
+                      (("listened", "clips"), ("looked", "look_need"),
+                       ("close", "close_need"), ("proxied", "clips")))
+    base, names = rec.get("base_names"), rec.get("clip_names")
+    fresh = isinstance(base, list) and isinstance(names, list) and set(names) - set(base)
+    if rec.get("mode") == "rerun" and whole and not fresh:
+        return False
+    return None
+
+
 def account_inputs(covs: list[dict]) -> dict:
     """The numbers `flow.pass_account` words, summed off the layers' own records."""
     heard = [c["layers"]["heard"] for c in covs if c["layers"]["heard"]["read"]]
@@ -5042,13 +5075,13 @@ def account_inputs(covs: list[dict]) -> dict:
         "looked": {"clips": len(looked), "frames": sum(len(lk.get("frames") or []) for lk in looked),
                    "intervals": ivs, "interval_s": look_interval(), "width": first.get("width"),
                    "cols": first.get("cols"), "rows": first.get("rows"),
-                   "model": first.get("model") or first.get("role")},
+                   "model": _layer_model(first) if first else None},
         "close": {"clips": len(closed),
                   "windows": sum(len(c.get("windows") or []) for c in closed),
                   "seconds": sum(float(w[1]) - float(w[0]) for c in closed
                                  for w in c.get("windows") or []),
                   "interval_s": near.get("interval_s"), "width": near.get("width"),
-                  "model": near.get("model") or near.get("role")},
+                  "model": _layer_model(near) if near else None},
         "deep": {"spans": sum(len(c["layers"]["deep"]["spans"]) for c in covs)},
         "motion": {"clips": sum(1 for c in covs if c["layers"]["motion"].get("cached")),
                    "hz": events.MOTION_HZ},
@@ -5085,7 +5118,7 @@ def api_firstpass_account(job: str | None = None) -> JSONResponse:
     steps0 = ((st.get("would") or {}).get("steps") or [{}])
     run = {"state": st.get("state"), "stage": st.get("stage"),
            "index_complete": bool(steps0) and steps0[0].get("needed") is False,
-           "index_ran": produced.get("index_ran"),
+           "index_ran": index_ran_of(_fp_record()) if st.get("state") in ("done", "stale-after-edits") else None,
            "counts": (st.get("counts") or {}).get("index"),
            "picks": produced.get("picks"), "shots": (produced.get("cut") or {}).get("shots"),
            "cut_detail": cut.get("detail")}
