@@ -729,6 +729,8 @@ def _numbers(m: dict) -> str:
     n = m.get("numbers") or m.get("facts")
     if isinstance(n, str):
         return n
+    if not n and isinstance(m.get("text"), str) and str(m.get("source")) == "telemetry":
+        return m["text"]          # lane TELEM's own compact line: "air 0.39 s at 46.62 (landing 4.0 g)"
     if not isinstance(n, dict):
         return ""
     names = {"air_s": ("air", "s"), "landing_g": ("landing", "g"), "impact_g": ("impact", "g"),
@@ -753,6 +755,17 @@ def certainty(m: dict) -> dict:
     status = str(m.get("status") or "").lower()
     source = str(m.get("source") or "").lower()
     said, by = _verdict(m)
+    # lane VERIFY's one-word `certainty` (claude · local · telemetry · unchecked · unsure ·
+    # rejected) and `claim_status` (supported · unsupported · rejected) say who settled it
+    word = str(m.get("certainty") or "").lower()
+    if word in ("claude", "local") and said not in _REJECT:
+        by, said = word, (said if said in _CONFIRM else "confirm")
+    elif word == "rejected" or str(m.get("claim_status") or "").lower() == "rejected":
+        by, said = by or "claude", "reject"
+    elif word == "unsure":
+        said = "unsure"
+    if str(m.get("claim_status") or "").lower() == "unsupported" and status in ("", "unseen"):
+        status = "unsupported"
     tele = source == "telemetry"
     base = ("felt" if tele and status in ("", "felt", "unseen", "unchecked")
             else "claude" if status in ("confirmed", "deep")

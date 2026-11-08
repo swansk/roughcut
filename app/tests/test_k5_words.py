@@ -165,3 +165,23 @@ def test_certainty_endpoint_nulls_a_shot_with_no_moment(client):
     assert r.status_code == 200
     got = r.json()["shots"]
     assert len(got) == 3 and got[1] is None and got[2] is None
+
+
+def test_lane_verify_and_telem_fields_read_as_the_chips():
+    """The field names the other wave 20 lanes document (verify.py: `certainty`, `claim_status`,
+    `verdict` {verdict, model}; telemetry_events.py: `text`, status "felt")."""
+    air = _m(source="telemetry", status="felt", kind="air", who="wearer",
+             text="air 0.39 s at 46.62-47.01 (landing 4.0 g)", certainty="telemetry")
+    assert flow.certainty(air)["level"] == "felt"
+    assert flow.certainty(air)["title"].startswith("air 0.39 s at 46.62-47.01 (landing 4.0 g) · telemetry")
+    ok = flow.certainty({**air, "certainty": "claude",
+                         "verdict": {"verdict": "confirm", "model": "claude-sonnet-4-5"}})
+    assert ok["level"] == "claude" and ok["title"].endswith("telemetry · confirmed by Claude")
+    assert flow.certainty({**air, "certainty": "local"})["level"] == "local"
+    assert flow.certainty({**air, "certainty": "unchecked"})["level"] == "felt"
+    assert flow.certainty({**air, "certainty": "unsure",
+                           "verdict": {"verdict": "unsure", "model": "sonnet"}})["level"] == "felt"
+    rej = flow.certainty({**air, "certainty": "rejected", "claim_status": "rejected"})
+    assert rej["level"] == "contradicted" and "rejected by Claude" in rej["title"]
+    old = flow.certainty(_m(claim_status="unsupported"))
+    assert old["level"] == "unsupported"

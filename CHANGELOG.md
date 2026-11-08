@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Changed
+- Wave 20 K5UI: the certainty chips read the field names lanes VERIFY (`certainty`, `claim_status`, `verdict`; `local_available` / `effective` / `note` on the mode payload) and TELEM (`text`, status `felt`) document; the Index panel says what a Hybrid bin without a local model actually runs.
+
 ### Added
 - Wave 20 K5UI: the first pass says what it does, is doing and did, per step, in this bin's numbers (Karl's K5: "I am not really sure what it is doing, or what level of indexing is being done"): hearing (speech to text, every word timed, the model), looking (1 frame every 4 s, how many frames, contact-sheet size, the model), close looks (share of the footage, frame rate, size, the model); a run on an existing index says it only re-ranked and re-cut ("nothing was re-watched"). `GET /api/firstpass/account` and `flow.pass_account`.
 - Wave 20 K5UI: how sure the moments are: the panel counts them by certainty (felt by telemetry, checked by the 3080, checked by Claude, seen once, unchecked, unsupported, contradicted) for the cut and for the bin, and each proposal shot and Selects row carries a small chip whose hover says who settled it and with what. `POST /api/certainty`, `flow.certainty`.

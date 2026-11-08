@@ -535,7 +535,9 @@
     bar.hidden = !IX.mode;
     if (!IX.mode) return;
     const sel = $('.ix-modesel', sec);
-    const gone = localGone() || (IX.mode.local && IX.mode.local.available === false ? (IX.mode.local.reason || 'no GPU found') : '');
+    // no 3080: the report's `local` {available: false, reason}, or the mode endpoint's
+    // `local_available: false` (lane VERIFY) with its `note`
+    const gone = localGone() || (IX.mode.local_available === false ? 'no local model on this machine' : '');
     const key = `${Object.keys(MODES).join()}|${gone}`;
     if (sel.dataset.key !== key) {
       sel.dataset.key = key;
@@ -544,7 +546,8 @@
     sel.value = IX.mode.mode;
     sel.disabled = IX.modeBusy;
     const line = $('.ix-modeline', sec);
-    const t = [IX.modeErr || modeWords(IX.mode.mode)[1], gone ? `The 3080 is not available: ${gone}.` : ''].filter(Boolean).join(' ');
+    const effective = IX.mode.effective && IX.mode.effective !== IX.mode.mode && IX.mode.note ? IX.mode.note : '';
+    const t = [IX.modeErr || modeWords(IX.mode.mode)[1], gone ? `The 3080 is not available: ${gone}.` : '', effective].filter(Boolean).join(' ');
     line.textContent = t;
     line.title = Object.keys(MODES).map((m) => `${modeWords(m)[0]}: ${modeWords(m)[1]}`).join('\n');
     line.classList.toggle('bad', !!IX.modeErr);

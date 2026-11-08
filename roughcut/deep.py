@@ -736,7 +736,9 @@ def coverage(clip: str, *, duration: float | None, audio: dict, coarse: dict,
                      # what lanes TELEM (its numbers) and VERIFY (who checked it, and
                      # what they said) put on a moment: carried through for the chips (K5)
                      **{k: m[k] for k in ("numbers", "facts", "verdict", "checked_by",
-                                          "settled_by", "who") if k in m}}
+                                          "settled_by", "who", "certainty", "claim_status",
+                                          "evidence", "asserted", "text", "event_id")
+                        if k in m}}
                     for m in moments],
         "unusable": [{"start": float(u["start"]), "end": float(u["end"]),
                       "why": u.get("why", "")}

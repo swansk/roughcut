@@ -406,3 +406,18 @@ def test_no_gpu_says_not_available_with_the_reason(pg):
         pg.locator("[data-testid=index-modeline]").inner_text()
     assert "not available" in pg.locator("[data-testid=index-mode] option[value=local]").inner_text()
     pg.locator('[data-testid=index-panel]').screenshot(path=str(SHOTS / f"9-index-nogpu-{pg.size[0]}.png"))
+
+
+def test_verifys_mode_payload_without_a_local_stack_says_what_actually_runs(pg):
+    """lane VERIFY's GET /api/index/mode: {mode, modes, default, local_available, effective, note}."""
+    _mode_routes(pg, get={"mode": "hybrid", "modes": ["hybrid", "local", "claude"],
+                          "default": "hybrid", "local_available": False, "effective": "claude",
+                          "note": "No local model here, so Hybrid runs as Claude only."})
+    _open_index(pg)
+    sel = pg.locator("[data-testid=index-mode]")
+    sel.wait_for(state="visible", timeout=10000)
+    assert sel.input_value() == "hybrid"
+    assert pg.locator("[data-testid=index-mode] option[value=local]").is_disabled()
+    line = pg.locator("[data-testid=index-modeline]").inner_text()
+    assert "No local model here, so Hybrid runs as Claude only." in line
+    assert "The 3080 is not available" in line
