@@ -1580,6 +1580,12 @@ function release() {
   const AUTO_STEPS = [PLAY_W, 544, 448];
   const AUTO_SLOW_MS = 28, AUTO_FAST_MS = 14;
   G.autoW = PLAY_W;
+  // (wave 19 WORKER, verdict 15 punch 5) Auto draws at most MAX_DRAW_FPS (tooSoon) while the canvas
+  // is falling behind: from page load, again whenever the frames take longer than a step down's
+  // worth, and until CAP_OFF_N frames have landed well inside their frame (CAP_OFF_MS, under
+  // AUTO_SLOW_MS so the two do not flap)
+  const CAP_OFF_N = 30, CAP_OFF_MS = 21;
+  G.behind = true;
   const auto = { ema: 0, n: 0 };
   function autoLearn(m) {
     if (!m.yuv || G.res !== 'auto' || G.mix) return;
@@ -1589,6 +1595,8 @@ function release() {
     if (!(lag >= 0 && lag < 1000)) return;
     auto.ema = auto.n ? auto.ema * 0.85 + lag * 0.15 : lag;
     auto.n++;
+    if (auto.ema > AUTO_SLOW_MS) G.behind = true;
+    else if (auto.n >= CAP_OFF_N && auto.ema < CAP_OFF_MS) G.behind = false;
     const i = AUTO_STEPS.indexOf(G.autoW);
     if (auto.n >= 10 && auto.ema > AUTO_SLOW_MS && i < AUTO_STEPS.length - 1) {
       G.autoW = AUTO_STEPS[i + 1]; auto.n = 0;
@@ -2109,9 +2117,12 @@ function release() {
    * was before; at 0.5x every frame. Measured on FRAME59's branch merged with this one, at load
    * 6-11: the graded canvas drew a 59.94 proxy at 42-49 frames a second, 9-14 of a play's frames
    * never drawn and a hold of 4 display frames in 2 of 3 plain cuts (test_tx_playback). Paused,
-   * stepped and parked: every frame. `grade.maxDrawFps` says the rate (the tests read it). */
+   * stepped and parked: every frame. `grade.maxDrawFps` says the rate (the tests read it).
+   * (wave 19 WORKER, verdict 15 punch 5) Only on Auto, and only while the canvas is falling behind
+   * (G.behind, autoLearn): Full, 1/2 and 1/4 draw every frame. */
   const MAX_DRAW_FPS = 30.5;
   function tooSoon(p, v, md) {
+    if (G.res !== 'auto' || !G.behind) { p.drawnMt = md.mediaTime; return false; }
     const mt = md.mediaTime, rate = Math.max(0.05, v.playbackRate), last = p.drawnMt;
     if (last != null && mt > last && mt - last < 0.5 && (mt - last) / rate < 1 / MAX_DRAW_FPS - 0.002) return true;
     p.drawnMt = mt;
@@ -2669,6 +2680,8 @@ function release() {
     get warmLog() { return G.warmLog; },
     get paceLog() { return G.paceLog; },
     maxDrawFps: MAX_DRAW_FPS,
+    get behind() { return !!G.behind; },      // (wave 19 WORKER) Auto's cap holds (tooSoon, autoLearn)
+    get autoEma() { return Math.round(auto.ema * 10) / 10; },
     get yuv() { return G.yuv; },
     get autoW() { return G.autoW; },
     get mode() { return G.worker ? 'worker' : (G.R ? 'main' : 'off'); },

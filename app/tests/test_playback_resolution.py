@@ -29,7 +29,8 @@ pytest.importorskip("playwright.sync_api", reason="playwright not installed")
 from playwright.sync_api import sync_playwright  # noqa: E402
 
 CLIP_S = 6.0
-STEMS = ["PR_A", "PR_B"]
+STEMS = ["PR_A", "PR_B", "PR_C"]
+RATES = {"PR_C": "60000/1001"}            # the third shot is a 59.94 one (wave 19 WORKER, punch 5)
 BALANCE = {"gain": [1.06, 1.0, 0.94], "exposure": 1.05, "knee": 0.8, "lift": 0.0}
 
 # The picture the grade draws, as drawSize computes it: the video contained in the
@@ -64,7 +65,7 @@ def res_server(tmp_path_factory):
     for k, stem in enumerate(STEMS):
         subprocess.run(
             ["ffmpeg", "-v", "error", "-y", "-nostdin",
-             "-f", "lavfi", "-i", f"testsrc2=size=1280x720:rate=24:duration={CLIP_S},hue=h={90 * k}",
+             "-f", "lavfi", "-i", f"testsrc2=size=1280x720:rate={RATES.get(stem, '24')}:duration={CLIP_S},hue=h={90 * k}",
              "-f", "lavfi", "-i", f"sine=frequency=440:duration={CLIP_S}",
              "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
              "-c:a", "aac", "-shortest", str(footage / f"{stem}.MP4")],
@@ -73,7 +74,8 @@ def res_server(tmp_path_factory):
         side["duration_s"] = CLIP_S
         (sidecars / f"{stem}.audio.json").write_text(json.dumps(side), encoding="utf-8")
     segs = [{"clip": "PR_A.MP4", "in": 0.5, "out": 5.5, "why": "one", "id": "r1"},
-            {"clip": "PR_B.MP4", "in": 0.5, "out": 5.5, "why": "two", "id": "r2"}]
+            {"clip": "PR_B.MP4", "in": 0.5, "out": 5.5, "why": "two", "id": "r2"},
+            {"clip": "PR_C.MP4", "in": 0.5, "out": 5.5, "why": "three", "id": "r3"}]
     edl = {"variant": "T", "title": "playres", "orient": "none", "story": "",
            "target_s": [5, 20], "segments": segs,
            "colour": {"mode": "auto", "shots": {s["id"]: {"balance": dict(BALANCE)} for s in segs}}}
@@ -185,6 +187,66 @@ def test_playback_resolution_is_a_menu_on_the_program_and_full_quarter_and_auto_
             assert abs(half["w"] - half["picture"] / 2) <= 2, half
             page.evaluate("grade.playRes = 'nonsense'")
             assert page.evaluate("grade.playRes") == "1/2"
+            assert errors == [], errors
+        finally:
+            browser.close()
+
+
+# ------------------------------------------------------------------ the draw rate (wave 19 WORKER)
+# (verdict 15 punch 5: "59.94 plays at 59.94 when the machine can") A 59.94 proxy kept its rate
+# (FRAME59), and the canvas drew it every other frame at any Playback Resolution (tooSoon,
+# MAX_DRAW_FPS 30.5). Now the menu decides: Full (and 1/2, 1/4) draws every frame; Auto keeps the
+# cap while the canvas falls behind (from the start of a play, until 30 frames have landed well
+# inside their frame: grade.behind).
+
+def _fps(page, shot: int, window_ms: int, first_frames: int = 1) -> dict:
+    """Play shot `shot` from near its in point; from the `first_frames`-th canvas draw on, the
+    canvas's draws a second over `window_ms`; then stop."""
+    page.evaluate("document.activeElement && document.activeElement.blur()")
+    page.evaluate(f"cueAt({shot}, segs[{shot}].in + 0.2)")
+    page.wait_for_function("liveVideo() && liveVideo().readyState >= 3 && !liveVideo().seeking"
+                           " && grade.lut && document.querySelector('#gradeCanvas.on')", timeout=20000)
+    page.keyboard.press("Space")
+    page.wait_for_function("player.playing", timeout=5000)
+    n0 = page.evaluate("grade.draws")
+    page.wait_for_function(f"grade.draws >= {n0} + {first_frames}", timeout=10000)
+    a = page.evaluate("({n: grade.draws, t: performance.now(), behind: grade.behind, ema: grade.autoEma, rate: liveVideo().playbackRate})")
+    page.wait_for_timeout(window_ms)
+    b = page.evaluate("({n: grade.draws, t: performance.now(), behind: grade.behind})")
+    page.keyboard.press("Space")
+    page.wait_for_function("!player.playing", timeout=5000)
+    return {"fps": (b["n"] - a["n"]) * 1000 / (b["t"] - a["t"]), "behind_before": a["behind"],
+            "behind_after": b["behind"], "rate": a["rate"]}
+
+
+def test_full_draws_every_frame_of_a_59_94_shot_and_auto_caps_it_while_the_canvas_is_behind(res_server):
+    import os
+    cores = os.cpu_count() or 4
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
+        try:
+            page = browser.new_context(viewport={"width": 1920, "height": 1080}).new_page()
+            errors: list[str] = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            page.goto(res_server)
+            _ready(page)
+            if page.evaluate("grade.mode") == "off":
+                pytest.skip("no WebGL in this browser: nothing draws the grade")
+            assert page.evaluate("grade.maxDrawFps") == 30.5
+            # Auto, from a play's start: the cap holds (30 frames well inside their frame lift it)
+            load0 = float(open("/proc/loadavg").read().split()[0])
+            auto = _fps(page, 2, 700)
+            print("\nAUTO59", {**auto, "load": load0}, flush=True)
+            if auto["behind_after"] and auto["behind_before"]:
+                assert auto["fps"] <= 33, f"Auto drew a 59.94 shot above its cap while behind: {auto}"
+            # Full: every frame
+            page.locator("#playRes").select_option("full")
+            load0 = float(open("/proc/loadavg").read().split()[0])
+            full = _fps(page, 2, 1500, first_frames=3)
+            print("FULL59", {**full, "load": load0}, flush=True)
+            if load0 > 6:
+                pytest.skip(f"box at load {load0:.1f} (over 6): Full's rate measured, not judged: {full}")
+            assert full["fps"] >= 55, f"Full did not draw a 59.94 shot at its rate: {full}"
             assert errors == [], errors
         finally:
             browser.close()
