@@ -49,6 +49,12 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-08 ~16:00: **TELEM (fixed), K5UI (+ live-data fixes) and VERIFY merged; 8766 deployed on `4d5267e`** after quick
+  gates GREEN 2/2 (holds 21-64 ms; one RED on `50ac50a` was journey step 24's export-size estimate, -37 %, unrelated: watch).
+  Lead fixes: `clip_coverage` now ranks with the felt sidecar (the board saw 0 felt moments); test_verify imports the package.
+  On Karl's bin: 258 moments (74 felt by telemetry), Hybrid effective = Claude (no local stack yet), "Check 28 claims ·
+  $1.24"; his K5 run now reads "only re-ranked". The felt sidecars were built by a free telemetry-only re-run (job
+  82855811, $0). Still running: LOCALGPU, DIARIZE. Launched: EVAL. FIND3 after LOCALGPU.
 - 2026-11-08 ~14:50: **TELEM merged (`a85300b`) but NOT deployed**: quick gate journey RED 2 of 3 (loop hold 852 / 216 ms,
   "nothing in the server ran") vs base `0fef473` GREEN 2 of 2 (27 ms): the felt build is pure Python on a stage thread and
   holds the GIL (the reconcile "reopen once" rebuilds every bin at boot). TELEM is moving the build out of process; deploy
