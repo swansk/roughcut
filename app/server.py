@@ -6044,7 +6044,10 @@ def clip_coverage(clip: str) -> dict:
     motion = events.motion_cache(STATE["visual"], stem)
     audio = load_sidecar(clip)
     track = events.excitement(motion, (audio.get("tracks") or {}).get("onset") or [])
-    moments = events.rank_clip(clip, coarse, fine, track, events.MOTION_HZ, deep)
+    # The felt events (a sidecar read, never a build) so the board, the Index panel and
+    # the first pass's certainty counts see what the planner sees.
+    moments = events.rank_clip(clip, coarse, fine, track, events.MOTION_HZ, deep,
+                               felt=telemetry_events.telemetry_events(clip))
     return deepmod.coverage(clip, duration=clip_duration(clip), audio=audio,
                             coarse=coarse, fine=fine, deep=deep, motion=motion,
                             hz=events.MOTION_HZ, moments=moments,

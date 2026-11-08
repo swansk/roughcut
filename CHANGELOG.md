@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Changed
+- **The board sees the felt events the planner sees (wave 20, lead).** `clip_coverage` ranked a clip's moments without its telemetry sidecar, so on Karl's Killington preview the six airs and the CLIP_01 fall reached the planner but not the Index panel, the coverage strip or the first pass's certainty counts. It now passes the sidecar's events (a read, never a build). test_k5_words, test_deep, test_telemetry_events, test_index: 68 passed.
 - Wave 20 K5UI: the certainty chips read the field names lanes VERIFY (`certainty`, `claim_status`, `verdict`; `local_available` / `effective` / `note` on the mode payload) and TELEM (`text`, status `felt`) document; the Index panel says what a Hybrid bin without a local model actually runs.
 
 ### Added
