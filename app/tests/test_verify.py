@@ -8,9 +8,13 @@ import json
 import time
 from pathlib import Path
 
+import sys
+
 import pytest
 
-from roughcut import config, inference, verify
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from roughcut import config, inference, verify  # noqa: E402
 
 
 def air(clip="CLIP_A.MP4", t=2.0, **kw):

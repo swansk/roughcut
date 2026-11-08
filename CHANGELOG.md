@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- test_verify.py imports the package itself (it only collected when another test file had put the repo on `sys.path` first).
 - Wave 20 VERIFY: the visual-pipeline tests that fabricate jump / fall claims without telemetry run with demotion off (`verify.DEMOTE`); the demotion has its own tests.
 - Wave 20 VERIFY checker prompt, measured on Karl's checked Killington windows (and four fake telemetry airs on ordinary riding): the system prompt separates STRONG telemetry readings (true free fall) from WEAK ones (an unweighting), asks for what the frames show, and treats a rider already down as lying-down, not a fall; a deep look's own events are never demoted. Results: airs 6/7, falls 4/4, old false claims 5/6, fake airs 8/8 rejected.
 - Wave 20 VERIFY wiring: `GET/PUT /api/index/mode` (Hybrid / Local only / Claude only, stored per bin), `GET /api/verify` + `POST /api/verify/claims|events` ("Check N claims", priced first), unsupported index claims demoted out of the planner's and the board's moments/events, and a first-pass step where Claude checks the events the cut uses (<= 40 calls) and the shots are retimed from the verdicts.
