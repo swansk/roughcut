@@ -445,11 +445,19 @@ RERANK_SYSTEM = (
     "what the editor described. You never add candidates and never invent timestamps.")
 
 
+# The brief: ticked by default in Claude only / Hybrid. The Killington measurement says do not
+# yet: one middle frame per candidate cannot see a 0.3 s air, and the rerank LOST two of the 15
+# union hits (hit@3 0.789 -> 0.684, 19 calls, $1.39). Flip this when a prompt/thumbnail change
+# beats the union in `tools/eval_understanding.py --rerank`.
+RERANK_DEFAULT_ON = False
+
+
 def rerank_policy(mode: str) -> dict:
     """Whether the rerank may run and whether it starts ticked, for the bin's index mode
-    (`hybrid` | `local` | `claude`). Local only never spends a Claude call."""
+    (`hybrid` | `local` | `claude`). Local only never spends a Claude call; the tick is
+    on only in Claude only / Hybrid, and only while RERANK_DEFAULT_ON."""
     m = str(mode or "").lower()
-    return {"allowed": m != "local", "default": m in ("claude", "hybrid"), "mode": m}
+    return {"allowed": m != "local", "default": RERANK_DEFAULT_ON and m in ("claude", "hybrid"), "mode": m}
 
 
 def rerank_projected_usd(n_thumbs: int = RERANK_THUMBS) -> float:

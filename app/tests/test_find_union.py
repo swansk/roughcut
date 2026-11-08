@@ -111,7 +111,10 @@ def test_rank_windows_is_the_subprocess_search():
 
 # ------------------------------------------------------------------ rerank + mode gating
 
-def test_the_rerank_runs_by_default_only_in_claude_and_hybrid():
+def test_the_rerank_runs_by_default_only_in_claude_and_hybrid(monkeypatch):
+    assert find.RERANK_DEFAULT_ON is False                 # off while it loses to the union (eval --rerank)
+    assert find.rerank_policy("hybrid") == {"allowed": True, "default": False, "mode": "hybrid"}
+    monkeypatch.setattr(find, "RERANK_DEFAULT_ON", True)
     assert find.rerank_policy("claude") == {"allowed": True, "default": True, "mode": "claude"}
     assert find.rerank_policy("hybrid")["default"] is True
     assert find.rerank_policy("local") == {"allowed": False, "default": False, "mode": "local"}
@@ -182,7 +185,7 @@ def test_validate_rerank_rejects_a_candidate_that_does_not_exist():
 def test_find_endpoint_reports_the_local_state_and_the_rerank_policy(client):
     d = client.post("/api/find", json={"query": "goodbye"}).json()
     assert d["local"]["used"] is False                    # the suite runs with the local stack off
-    assert d["rerank"]["allowed"] and d["rerank"]["default"] and d["rerank"]["usd"] > 0
+    assert d["rerank"]["allowed"] and d["rerank"]["usd"] > 0
     assert d["matches"][0]["label"] == "heard"
     price = client.get("/api/find/price").json()
     assert price["rerank_usd"] == d["rerank"]["usd"]
