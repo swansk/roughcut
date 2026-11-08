@@ -49,6 +49,12 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-08 ~18:00: **WORKER's read-back path NOT merged, on its own A/B** (hd = its head 06e8f1b vs tip 3b697a8,
+  interleaved with PLAY10): graded dissolve 16/20 vs 14/20 (noise; same 50-60 ms plain-cut hold in both, load 9-15);
+  test_vfx_playback identical (sharpen 83 ms holds both); half-speed REGRESSED: 50/60 plays with 0 worker-clock holds vs the
+  tip's 59/60 (load 3-5). Punch 5 (Full >= 55 fps): Full 49.9-51.9 fps, Auto unchanged (behind never cleared). Kept: the
+  cap/behind piece only, being split onto `redesign-w19-worker-cap` and re-measured for no regression before any merge.
+  Note for the judge: punch 6's 0-hold bar is met by the tip in 59 of 60 plays. Raw: ~/roughcut-loop/lane-worker/b/.
 - 2026-11-08 ~16:55: **PLAY10 merged (`43e4299`, ff; better than base, not at the bar: dissolves out of 0.5x hold 8/18 and
   14/18 plays vs 18/18; cut 5 1/5 vs 5/5; residual single 83 ms holds inside the 0.5x shot, maybe WORKER's hand-off) and
   VERIFY's local-join fix merged (`3b697a8`: 3 of 19 negatives asserted, 1.17 false/neg-min, recall 0.89)**; gates GREEN 2/2;

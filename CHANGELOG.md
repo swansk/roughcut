@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- Loop state: WORKER's read-back path measured and not merged (it regressed half-speed playback); its draw-rate piece is being split out.
 - Loop state: PLAY10 and VERIFY's local-join fix merged and on the 8766 preview; quiet-box playback A/Bs running.
 - Wave 20 VERIFY: the 3080's checks now reach the events (`verify.attach_local`: kind family + t within 0.5 s, `event["local"] = {p_yes, verdict, model, frames}`). A fall / impact / speed drop the local model calls unlikely (P < 0.2) is settled as not-a-fall (certainty `local`, not asserted) unless a second sensor signal backs it or Claude confirmed it; 0.2-0.9 routes to Claude; > 0.9 is `local` and asserted; an air's local answer is advisory only. `local_available()` reads `available()["ok"]`. Offline eval on Killington: negatives asserted 4 -> 3 of 19, recall 0.89 (unchanged), false events per negative-minute 2.35 -> 1.17; baseline updated.
 - Loop state: FIND3 and DIARIZE merged; all of wave 20 on the 8766 preview.
