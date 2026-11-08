@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- Wave 20 lane TELEM: `roughcut/telemetry_events.py` stub and the event shape VERIFY and LOCALGPU build against (the rules follow).
 - Goal + wave 20: Karl says other riders' airs count as events; the test set marks each air's rider.
 - Research R12: the dense local pass scored on all 12 clips (0-0.22 recall; captions only), confirming the wave 20 plan.
 - Research R12: footage-understanding bake-off (local RTX 3080 vs Claude) on Karl's checked Killington test set, and the wave 20 plan that builds the hybrid it picked.
