@@ -4991,6 +4991,135 @@ def firstpass_payload() -> dict:
     return out
 
 
+# ---- what the first pass did, in this bin's numbers (Karl's K5, wave 20) ----------------
+#
+#   GET  /api/firstpass/account[?job=<ask id>]   per step: what it does / is doing / did, at
+#        what granularity (flow.pass_account), and how sure the moments are — counts by
+#        certainty for the bin and for the cut (the proposal `job`, else the cut on the
+#        timeline). Reads files; never calls a model.
+#   POST /api/certainty {shots: [{clip, in, out}]}   the certainty chip of each shot's
+#        moment (flow.certainty): {level, chip, name, title} or null where no moment rests
+#        under the shot (a spoken line, say).
+
+_COV: dict = {"at": 0.0, "covs": None}
+_COV_TTL_S = 3.0
+
+
+def bin_coverage() -> list[dict]:
+    """Every clip's coverage (moments, layers) — a few seconds of reuse so a panel polling
+    its account does not re-rank the bin each time."""
+    if _COV["covs"] is not None and time.time() - _COV["at"] < _COV_TTL_S:
+        return _COV["covs"]
+    covs = []
+    for c in footage_clips():
+        try:
+            covs.append(clip_coverage(c))
+        except (OSError, ValueError, KeyError):
+            continue
+    _COV.update(at=time.time(), covs=covs)
+    return covs
+
+
+def account_inputs(covs: list[dict]) -> dict:
+    """The numbers `flow.pass_account` words, summed off the layers' own records."""
+    heard = [c["layers"]["heard"] for c in covs if c["layers"]["heard"]["read"]]
+    looked = [c["layers"]["coarse"] for c in covs if c["layers"]["coarse"]["read"]]
+    closed = [c["layers"]["close"] for c in covs if c["layers"]["close"]["read"]]
+    first = (looked or [{}])[0]
+    near = (closed or [{}])[0]
+    ivs: dict = {}
+    for lk in looked:
+        if lk.get("interval_s"):
+            k = str(float(lk["interval_s"]))
+            ivs[k] = ivs.get(k, 0) + 1
+    out = {
+        "clips": len(covs),
+        "minutes": round(sum(float(c.get("duration") or 0) for c in covs) / 60.0, 1),
+        "heard": {"clips": len(heard), "words": sum(int(h.get("words") or 0) for h in heard),
+                  "model": next((h["model"] for h in heard if h.get("model")), None),
+                  "timed": any(h.get("words") for h in heard)},
+        "looked": {"clips": len(looked), "frames": sum(len(lk.get("frames") or []) for lk in looked),
+                   "intervals": ivs, "interval_s": look_interval(), "width": first.get("width"),
+                   "cols": first.get("cols"), "rows": first.get("rows"),
+                   "model": first.get("model") or first.get("role")},
+        "close": {"clips": len(closed),
+                  "windows": sum(len(c.get("windows") or []) for c in closed),
+                  "seconds": sum(float(w[1]) - float(w[0]) for c in closed
+                                 for w in c.get("windows") or []),
+                  "interval_s": near.get("interval_s"), "width": near.get("width"),
+                  "model": near.get("model") or near.get("role")},
+        "deep": {"spans": sum(len(c["layers"]["deep"]["spans"]) for c in covs)},
+        "motion": {"clips": sum(1 for c in covs if c["layers"]["motion"].get("cached")),
+                   "hz": events.MOTION_HZ},
+        "moments": sum(len(c.get("moments") or []) for c in covs),
+    }
+    try:                       # lanes LOCALGPU / VERIFY put these on the Index report
+        rep = _snapped("index_clips", index_clips_payload)
+        if isinstance(rep.get("local"), dict):
+            out["local"] = rep["local"]
+        if rep.get("mode") in flowmod.MODE_WORDS:
+            out["mode"] = rep["mode"]
+    except Exception:  # noqa: BLE001 — the account is words; a report error never blocks it
+        pass
+    return out
+
+
+def _cut_shots(job: str | None) -> tuple[list[dict], str]:
+    """The shots the certainty is read for: a proposal's (by Ask job), else the cut."""
+    if job:
+        for r in _ask_records():
+            if r.get("job") == job and (r.get("plan") or {}).get("segments"):
+                return r["plan"]["segments"], "proposal"
+    return fpmod._segments(read_edl()), "cut"
+
+
+@app.get("/api/firstpass/account")
+def api_firstpass_account(job: str | None = None) -> JSONResponse:
+    covs = bin_coverage()
+    a = account_inputs(covs)
+    st = firstpass_payload()
+    prop = st.get("proposal") or {}
+    produced = st.get("produced") or {}
+    cut = (st.get("counts") or {}).get("cut") or {}
+    steps0 = ((st.get("would") or {}).get("steps") or [{}])
+    run = {"state": st.get("state"), "stage": st.get("stage"),
+           "index_complete": bool(steps0) and steps0[0].get("needed") is False,
+           "index_ran": produced.get("index_ran"),
+           "counts": (st.get("counts") or {}).get("index"),
+           "picks": produced.get("picks"), "shots": (produced.get("cut") or {}).get("shots"),
+           "cut_detail": cut.get("detail")}
+    out = flowmod.pass_account(a, run)
+    moments = {c["clip"]: c.get("moments") or [] for c in covs}
+    every = [m for ms in moments.values() for m in ms]
+    shots, src = _cut_shots(job or (prop.get("job") if prop.get("pending") else None))
+    rows = [flowmod.shot_moment(moments.get(s.get("clip"), []), float(s["in"]), float(s["out"]))
+            for s in shots if "in" in s and "out" in s]
+    in_cut = flowmod.certainty_counts([m for m in rows if m])
+    out["certainty"] = {
+        "bin": flowmod.certainty_counts(every), "bin_words": flowmod.certainty_words(
+            flowmod.certainty_counts(every), "moments"),
+        "cut": in_cut if in_cut["total"] else None, "cut_source": src,
+        "cut_shots": len(rows),
+        "cut_words": flowmod.certainty_words(in_cut, f"of the {len(rows)} shots rest on a moment")
+        if in_cut["total"] else ""}
+    out["inputs"] = {k: a[k] for k in ("clips", "minutes", "moments")}
+    return JSONResponse(out)
+
+
+@app.post("/api/certainty")
+async def api_certainty(request: Request) -> JSONResponse:
+    body = await request.json()
+    covs = {c["clip"]: c.get("moments") or [] for c in bin_coverage()}
+    out = []
+    for s in (body.get("shots") or [])[:400]:
+        try:
+            m = flowmod.shot_moment(covs.get(s.get("clip"), []), float(s["in"]), float(s["out"]))
+        except (KeyError, TypeError, ValueError):
+            m = None
+        out.append(flowmod.certainty(m) if m else None)
+    return JSONResponse({"shots": out})
+
+
 @app.post("/api/firstpass")
 async def api_firstpass_post(request: Request) -> JSONResponse:
     """Run (or re-run) the first pass: index what isn't done → picks → a proposed cut,
@@ -5313,6 +5442,8 @@ def _firstpass_walk(job: str, fp: dict) -> None:
                                  or [],
                                  "notes_ok": (plan.get("notes_check") or {}).get("ok", True)},
                        produced={"index": fp["steps"]["index"].get("counts"),
+                                 # K5: did this run read the footage, or only re-rank it?
+                                 "index_ran": fp["steps"]["index"]["state"] != "skipped",
                                  "picks": fp["picks"],
                                  "cut": {"shots": len(plan.get("segments") or []),
                                          "length_s": round(sum(edits.dur(s) for s in

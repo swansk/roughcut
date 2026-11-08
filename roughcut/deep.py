@@ -732,7 +732,11 @@ def coverage(clip: str, *, duration: float | None, audio: dict, coarse: dict,
         "moments": [{"start": m["start"], "end": m["end"], "kind": m.get("kind", ""),
                      "what": m.get("what", ""), "source": m.get("source", ""),
                      "status": (m.get("why_ranked") or {}).get("confirmation", ""),
-                     "score": m.get("score"), "notable": bool(m.get("notable"))}
+                     "score": m.get("score"), "notable": bool(m.get("notable")),
+                     # what lanes TELEM (its numbers) and VERIFY (who checked it, and
+                     # what they said) put on a moment: carried through for the chips (K5)
+                     **{k: m[k] for k in ("numbers", "facts", "verdict", "checked_by",
+                                          "settled_by", "who") if k in m}}
                     for m in moments],
         "unusable": [{"start": float(u["start"]), "end": float(u["end"]),
                       "why": u.get("why", "")}

@@ -9,6 +9,11 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Added
+- Wave 20 K5UI: the first pass says what it does, is doing and did, per step, in this bin's numbers (Karl's K5: "I am not really sure what it is doing, or what level of indexing is being done"): hearing (speech to text, every word timed, the model), looking (1 frame every 4 s, how many frames, contact-sheet size, the model), close looks (share of the footage, frame rate, size, the model); a run on an existing index says it only re-ranked and re-cut ("nothing was re-watched"). `GET /api/firstpass/account` and `flow.pass_account`.
+- Wave 20 K5UI: how sure the moments are: the panel counts them by certainty (felt by telemetry, checked by the 3080, checked by Claude, seen once, unchecked, unsupported, contradicted) for the cut and for the bin, and each proposal shot and Selects row carries a small chip whose hover says who settled it and with what. `POST /api/certainty`, `flow.certainty`.
+- Wave 20 K5UI: the Index panel's per-bin Understanding control (Hybrid / Local only / Claude only, with what each costs) and a "Local (3080)" column that says "not available" and why when there is no GPU; both hide when the server does not have the field.
+
 ### Fixed
 - Goal + wave 20: Karl says other riders' airs count as events; the test set marks each air's rider.
 - Research R12: the dense local pass scored on all 12 clips (0-0.22 recall; captions only), confirming the wave 20 plan.
