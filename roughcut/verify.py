@@ -141,21 +141,37 @@ SYSTEM = (
     "GoPro). You are shown ONE image: a contact sheet of consecutive frames, 6 columns x "
     "4 rows, read left to right then top to bottom, each cell labelled with its clip "
     "time in seconds. Frames are levelled (horizon straightened using the camera's "
-    "gravity sensor). Judge only what is visible in the frames. Facts quoted from sensors "
-    "or from an earlier look are CLAIMS, not evidence: a sensor can be fooled (a dropped "
-    "or shaken camera, a bump, a hand on the camera, a lift chair), and an earlier look "
-    "was made from sparse frames and is often wrong. Reject a claim when the frames do "
-    "not show it, however precise the numbers sound. "
-    "Typical false claims: a person ahead of the camera airborne or in the frame "
-    "mistaken for the wearer, gloves/poles/skis filling the frame, the wearer lying down "
-    "on purpose, the camera being handled or tossed rather than a fall, ordinary riding "
-    "over rough snow. "
+    "gravity sensor). Judge what is visible in the frames. "
+    "A claim comes from one of two places. (1) An EARLIER LOOK at sparse frames (one "
+    "every few seconds): it is often wrong, so reject it when these frames do not show "
+    "the event. (2) TELEMETRY from the camera's sensors: a reliable clock for WHEN the "
+    "camera felt something, but not for WHAT happened. A reading marked STRONG (true "
+    "free fall: |a| near 0 g for a quarter second or more, then a hard landing) means "
+    "the camera really was airborne at that moment, as a rider's jump or drop, or as a "
+    "dropped, thrown or handled camera: your job is to tell which from the frames, "
+    "confirming a rider's flight and rejecting a camera that was handled. A reading "
+    "marked WEAK (|a| only 0.25-0.5 g) is just an unweighting a skier gets over a crest "
+    "without leaving the snow: then the frames alone must show the flight, and "
+    "continuous ordinary riding means reject. Whatever the numbers, never invent what "
+    "is not in the frames. Cues for an air: skis or poles hanging or pointing up, the "
+    "ground falling away or a crest passing, the horizon or pitch changing during the "
+    "flight, then a jolt, spray or settling at landing - even when the take-off frame "
+    "is not crisp (a 0.3 s air is only two or three cells). If the claimed event "
+    "happened and something else follows it (a fall after the landing), still answer "
+    "for the claimed event and mention the rest in `why`. "
+    "Typical false claims: a person ahead of the camera mistaken for the wearer, "
+    "gloves/poles/skis filling the frame, the wearer lying down on purpose, the camera "
+    "being handled or tossed rather than a fall, ordinary riding over rough snow. "
     "Definitions: 'air' = anyone in frame is airborne, the wearer (their skis leave the "
     "snow, a jump or a drop) or ANOTHER rider (e.g. a skier flying over or ahead of the "
     "camera) - say which in `who`; 'fall' = a rider loses balance and goes down; "
     "'crash' = a hard fall or collision; 'camera-into-snow' = the camera hits the snow "
-    "in a fall. If you cannot tell from these frames, say confidence low: it is better "
-    "to be unsure than wrong.")
+    "in a fall. A fall needs the going-down itself in these frames: the body, skis or "
+    "poles tumbling, a hit on the snow, the camera ending at snow level. A view that "
+    "tilts up, a person standing nearby, or a rider who is already down or lying on the "
+    "snow for the whole window (the onset is not in the frames) is NOT a fall: answer "
+    "lying-down (or none) and reject the fall claim. Use confidence low only when you truly cannot tell from these frames: "
+    "then the answer is treated as unsure and nothing is asserted.")
 
 SCHEMA = {
     "verdict": "confirm|reject|retime",
@@ -564,6 +580,21 @@ def build_strip(video: Path, clip: str, start: float, end: float, out: Path, *,
 _NO_FACTS = "no numbers: this is a claim from an earlier look at sparse frames."
 
 
+STRONG_MIN_G = 0.15      # every real air on the Killington test set read 0.03-0.10 g
+STRONG_LANDING_G = 2.5
+
+
+def strength(e: dict) -> str:
+    """STRONG / WEAK for a telemetry air, from its own numbers (R12: the six real airs
+    read 0.03-0.10 g and landed at 2.5-7.7 g; a 0.25-0.5 g dip is an unweighting)."""
+    if e.get("kind") != "air" or e.get("min_g") is None:
+        return ""
+    strong = (float(e["min_g"]) <= STRONG_MIN_G
+              and float(e.get("landing_g") or 0.0) >= STRONG_LANDING_G)
+    return ("STRONG (true free fall)" if strong
+            else "WEAK (an unweighting or a bump; the frames must show the flight)")
+
+
 def facts_text(e: dict, neighbours: Sequence[dict] = ()) -> str:
     """The event's facts for the prompt: the telemetry numbers when there are any, what the
     earlier look said when it came from the old index, the local model's number when
@@ -581,19 +612,36 @@ def facts_text(e: dict, neighbours: Sequence[dict] = ()) -> str:
                 bits.append(f"{label} {e[k]}")
         if e.get("handling"):
             bits.append("no speed change around it (often a hand on the camera)")
-        lines.append("Telemetry says (a sensor, may be wrong): " + "; ".join(bits) + ".")
+        lines.append("Telemetry says: " + "; ".join(bits) + ".")
+        st = strength(e)
+        if st:
+            lines.append(f"Reading strength: {st}.")
     else:
         lines.append("Earlier look says" + (f" '{e['what']}'" if e.get("what") else "") + ": "
                      + _NO_FACTS)
     p = local_p(e)
     if p is not None:
         lines.append(f"A small local model, looking at the same frames, gave P(yes)={p:.2f}.")
+    if e.get("window_speed"):
+        lines.append("GPS ground speed m/s around the window (about 1 Hz): "
+                     f"{e['window_speed']}.")
     near = [n for n in neighbours
             if n.get("event_id") != e.get("event_id") and n.get("text")]
     if near:
         lines.append("Other sensor events in this window: "
                      + "; ".join(str(n["text"]) for n in near[:6]) + ".")
     return "\n".join(lines)
+
+
+def window_speed(clip: str, t0: float, t1: float) -> list[float]:
+    """GPS ground speed (m/s) in and just around the strip's window, when the telemetry
+    module has it; [] otherwise."""
+    try:
+        from . import telemetry_events as te
+        return [round(float(v), 1) for t, v in te.speed_series(clip)
+                if t0 - 1.0 <= float(t) <= t1 + 1.0]
+    except Exception:                                      # noqa: BLE001
+        return []
 
 
 def build_prompt(e: dict, strip: Strip, neighbours: Sequence[dict] = ()) -> str:
@@ -605,7 +653,11 @@ def build_prompt(e: dict, strip: Strip, neighbours: Sequence[dict] = ()) -> str:
     return (f"Window: clip {stem(e['clip'])}, times {t0:.2f} to {t1:.2f} s "
             f"(24 cells, one every {dt:.3f} s, labelled). Candidate event under review: "
             f"a '{claimed}' at about {float(e['start']):.2f}-{float(e['end']):.2f} s.\n"
-            + facts_text(e, neighbours) + "\n"
+            + facts_text({**e, "window_speed": e.get("window_speed")
+                          or window_speed(e["clip"], strip.times[0], strip.times[-1])},
+                         neighbours) + "\n"
+            + "Camera roll (degrees the frames were levelled by), per cell in order: "
+            + str(strip.angles) + "\n"
             "Question: is this candidate a real event of that kind in these frames? Decide "
             "confirm (it is real as stated), reject (not real), or retime (a real event "
             "happens but at a different time or of a different kind - give the true "
@@ -750,7 +802,10 @@ def _overlaps(a0: float, a1: float, b0: float, b1: float, slack: float) -> bool:
 
 def is_claim(m: dict) -> bool:
     """An old index claim the checker must back: a jump / fall / crash, or anything the
-    index worded as inverted / upside-down."""
+    index worded as inverted / upside-down. A deep look's own events are not: the editor
+    paid for that read of the seconds (roughcut.deep) and it is Claude's checked account."""
+    if m.get("deep") or m.get("source") == "deep look":
+        return False
     return (str(m.get("kind", "")).lower() in HOT_CLAIMS
             or bool(_INVERTED.search(str(m.get("what", "")))))
 

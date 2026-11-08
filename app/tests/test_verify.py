@@ -247,7 +247,7 @@ def test_a_claude_check_sends_one_image_the_facts_and_stores_the_verdict(project
     req = b.seen[0]
     assert req.role == config.ROLE_VERIFY and req.isolated is True and len(req.images) == 1
     assert "air 0.40 s" in req.prompt and "min" in req.prompt and "P(yes)=0.40" in req.prompt
-    assert "may be wrong" in req.prompt
+    assert "Reading strength: WEAK" in req.prompt and "roll" in req.prompt.lower()
     assert st["verdicts"][a["event_id"]]["verdict"] == "confirm"
 
 
@@ -417,3 +417,16 @@ def test_unsupported_claims_never_reach_the_payload_and_a_batch_can_settle_them(
         verifymod_path = server.verify_path()
         if verifymod_path.exists():
             verifymod_path.unlink()
+
+
+def test_reading_strength_separates_a_true_free_fall_from_an_unweighting():
+    assert verify.strength(air(min_g=0.03, landing_g=4.0)).startswith("STRONG")
+    assert verify.strength(air(min_g=0.31, landing_g=3.4)).startswith("WEAK")
+    assert verify.strength(air(min_g=0.05, landing_g=1.2)).startswith("WEAK")
+    assert verify.strength(impact()) == ""
+
+
+def test_a_deep_looks_own_events_are_not_claims_to_demote():
+    deep = {"start": 3.0, "end": 4.0, "kind": "fall", "deep": True, "what": "deep look: fell"}
+    asserted, held = verify.demote([deep], "CLIP_A.MP4", {"verdicts": {}}, [])
+    assert asserted == [deep] and held == []
