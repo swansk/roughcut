@@ -4,9 +4,15 @@ Premiere's standard effects, in its folders and with its parameters:
 
   Blur & Sharpen › Gaussian Blur   Blurriness, Blur Dimensions
   Blur & Sharpen › Sharpen         Sharpen Amount (wave 15, VIGNETTE; verdict 11 punch 7)
-  Distort › Transform              Position, Scale, Rotation, Opacity (its own, apart from
-                                   Motion, as Premiere has both)
-  Transform › Crop                 Left, Top, Right, Bottom (%), Edge Feather
+  Distort › Mirror                 Reflection Center, Reflection Angle — wave 19, EFFECTS2
+  Distort › Transform              Anchor Point, Position, Uniform Scale, Scale (Height),
+                                   Scale Width, Skew, Skew Axis, Rotation, Opacity (its own,
+                                   apart from Motion, as Premiere has both; Anchor Point, Skew
+                                   and the Width wave 19, EFFECTS2)
+  Image Control › Black & White    (none) — wave 19, EFFECTS2
+  Transform › Crop                 Left, Top, Right, Bottom (%), Zoom (wave 19), Edge Feather
+  Transform › Horizontal Flip      (none) — wave 19, EFFECTS2
+  Transform › Vertical Flip        (none)
 
 A shot carries them in its `controls` (validated by app/server.py `clean_controls`, which
 calls `clean` and `clean_keys` here):
@@ -31,21 +37,43 @@ seconds from the shot's first frame).
 Units. Crop's sides are percent of the frame; Edge Feather and Blurriness are pixels of a
 1920 × 1080 frame (Effect Controls' frame, as Position's numbers are), so the same numbers
 look the same at any export size. Blurriness is the Gaussian's standard deviation. The
-Transform's position is a fraction of the frame (0.5 = centre), as Motion's is.
+Transform's Position and Anchor Point are fractions of the frame (0.5 = centre), as Motion's
+Position is; its scales are percent, its angles degrees. An on / off parameter (Crop's Zoom,
+the Transform's Uniform Scale) is a choice of "on" / "off", Premiere's checkbox.
 
-THE FORMULAS (the Program's — CSS in app/static/effects.js for Crop and Transform, the grade
-canvas's shader stages in app/static/grade.js for Gaussian Blur and Sharpen — and the
-export's filters in research/tools/assemble.py `vfx_graph` are all these):
+THE FORMULAS (the Program's — the grade canvas's shader stages in app/static/grade.js, after
+the grade and in the stack's order, from app/static/effects.js `vfxLook`'s `stages`; CSS
+only on the layers no grade canvas draws — and the export's filters in
+research/tools/assemble.py `vfx_graph` are all these):
 
   Crop       a point (x, y) of the frame (pixel centres, a W × H frame) keeps
              m = rx(x)·ry(y) of itself over black, with, for feather f = F·W/1920 px and
              the sides l = L·W/100 … r = W − R·W/100:
                rx(x) = clamp((x − l)/f, 0, 1) · clamp((r − x)/f, 0, 1)  (f = 0: a hard edge)
              and ry likewise on the top and bottom (a feather softens all four edges, an
-             uncropped side's at the frame's own edge).
-  Transform  a point p of the picture lands at (x·W, y·H) + s·R(θ)·(p − centre), clockwise
-             θ, s = Scale / 100 (Motion's own maths); outside the moved picture is black,
-             and the picture is Opacity % over black.
+             uncropped side's at the frame's own edge). Zoom on: that box stretched to fill
+             the frame — the drawn point q shows the cropped picture's point
+             p = (l + q.x·(r − l)/W, t + q.y·(b − t)/H), bilinear (`crop_zoom_affine`).
+  Transform  a point p of the picture lands at q = P + R(θ)·K·S·(p − A) — P = (x·W, y·H) its
+             Position, A = (ax·W, ay·H) its Anchor Point, S = diag(Scale Width, Scale)/100
+             (Uniform Scale: both Scale), K the Skew κ along the Skew Axis α,
+               K = R(−α)·[[1, −tan κ], [0, 1]]·R(α)  (+κ leans the picture's top right),
+             R(φ) = [[cos φ, −sin φ], [sin φ, cos φ]] on the frame's pixels, y down (clockwise
+             on screen; Motion's own rotation) — `transform_affine`. Each drawn point reads
+             the picture at the source point that lands there, bilinear (Premiere's Transform
+             samples bilinear); outside the moved picture is black, and the picture is
+             Opacity % over black.
+  Flip       Horizontal: a drawn point q = (x, y) shows the picture's (W − x, y); Vertical:
+             (x, H − y) — pixel for pixel (the export's `hflip` / `vflip`).
+  Mirror     the line through C = (cx·W, cy·H), its Reflection Center, at the Reflection
+             Angle α: with n = (cos α, sin α) (y down) and d = (q − C)·n, a drawn point q
+             shows the picture's p = q − 2·max(d, 0)·n, bilinear, black outside the picture —
+             the side n points to is the other side's reflection (α = 0°: the left half
+             reflected onto the right; 90°: the top onto the bottom), and the picture is whole
+             on the line (`mirror_affine` is the reflection, its own inverse).
+  Black &    each pixel its luma, Y' = 0.2126·R' + 0.7152·G' + 0.0722·B' (Rec. 709), in all
+  White      three channels: the export keeps the Y' plane and sets Cb, Cr neutral (the
+             same grey: Y' is that sum of the R'G'B' it came from).
   Blur       a Gaussian of σ = Blurriness·W/1920 px across, down or both (Blur
              Dimensions); outside the frame reads black (Premiere's default, Repeat Edge
              Pixels off: the edges soften toward black).
@@ -107,12 +135,18 @@ KINDS: dict[str, Kind] = {
         {}, "crispens the picture's edges: an unsharp mask, Sharpen Amount 100 adds the detail once more"),
     "transform": Kind(
         "transform", "Transform", "Distort",
-        (Param("position_x", "Position X", -10.0, 10.0, 0.5, "", 6),
+        (Param("anchor_x", "Anchor Point X", -10.0, 10.0, 0.5, "", 6),
+         Param("anchor_y", "Anchor Point Y", -10.0, 10.0, 0.5, "", 6),
+         Param("position_x", "Position X", -10.0, 10.0, 0.5, "", 6),
          Param("position_y", "Position Y", -10.0, 10.0, 0.5, "", 6),
          Param("scale", "Scale", 0.0, 1000.0, 100.0, "", 3),
+         Param("scale_width", "Scale Width", 0.0, 1000.0, 100.0, "", 3),
+         Param("skew", "Skew", -70.0, 70.0, 0.0, "°", 3),
+         Param("skew_axis", "Skew Axis", -3600.0, 3600.0, 0.0, "°", 3),
          Param("rotation", "Rotation", -3600.0, 3600.0, 0.0, "°", 3),
          Param("opacity", "Opacity", 0.0, 100.0, 100.0, " %", 3)),
-        {}, "moves, scales, turns and fades the picture, apart from Motion"),
+        {"uniform": ("on", "off")},
+        "moves, scales, skews, turns and fades the picture, apart from Motion"),
     "crop": Kind(
         "crop", "Crop", "Transform",
         (Param("left", "Left", 0.0, 100.0, 0.0, " %", 3),
@@ -120,10 +154,29 @@ KINDS: dict[str, Kind] = {
          Param("right", "Right", 0.0, 100.0, 0.0, " %", 3),
          Param("bottom", "Bottom", 0.0, 100.0, 0.0, " %", 3),
          Param("feather", "Edge Feather", 0.0, 1000.0, 0.0, " px", 3)),
-        {}, "trims the frame's edges to black, with a soft edge if you feather it"),
+        {"zoom": ("off", "on")},
+        "trims the frame's edges to black, with a soft edge if you feather it, or Zoom to fill the frame"),
+    "mirror": Kind(
+        "mirror", "Mirror", "Distort",
+        (Param("center_x", "Reflection Center X", -10.0, 10.0, 0.5, "", 6),
+         Param("center_y", "Reflection Center Y", -10.0, 10.0, 0.5, "", 6),
+         Param("angle", "Reflection Angle", -3600.0, 3600.0, 0.0, "°", 3)),
+        {}, "reflects one side of the picture onto the other, about a line through the Reflection Center"),
+    "black_white": Kind("black_white", "Black & White", "Image Control", (), {},
+                        "turns the picture to greys: each pixel its luma"),
+    "horizontal_flip": Kind("horizontal_flip", "Horizontal Flip", "Transform", (), {},
+                            "mirrors the picture left to right"),
+    "vertical_flip": Kind("vertical_flip", "Vertical Flip", "Transform", (), {},
+                          "turns the picture upside down (top to bottom)"),
 }
 CHOICE_LABELS = {"dimensions": {"both": "Horizontal and Vertical", "horizontal": "Horizontal",
-                                "vertical": "Vertical"}}
+                                "vertical": "Vertical"},
+                 "zoom": {"off": "no Zoom", "on": "Zoom"},
+                 "uniform": {"on": "Uniform Scale", "off": "Scale Height and Width apart"}}
+# the on / off ones (Premiere's checkboxes): the AI may say true / false for them
+SWITCHES = ("zoom", "uniform")
+# the x / y pairs (fractions of the frame, kept to 6 places as Motion's Position is)
+PAIRS = ("position", "anchor", "center")
 ID_RE = re.compile(r"^[a-z_]{1,24}(?:_\d{1,2})?$")
 
 
@@ -276,7 +329,7 @@ def clean_keys(raw: Any, effects: list[dict] | None) -> dict | None:
             t = round(t, 6)
             if clean_list and t <= clean_list[-1][0]:
                 raise ValueError(f"keys.{prop}: times must be sorted and distinct")
-            clean_list.append([t, round(min(p.hi, max(p.lo, v)), 6 if key.startswith("position") else 3)])
+            clean_list.append([t, round(min(p.hi, max(p.lo, v)), 6 if key.startswith(PAIRS) else 3)])
         if clean_list:
             out[prop] = clean_list
     return out or None
@@ -333,3 +386,41 @@ def sharpen_kernel(amount: float) -> list[float]:
     a = max(0.0, float(amount)) / 100.0
     c, e = -a / 16.0, -2.0 * a / 16.0
     return [c, e, c, e, 1.0 + 12.0 * a / 16.0, e, c, e, c]
+
+
+def transform_affine(v: dict, w: float, h: float) -> tuple[float, float, float, float, float, float]:
+    """A Transform's map in a w × h frame's pixels (y down), THE formula: q = P + R(θ)·K·S·(p − A)
+    as (a, b, c, d, e, f), q = (a·x + c·y + e, b·x + d·y + f) — effects.js `xfAffine` and
+    grade.js `xfMap` are its twins. `v`: position_x / _y, anchor_x / _y (fractions), scale,
+    scale_width (percent), uniform ("on" / "off"), skew, skew_axis, rotation (degrees)."""
+    sy = max(0.0, float(v.get("scale", 100.0))) / 100.0
+    sx = sy if v.get("uniform", "on") != "off" else max(0.0, float(v.get("scale_width", 100.0))) / 100.0
+    t = math.tan(math.radians(float(v.get("skew", 0.0))))
+    ca, sa = math.cos(math.radians(float(v.get("skew_axis", 0.0)))), math.sin(math.radians(float(v.get("skew_axis", 0.0))))
+    c, s = math.cos(math.radians(float(v.get("rotation", 0.0)))), math.sin(math.radians(float(v.get("rotation", 0.0))))
+    k11, k12, k21, k22 = 1 - t * ca * sa, -t * ca * ca, t * sa * sa, 1 + t * ca * sa
+    a, cc = (c * k11 - s * k21) * sx, (c * k12 - s * k22) * sy
+    b, dd = (s * k11 + c * k21) * sx, (s * k12 + c * k22) * sy
+    ax, ay = float(v.get("anchor_x", 0.5)) * w, float(v.get("anchor_y", 0.5)) * h
+    return (a, b, cc, dd, float(v.get("position_x", 0.5)) * w - (a * ax + cc * ay),
+            float(v.get("position_y", 0.5)) * h - (b * ax + dd * ay))
+
+
+def crop_zoom_affine(left: float, top: float, right: float, bottom: float,
+                     w: float, h: float) -> tuple[float, float, float, float, float, float] | None:
+    """Crop's Zoom as a map of the frame (q of the cropped picture's p, same order as
+    `transform_affine`): the kept box stretched to the w × h frame; None when nothing is kept."""
+    x0, x1 = left * w / 100.0, w - right * w / 100.0
+    y0, y1 = top * h / 100.0, h - bottom * h / 100.0
+    if x1 <= x0 or y1 <= y0:
+        return None
+    zx, zy = w / (x1 - x0), h / (y1 - y0)
+    return (zx, 0.0, 0.0, zy, -x0 * zx, -y0 * zy)
+
+
+def mirror_affine(cx: float, cy: float, angle: float, w: float, h: float) -> tuple[float, float, float, float, float, float]:
+    """Mirror's reflection about its line (THE formula's), the whole of it: q ↦ q − 2((q − C)·n)n,
+    same order as `transform_affine` (it is its own inverse)."""
+    c, s = math.cos(math.radians(angle)), math.sin(math.radians(angle))
+    k = 2.0 * (cx * w * c + cy * h * s)
+    return (1 - 2 * c * c, -2 * c * s, -2 * c * s, 1 - 2 * s * s, k * c, k * s)

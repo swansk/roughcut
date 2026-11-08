@@ -448,6 +448,99 @@ def test_video_effects_crop_transform_and_blur(browser, live_server, project):
     assert c["keys"] == {"blurriness@gaussian_blur": [[0.0, 0.0], [2.0, 30.0]]}
 
 
+def test_video_effects_crop_zoom_and_the_transforms_anchor_and_skew(browser, live_server, project):
+    """Wave 19, EFFECTS2 (verdict 15 punch 8): Premiere's Crop › Zoom and the Transform's Anchor
+    Point, Uniform Scale with Scale Width, Skew and Skew Axis, as `effect` ops — Zoom said as
+    true (Premiere's checkbox), a Scale Width with Uniform Scale unchecked first, the Skew and
+    the Anchor Point keyed. The hand ticks the boxes (effects.vfxChoice, the checkbox's own
+    call), types the values and keys the stopwatches; the AI's accept lands the same EDL, one
+    Ctrl+Z back."""
+    ops = [{"op": "effect", "id": "shot-a", "kind": "crop", "params": {"left": 12, "bottom": 8, "zoom": True}},
+           {"op": "effect", "id": "shot-b", "kind": "transform",
+            "params": {"ancx": 480, "ancy": 270, "posx": 1200, "scale_width": 75, "skew": 15, "skew_axis": 30}},
+           {"op": "effect", "id": "shot-c", "kind": "transform",
+            "keys": {"skew": [[0.0, 0], [2.0, 20]], "ancx": [[0.0, 960], [2.0, 1440]]}}]
+    hand = """() => {
+      const seg = (id) => tl.byId(id);
+      effects.vfxAdd('crop', ['shot-a']);                                // dropped from the bin
+      effects.set('left@crop', 12, seg('shot-a'));                       // typed in its section
+      effects.set('bottom@crop', 8, seg('shot-a'));
+      effects.vfxChoice('crop', 'zoom', 'on', seg('shot-a'));            // its Zoom box ticked
+      effects.vfxAdd('transform', ['shot-b']);
+      effects.vfxChoice('transform', 'uniform', 'off', seg('shot-b'));   // Uniform Scale unticked
+      effects.set('ancx@transform', 480, seg('shot-b'));
+      effects.set('ancy@transform', 270, seg('shot-b'));
+      effects.set('posx@transform', 1200, seg('shot-b'));
+      effects.set('scale_width@transform', 75, seg('shot-b'));
+      effects.set('skew@transform', 15, seg('shot-b'));
+      effects.set('skew_axis@transform', 30, seg('shot-b'));
+      effects.vfxAdd('transform', ['shot-c']);
+      // the stopwatches: select the shot, playhead on the frame, stopwatch, type the value
+      tl.select(['shot-c'], {source: 'click'});
+      const s = tl.filmStart('shot-c');
+      tl.seek(s + 0.0); effects.animate('skew@transform'); effects.set('skew@transform', 0, seg('shot-c'));
+      tl.seek(s + 2.0); effects.set('skew@transform', 20, seg('shot-c'));
+      tl.seek(s + 0.0); effects.animate('anc@transform'); effects.set('ancx@transform', 960, seg('shot-c'));
+      tl.seek(s + 2.0); effects.set('ancx@transform', 1440, seg('shot-c'));
+    }"""
+    ai, h, _ = ai_then_hand(browser, live_server, project, ops, hand)
+    assert ai == h
+    a, b, c = (ai["segments"][i]["controls"] for i in range(3))
+    assert a["vfx"] == [{"id": "crop", "kind": "crop", "params": {"left": 12.0, "bottom": 8.0, "zoom": "on"}}]
+    assert b["vfx"] == [{"id": "transform", "kind": "transform",
+                         "params": {"uniform": "off", "anchor_x": 0.25, "anchor_y": 0.25, "position_x": 0.625,
+                                    "scale_width": 75.0, "skew": 15.0, "skew_axis": 30.0}}]
+    assert c["vfx"] == [{"id": "transform", "kind": "transform"}]
+    assert c["keys"] == {"skew@transform": [[0.0, 0.0], [2.0, 20.0]], "anchor_x@transform": [[0.0, 0.5], [2.0, 0.75]],
+                         "anchor_y@transform": [[0.0, 0.5], [2.0, 0.5]]}
+
+
+def test_video_effects_the_flips(browser, live_server, project):
+    """Wave 19, EFFECTS2: Transform › Horizontal Flip and Vertical Flip as `effect` ops (no
+    values: the bin's drop), one bypassed, and Image Control › Black & White after it — the
+    same EDL as the hand's drops and fx toggle."""
+    ops = [{"op": "effect", "id": "shot-a", "kind": "horizontal_flip"},
+           {"op": "effect", "id": "shot-b", "kind": "vertical_flip"},
+           {"op": "effect", "id": "shot-c", "kind": "horizontal_flip", "on": False},
+           {"op": "effect", "id": "shot-c", "kind": "black_white"}]
+    hand = """() => {
+      effects.vfxAdd('horizontal_flip', ['shot-a']);                     // dropped from the bin
+      effects.vfxAdd('vertical_flip', ['shot-b']);
+      effects.vfxAdd('horizontal_flip', ['shot-c']);
+      effects.vfxAct('off', 'horizontal_flip', tl.byId('shot-c'));       // its fx toggle
+      effects.vfxAdd('black_white', ['shot-c']);                         // Image Control › Black & White
+    }"""
+    ai, h, _ = ai_then_hand(browser, live_server, project, ops, hand)
+    assert ai == h
+    assert [ai["segments"][i]["controls"]["vfx"] for i in range(3)] == [
+        [{"id": "horizontal_flip", "kind": "horizontal_flip"}], [{"id": "vertical_flip", "kind": "vertical_flip"}],
+        [{"id": "horizontal_flip", "kind": "horizontal_flip", "off": True}, {"id": "black_white", "kind": "black_white"}]]
+
+
+def test_video_effects_mirror(browser, live_server, project):
+    """Wave 19, EFFECTS2: Distort › Mirror as an `effect` op — its Reflection Center in a
+    1920×1080 frame's px and its Reflection Angle, and keyed (the centre's stopwatch keys x and
+    y together, as Position's does) — the same EDL as the hand's."""
+    ops = [{"op": "effect", "id": "shot-a", "kind": "mirror", "params": {"ctrx": 640, "angle": 90}},
+           {"op": "effect", "id": "shot-b", "kind": "mirror", "keys": {"ctry": [[0.0, 540], [1.5, 270]]}}]
+    hand = """() => {
+      const seg = (id) => tl.byId(id);
+      effects.vfxAdd('mirror', ['shot-a']);                              // dropped from the bin
+      effects.set('ctrx@mirror', 640, seg('shot-a'));                    // typed in its section
+      effects.set('angle@mirror', 90, seg('shot-a'));
+      effects.vfxAdd('mirror', ['shot-b']);
+      tl.select(['shot-b'], {source: 'click'});
+      const s = tl.filmStart('shot-b');
+      tl.seek(s + 0.0); effects.animate('ctr@mirror'); effects.set('ctry@mirror', 540, seg('shot-b'));
+      tl.seek(s + 1.5); effects.set('ctry@mirror', 270, seg('shot-b'));
+    }"""
+    ai, h, _ = ai_then_hand(browser, live_server, project, ops, hand)
+    assert ai == h
+    a, b = ai["segments"][0]["controls"], ai["segments"][1]["controls"]
+    assert a["vfx"] == [{"id": "mirror", "kind": "mirror", "params": {"center_x": 0.333333, "angle": 90.0}}]
+    assert b["keys"] == {"center_x@mirror": [[0.0, 0.5], [1.5, 0.5]], "center_y@mirror": [[0.0, 0.5], [1.5, 0.25]]}
+
+
 def test_a_video_effect_shows_on_the_program_before_accept_and_reject_writes_nothing(browser, live_server, project):
     """Dimension 15: an `effect` op under review is on the Program before it lands — the
     shot's stack in memory, the picture clipped (After) — ◐ shows it without (Before),
@@ -461,17 +554,20 @@ def test_a_video_effect_shows_on_the_program_before_accept_and_reject_writes_not
         p = b.page
         p.wait_for_function("rcActions.previewing")
         assert p.evaluate("effects.vfx(tl.byId('shot-a'))") == [{"id": "crop", "kind": "crop", "params": {"left": 25}}]
-        p.wait_for_function("liveVideo() && getComputedStyle(liveVideo()).clipPath.startsWith('polygon(25%')")
+        # the grade canvas's shader draws it (wave 19, EFFECTS2: its stage, no CSS on the picture)
+        crop = ("grade.shot === 'shot-a' && grade.adjust && grade.adjust.vfx"
+                " && grade.adjust.vfx[0].k === 'crop' && grade.adjust.vfx[0].l === 0.25")
+        p.wait_for_function(crop)
         p.locator("[data-testid=ai-before-after]").click()             # Before
-        p.wait_for_function("getComputedStyle(liveVideo()).clipPath === 'none'")
+        p.wait_for_function("!(grade.adjust && grade.adjust.vfx)")
         p.locator("[data-testid=ai-before-after]").click()             # After again
-        p.wait_for_function("getComputedStyle(liveVideo()).clipPath.startsWith('polygon(25%')")
+        p.wait_for_function(crop)
         p.wait_for_timeout(900)                                        # past any autosave
         assert b.raw() == before
         p.locator("[data-testid=ai-reject-all]").click()
         p.wait_for_function("!rcActions.open")
         assert p.evaluate("effects.vfx(tl.byId('shot-a'))") == []
-        p.wait_for_function("getComputedStyle(liveVideo()).clipPath === 'none'")
+        p.wait_for_function("!(grade.adjust && grade.adjust.vfx)")
         p.wait_for_timeout(900)
         assert b.raw() == before
     finally:

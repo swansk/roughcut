@@ -45,9 +45,10 @@
  * is now but the LUT was not baked with — a gain before the table, the balance's
  * shoulder and lift when the table has none, Lumetri contrast and saturation after it —
  * drawn at once; the save's refetch bakes it in. /api/lut says which balance it baked.
- * Its `vfx`: the shot's Sharpen and Gaussian Blur, drawn after the grade as the renderer's
- * stages (wave 16, VFXPLAY; "the video effects' stages" below) — a shot with them is drawn
- * by the canvas even when its LUT is the identity.
+ * Its `vfx`: the shot's video effects — Sharpen and Gaussian Blur (wave 16, VFXPLAY), Crop and
+ * Transform (wave 19, EFFECTS2) — drawn after the grade as the renderer's stages, in the
+ * stack's order ("the video effects' stages" below); a shot with them is drawn by the canvas
+ * even when its LUT is the identity.
  *
  * Where it draws (wave 7). On a software GL — headless Chromium, the judge's and the
  * gate's box — a WebGL canvas costs the main thread twice a frame: the draw (the frame
@@ -563,7 +564,8 @@
      * and a CSS blur() on the canvas, which the software compositor ran on every frame (a
      * sharpened shot played at 5-7 fps). `adj.vfx` (effects.js `vfxLook`'s `stages`, top of
      * the stack first): {k: 'sharp', a: Amount/100} | {k: 'blur', sx, sy: σ in px of a
-     * 1920 × 1080 frame}. A frame with stages is graded into a texture (`img`, framed by
+     * 1920 × 1080 frame} | {k: 'crop', …} | {k: 'xf', …} (Crop and Transform, wave 19: the
+     * `geo` pass below). A frame with stages is graded into a texture (`img`, framed by
      * PAD texels of black) and the stages run from it, the last one onto the canvas. Their
      * programs are their own (no other frame's program carries them) and are built while
      * the Program is parked, for every kind the cut uses (the page's `warmCut` → warmStages,
@@ -582,6 +584,17 @@
      *            σ' = √(σ² − (k² − 1)/4)/k (less what the box and the bilinear way back up
      *            add), and read back up bilinear — so every σ costs about the same: at most
      *            2·BLUR_TAPS + 1 reads a pixel of the picture it blurs, a pass.
+     *   Crop / Transform (wave 19, EFFECTS2; verdict 15 punch 8: they were CSS on the canvas — a
+     *            Crop above a Blur showed its edge sharp, a Feather under a Transform hard): one
+     *            pass each, `geo` — a drawn point q (px, y down) reads the picture at the source
+     *            point p its map gives (bilinear; black past the picture: its PAD, as the export's
+     *            warp pads with black), times a Crop's box mask and a Transform's Opacity.
+     *            Transform: q = P + R(θ)·K·S·(p − A) inverted (`xfMap`: effects.js `xfAffine`'s
+     *            twin); Crop: the box l = Left·w/100 … with rx(x)·ry(y) of an Edge Feather f =
+     *            Feather·w/1920 px at the pixel centres (f = 0 a hard edge), and with Zoom the
+     *            box stretched to the frame (p = box corner + q·box / frame). Flip (wave 19): the
+     *            map x ↦ w − x or y ↦ h − y. Mirror (wave 19): p − 2·max((p − C)·n, 0)·n. Black &
+     *            White (wave 19): the read's Rec. 709 luma in all three channels.
      * On the frame's own pixel grid at the size the picture is drawn: Playback Resolution
      * while playing (≤ 640 px wide), the monitor's size parked — the grid the CSS filter had. */
     const STAGE_HEAD = `
@@ -607,6 +620,27 @@
         vec3 c = at(p);
         vec3 b = at(p - u_px) + at(p + u_px) + at(p + vec2(u_px.x, -u_px.y)) + at(p + vec2(-u_px.x, u_px.y));
         gl_FragColor = vec4(clamp(c + u_amt * (c - 0.25 * b), 0.0, 1.0), 1.0);
+      }`,
+      // Crop and Transform: the source point of each drawn one, a box mask, an opacity
+      geo: () => `${STAGE_HEAD}
+      uniform vec2 u_wh;        // the picture's size, px
+      uniform vec3 u_mx;        // the source point p of a drawn q (px, y down): u_mx·(q, 1), u_my·(q, 1)
+      uniform vec3 u_my;
+      uniform vec4 u_box;       // a Crop's kept box at p: left, top, right, bottom (px)
+      uniform vec2 u_fe;        // 1 / its Edge Feather (px⁻¹); 1 when it crops, else 0
+      uniform float u_op;       // the Transform's Opacity / 100
+      uniform vec4 u_mir;       // a Mirror's line: a point on it (px) and n = (cos α, sin α); n = 0: none
+      uniform float u_bw;       // Black & White: 1, else 0
+      void main() {
+        vec3 q = vec3(vec2(v_uv.x, 1.0 - v_uv.y) * u_wh, 1.0);
+        vec2 p = vec2(dot(u_mx, q), dot(u_my, q));
+        p -= 2.0 * max(dot(p - u_mir.xy, u_mir.zw), 0.0) * u_mir.zw;
+        vec2 lo = clamp((p - u_box.xy) * u_fe.x, 0.0, 1.0), hi = clamp((u_box.zw - p) * u_fe.x, 0.0, 1.0);
+        float m = u_op * mix(1.0, lo.x * lo.y * hi.x * hi.y, u_fe.y);
+        vec2 c = clamp(p, vec2(-1.0), u_wh + 1.0);    // past the picture: its black PAD
+        vec3 s = texture2D(u_src, u_map.xy + vec2(c.x, u_wh.y - c.y) / u_wh * u_map.zw).rgb;
+        s = mix(s, vec3(dot(s, vec3(0.2126, 0.7152, 0.0722))), u_bw);
+        gl_FragColor = vec4(s * m, 1.0);
       }`,
       // one direction of the Gaussian, n bilinear pairs (u_tap: offset in texels, weight)
       blur: (n) => `${STAGE_HEAD}
@@ -637,7 +671,8 @@
         if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p));
         gl.useProgram(p);
         const P = { p };
-        ['u_map', 'u_px', 'u_clip', 'u_amt', 'u_dir', 'u_w0', 'u_tap'].forEach((k) => { P[k] = gl.getUniformLocation(p, k); });
+        ['u_map', 'u_px', 'u_clip', 'u_amt', 'u_dir', 'u_w0', 'u_tap', 'u_wh', 'u_mx', 'u_my', 'u_box', 'u_fe', 'u_op', 'u_mir', 'u_bw']
+          .forEach((k) => { P[k] = gl.getUniformLocation(p, k); });
         gl.uniform1i(gl.getUniformLocation(p, 'u_src'), 6);
         gl.useProgram(U.p);
         STP[key] = P;
@@ -775,6 +810,61 @@
       gl.uniform1f(P.u_amt, a);
       draw4();
     }
+    /* A Transform stage's map in a w × h picture's px (y down), as [a, b, c, d, e, f]:
+     * q = (a·x + c·y + e, b·x + d·y + f) — effects.js `xfAffine`'s twin (roughcut/vfx.py
+     * `transform_affine`): q = P + R(θ)·K·S·(p − A), K = R(−α)·[[1, −tan κ], [0, 1]]·R(α). */
+    function xfMap(v, w, h) {
+      const d = Math.PI / 180;
+      const t = Math.tan(v.sk * d), ca = Math.cos(v.sa * d), sa = Math.sin(v.sa * d);
+      const c = Math.cos(v.r * d), s = Math.sin(v.r * d);
+      const k11 = 1 - t * ca * sa, k12 = -t * ca * ca, k21 = t * sa * sa, k22 = 1 + t * ca * sa;
+      const a = (c * k11 - s * k21) * v.sx, cc = (c * k12 - s * k22) * v.sy;
+      const b = (s * k11 + c * k21) * v.sx, dd = (s * k12 + c * k22) * v.sy;
+      const Ax = v.ax * w, Ay = v.ay * h;
+      return [a, b, cc, dd, v.x * w - (a * Ax + cc * Ay), v.y * h - (b * Ax + dd * Ay)];
+    }
+    /* Crop, Transform, a Flip, Mirror or Black & White (`geo`) from picture S (w × h) into D, or
+     * onto the canvas when D is null. */
+    function geoStage(S, D, s, w, h) {
+      const P = stageProg('geo');
+      target(D, w, h);
+      pass(P, S, [1, 1], w, h, 0, 0, true);
+      gl.uniform2f(P.u_wh, w, h);
+      let mx = [1, 0, 0], my = [0, 1, 0], box = [0, 0, w, h], fe = [1, 0], op = 1, mir = [0, 0, 0, 0], bw = 0;
+      if (s.k === 'xf') {
+        const [a, b, c, d, e, f] = xfMap(s, w, h);
+        const det = a * d - b * c;
+        op = Math.max(0, Math.min(1, s.op ?? 1));
+        if (Math.abs(det) < 1e-9) op = 0;            // a Scale of 0: nothing of it lands
+        else {
+          mx = [d / det, -c / det, (c * f - d * e) / det];
+          my = [-b / det, a / det, (b * e - a * f) / det];
+        }
+      } else if (s.k === 'bw') {
+        bw = 1;
+      } else if (s.k === 'mirror') {
+        const a = s.a * Math.PI / 180;
+        mir = [s.cx * w, s.cy * h, Math.cos(a), Math.sin(a)];
+      } else if (s.k === 'flip') {                   // pixel for pixel: a centre lands on a centre
+        if (s.h) mx = [-1, 0, w];
+        if (s.v) my = [0, -1, h];
+      } else {
+        const L = s.l * w, T = s.t * h, R = w - s.r * w, B = h - s.b * h;
+        fe = [1 / Math.max(1e-3, (s.f || 0) * w / 1920), 1];
+        box = [L, T, R, B];
+        if (R <= L || B <= T) op = 0;                // nothing kept
+        else if (s.z) { mx = [(R - L) / w, 0, L]; my = [0, (B - T) / h, T]; }
+      }
+      gl.uniform3f(P.u_mx, mx[0], mx[1], mx[2]);
+      gl.uniform3f(P.u_my, my[0], my[1], my[2]);
+      gl.uniform4f(P.u_box, box[0], box[1], box[2], box[3]);
+      gl.uniform2f(P.u_fe, fe[0], fe[1]);
+      gl.uniform1f(P.u_op, op);
+      gl.uniform4f(P.u_mir, mir[0], mir[1], mir[2], mir[3]);
+      gl.uniform1f(P.u_bw, bw);
+      draw4();
+    }
+    const GEO = { crop: 1, xf: 1, flip: 1, mirror: 1, bw: 1 };
     /* The stages of `a` for a w-wide picture (σ in its px), or null: none that changes it. */
     function stagesOf(a, w) {
       const st = a && Array.isArray(a.vfx) ? a.vfx : null;
@@ -784,6 +874,7 @@
       for (const s of st) {
         if (s.k === 'sharp' && s.a > 5e-4) out.push({ k: 'sharp', a: s.a });
         else if (s.k === 'blur' && (s.sx > 0 || s.sy > 0)) out.push({ k: 'blur', sx: Math.max(0, s.sx || 0) * k, sy: Math.max(0, s.sy || 0) * k });
+        else if (GEO[s.k]) out.push(s);              // fractions and degrees: geoStage scales them
       }
       return out.length ? out : null;
     }
@@ -833,11 +924,14 @@
       let ok = !!stageProg('copy');
       for (const s of st) {
         if (s.k === 'sharp') ok = ok && !!stageProg('sharp');
+        else if (GEO[s.k]) ok = ok && !!stageProg('geo');
         else for (let n = 1; n <= BLUR_TAPS; n++) ok = ok && !!stageProg('blur', n);
       }
       return ok;
     }
-    /* Compile the programs stages of these kinds ('sharp', 'blur') use and draw each once —
+    const WARM_XF = { k: 'xf', x: 0.5, y: 0.5, ax: 0.5, ay: 0.5, sx: 0.9, sy: 0.9, r: 5, sk: 0, sa: 0, op: 0.9 };
+    const WARM_CROP = { k: 'crop', l: 0.1, t: 0, r: 0, b: 0.1, f: 20, z: 1 };
+    /* Compile the programs stages of these kinds ('sharp', 'blur', 'geo') use and draw each once —
      * the played frame's grade into a picture of the stages, then each stage pass — on small
      * pictures of their own (never the canvas, which shows a frame now), so a software GL
      * builds its routines for them here and not on the first frame of the shot that has them:
@@ -847,7 +941,7 @@
     function warmStages(kinds) {
       const t0 = performance.now();
       const ks = new Set(kinds || []);
-      const fake = [...ks].map((k) => (k === 'sharp' ? { k, a: 0.5 } : { k: 'blur', sx: 1, sy: 1 }));
+      const fake = [...ks].map((k) => (k === 'sharp' ? { k, a: 0.5 } : k === 'geo' ? WARM_XF : { k: 'blur', sx: 1, sy: 1 }));
       if (!fake.length || !stagesReady(fake)) return 0;
       SLOTS = 'w';
       try {
@@ -863,6 +957,7 @@
         const S = pic('a', 24, 24), D = pic('b', 24, 24);
         into(S);
         if (ks.has('sharp')) sharpStage(S, D, 0.5, 24, 24);
+        if (ks.has('geo')) { geoStage(S, D, WARM_XF, 24, 24); geoStage(S, D, WARM_CROP, 24, 24); }
         // every pass count of the blur (σ' 0.3 … 2.9: one to five pairs), then the way down and up
         if (ks.has('blur')) [0.3, 0.9, 1.5, 2.2, 2.9, 4].forEach((sg) => blurStage(S, D, sg, sg, 24, 24));
         gl.finish();
@@ -881,7 +976,7 @@
      * end on the canvas with it ends in a picture and is copied there. */
     const CANVAS_OK = new Set();
     function warmCanvas() {
-      const want = ['sharp', 'blur1', 'blur2', 'blur3', 'blur4', 'blur5'].filter((k) => STP[k] && !CANVAS_OK.has(k));
+      const want = ['sharp', 'geo', 'blur1', 'blur2', 'blur3', 'blur4', 'blur5'].filter((k) => STP[k] && !CANVAS_OK.has(k));
       const S = IMG.wa;
       if (!want.length || !S) return false;
       gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -894,6 +989,15 @@
           gl.uniform2f(P.u_px, 0.5 / S.W, 0.5 / S.H);
           gl.uniform4f(P.u_clip, 0, 0, 1, 1);
           gl.uniform1f(P.u_amt, 0.5);
+        } else if (k === 'geo') {
+          gl.uniform2f(P.u_wh, 2, 2);
+          gl.uniform3f(P.u_mx, 1, 0, 0);
+          gl.uniform3f(P.u_my, 0, 1, 0);
+          gl.uniform4f(P.u_box, 0, 0, 2, 2);
+          gl.uniform2f(P.u_fe, 1, 1);
+          gl.uniform1f(P.u_op, 1);
+          gl.uniform4f(P.u_mir, 0, 0, 0, 0);
+          gl.uniform1f(P.u_bw, 0);
         } else {
           gl.uniform2f(P.u_dir, 1 / S.W, 0);
           gl.uniform1f(P.u_w0, 1);
@@ -915,9 +1019,11 @@
         // (CANVAS_OK: a blur done small comes back up by `copy`, built at the start), else into
         // a picture, copied onto the canvas after it (one pass more: 2-4 ms at 640 px)
         const small = s.k === 'blur' && (kOf(s.sx) > 1 || kOf(s.sy) > 1);
-        const direct = i === st.length - 1 && !off && (small || CANVAS_OK.has(s.k === 'sharp' ? 'sharp' : 'blur5'));
+        const direct = i === st.length - 1 && !off
+          && (small || CANVAS_OK.has(s.k === 'sharp' ? 'sharp' : GEO[s.k] ? 'geo' : 'blur5'));
         const D = direct ? null : pic(cur.m === A ? 'b' : 'a', w, h);
         if (s.k === 'sharp') sharpStage(cur, D, s.a, w, h);
+        else if (GEO[s.k]) geoStage(cur, D, s, w, h);
         else blurStage(cur, D, s.sx, s.sy, w, h);
         cur = D;
       });
@@ -1662,7 +1768,8 @@ function release() {
     return out;
   }
   const creativeOn = (a) => !!(a && (a.ctab || a.hsl || (a.vig && a.vig[0])));
-  // the shot's Sharpen / Gaussian Blur (wave 16): the renderer's stages draw them
+  // the shot's video effects (Sharpen / Gaussian Blur since wave 16, Crop / Transform since
+  // wave 19): the renderer's stages draw them
   const vfxOn = (a) => !!(a && Array.isArray(a.vfx) && a.vfx.length);
 
   function adjustNow() {
@@ -2187,7 +2294,8 @@ function release() {
    * a shot of the cut uses, once a renderer (Renderer `warmStages`), and only while the
    * Program is not playing — the build holds the worker for 10-30 ms (a software GL), which
    * at the cut into the shot, or while the shot before it played, was a held frame. */
-  const VFX_STAGE = { sharpen: 'sharp', gaussian_blur: 'blur' };
+  const VFX_STAGE = { sharpen: 'sharp', gaussian_blur: 'blur', crop: 'geo', transform: 'geo',
+                      horizontal_flip: 'geo', vertical_flip: 'geo', mirror: 'geo', black_white: 'geo' };
   function warmCut() {
     if (!G.ok || playerPlaying()) return;
     const t = window.tl;

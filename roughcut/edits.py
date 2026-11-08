@@ -299,7 +299,7 @@ def anchor_keys(keys: Any, a: float, b: float | None = None, scale: float = 1.0)
     for prop, raw in keys.items():
         if not isinstance(raw, list) or not raw:
             continue
-        nd = 6 if str(prop).startswith("position") else 3
+        nd = 6 if str(prop).startswith(("position", "anchor", "center")) else 3   # (the effects' pairs too)
         lst = [(float(k[0]) * scale, float(k[1])) for k in raw]
         res: list = []
         if any(t < a - _KEY_EPS for t, _ in lst):

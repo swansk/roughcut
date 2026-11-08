@@ -1876,8 +1876,9 @@
    * Effects", beside Effect Controls.
    *
    * Video Effects (wave 14, VFX; verdict 10 punch 8), between the two as Premiere lists
-   * them, in Premiere's own folders: Blur & Sharpen › Gaussian Blur and Sharpen (wave 15), Distort › Transform,
-   * Transform › Crop. One drags onto a clip on V1 (or onto Effect Controls), or a
+   * them, in Premiere's own folders: Blur & Sharpen › Gaussian Blur and Sharpen (wave 15), Distort › Mirror
+   * (wave 19) and Transform, Image Control › Black & White (wave 19), Transform › Crop, Horizontal Flip and
+   * Vertical Flip (wave 19). One drags onto a clip on V1 (or onto Effect Controls), or a
    * double-click puts it on the selected clips: it lands at the bottom of the clip's
    * stack in Effect Controls, one undo (effects.js `vfxAdd`; roughcut/vfx.py the maths). */
   const VFX_MIME = 'application/x-roughcut-video-effect';
@@ -1894,10 +1895,16 @@
         ['sharpen', 'Sharpen', 'crispens the edges: Sharpen Amount (100 adds the fine detail once more)'],
       ] },
       { id: 'vdistort', name: 'Distort', items: [
-        ['transform', 'Transform', 'position, scale, rotation and opacity of its own, apart from Motion'],
+        ['mirror', 'Mirror', 'reflects one side of the picture onto the other, about a line'],
+        ['transform', 'Transform', 'anchor point, position, scale, skew, rotation and opacity of its own, apart from Motion'],
+      ] },
+      { id: 'vimage', name: 'Image Control', items: [
+        ['black_white', 'Black & White', 'turns the picture to greys: each pixel its luma'],
       ] },
       { id: 'vtransform', name: 'Transform', items: [
-        ['crop', 'Crop', 'trims each edge to black by a percentage, with an Edge Feather'],
+        ['crop', 'Crop', 'trims each edge to black by a percentage, with an Edge Feather, or Zoom to fill the frame'],
+        ['horizontal_flip', 'Horizontal Flip', 'mirrors the picture left to right'],
+        ['vertical_flip', 'Vertical Flip', 'turns the picture upside down'],
       ] }] },
     { id: 'video', name: 'Video Transitions', folders: [
       { id: 'dissolve', name: 'Dissolve', items: [
@@ -1910,7 +1917,7 @@
   const FXBIN_OPEN = 'roughcut.fxbin.open';
   // Video Effects starts folded, as Premiere's folders do (its own three open inside it):
   // one click shows them, and the transitions keep their place in view
-  const fxbin = { open: { audio: true, crossfade: true, veffects: false, vblur: true, vdistort: true, vtransform: true,
+  const fxbin = { open: { audio: true, crossfade: true, veffects: false, vblur: true, vdistort: true, vimage: true, vtransform: true,
                           video: true, dissolve: true, ...(store.get(FXBIN_OPEN, null) || {}) },
                   sel: null, q: '' };
 

@@ -1204,10 +1204,12 @@ def crop_graph(controls: dict | None, e: dict, w: int, h: int, rate: Fraction, f
     `f = Feather·W/1920` px wide inside them. Hard and still: four `drawbox`es. Feathered
     or keyed: the mask `rx(x)·ry(y)` (vfx.py's formula) built per frame from a one-pixel
     row and column of `geq` — cheap at any frame size — and the picture laid by it over
-    black."""
+    black. Zoom (wave 19): what the crop keeps stretched to the frame (`crop_zoom_graph`)."""
     sides = ("left", "top", "right", "bottom", "feather")
     vals = {k: _vfx_param(controls, e, k, frames, rate) for k in sides}
     keyed = any(ks for _, ks in vals.values())
+    if vfxmod.value(e, "zoom") == "on":
+        return crop_zoom_graph(vals, keyed, w, h, rate, vin, vout, tag)
     if not keyed:
         L, T, R, B, F = (vals[k][0] for k in sides)
         if max(L, T, R, B, F) <= 0:
@@ -1227,6 +1229,12 @@ def crop_graph(controls: dict | None, e: dict, w: int, h: int, rate: Fraction, f
             if bp > 0:
                 boxes.append(f"drawbox=x=0:y={h - bp}:w={w}:h={bp}:color=black:t=fill")
             return f"[{vin}]{','.join(boxes) or 'null'}[{vout}]"
+    return crop_mask_graph(vals, w, h, rate, vin, vout, tag)
+
+
+def crop_mask_graph(vals: dict, w: int, h: int, rate: Fraction, vin: str, vout: str,
+                    tag: str) -> str:
+    """The Crop's mask rx(x)·ry(y) over black (`crop_graph`), its sides static or keyed."""
     tv = f"(N*{float(1 / rate):.12g})"
 
     def val(k: str) -> str:
@@ -1249,25 +1257,217 @@ def crop_graph(controls: dict | None, e: dict, w: int, h: int, rate: Fraction, f
             f"[{t}bg][{t}fg]overlay=format=yuv420,format=yuv420p[{vout}]")
 
 
+def crop_zoom_graph(vals: dict, keyed: bool, w: int, h: int, rate: Fraction, vin: str,
+                    vout: str, tag: str) -> str | None:
+    """Crop with Zoom: the kept box stretched to the frame (vfx.py `crop_zoom_affine`) — the
+    feathered mask first when it has an Edge Feather (a hard edge never shows: every drawn
+    point reads inside the box) — as one bilinear warp (`affine_warp`), per frame when keyed."""
+    graph, cur = [], vin
+    fv, fk = vals["feather"]
+    if fk or (fv or 0) > 0:
+        graph.append(crop_mask_graph(vals, w, h, rate, cur, f"{tag}k", tag))
+        cur = f"{tag}k"
+    T = f"((in-1)*{float(1 / rate):.12g})"
+
+    def val(k: str):
+        v, ks = vals[k]
+        return float(v) if ks is None else lerp_expr(ks, T)
+    if not keyed:
+        z = vfxmod.crop_zoom_affine(*(float(vals[k][0]) for k in ("left", "top", "right", "bottom")), w, h)
+        if z is None:
+            graph.append(f"[{cur}]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[{vout}]")
+            return ";".join(graph)
+        warp = affine_warp(tuple(float(x) for x in z), w, h, cur, vout, False)
+    else:
+        x0, y0 = _mul(val("left"), w / 100.0), _mul(val("top"), h / 100.0)
+        bw = _add(float(w), _neg(_mul(val("right"), w / 100.0)), _neg(x0))
+        bh = _add(float(h), _neg(_mul(val("bottom"), h / 100.0)), _neg(y0))
+        bw, bh = (b if isinstance(b, float) else f"max({b},0.001)" for b in (bw, bh))
+        zx, zy = _div(float(w), bw), _div(float(h), bh)
+        warp = affine_warp((zx, 0.0, 0.0, zy, _neg(_mul(x0, zx)), _neg(_mul(y0, zy))), w, h, cur, vout, True)
+    if warp is None and not graph:
+        return None                         # Zoom on a crop that keeps the whole frame
+    graph.append(warp or f"[{cur}]null[{vout}]")
+    return ";".join(graph)
+
+
+# The terms of a per-frame warp, folded where they are numbers: a float is a value known for
+# the whole part, a str an ffmpeg expression of the frame's time.
+
+def _ex(x) -> str:
+    return f"{x:.12g}" if isinstance(x, float) else f"({x})"
+
+
+def _mul(*xs):
+    k, rest = 1.0, []
+    for x in xs:
+        if isinstance(x, float):
+            k *= x
+        else:
+            rest.append(x)
+    if k == 0.0 or not rest:
+        return k
+    return "*".join(([_ex(k)] if k != 1.0 else []) + [_ex(x) for x in rest])
+
+
+def _add(*xs):
+    k, rest = 0.0, []
+    for x in xs:
+        if isinstance(x, float):
+            k += x
+        else:
+            rest.append(x)
+    if not rest:
+        return k
+    return "+".join([_ex(x) for x in rest] + ([_ex(k)] if k != 0.0 else []))
+
+
+def _neg(x):
+    return -x if isinstance(x, float) else _mul(-1.0, x)
+
+
+def _fn(name: str, x):
+    if isinstance(x, float):
+        return float(getattr(math, name)(x))
+    return f"{name}({x})"
+
+
+def _div(x, y):
+    if isinstance(y, float):
+        return _mul(x, 1.0 / y)
+    return f"{_ex(x)}/{_ex(y)}"
+
+
+WARP_PAD = PERSPECTIVE_PAD
+
+
+def affine_warp(F: tuple, w: int, h: int, vin: str, vout: str, keyed: bool) -> str | None:
+    """The picture moved by the frame map F = (a, b, c, d, e, f) — q = (a·x + c·y + e,
+    b·x + d·y + f), frame pixels, y down; each term a number or an expression of the frame's
+    time — as one `perspective` warp (sense=source): each output corner reads the source point
+    F⁻¹ sends it to, bilinear, the picture bordered with black so a read outside it is black
+    (the Program's `geo` stage, grade.js, reads its picture the same way). Evaluated once when
+    every term is a number, else per frame. None when F is the identity."""
+    a, b, c, d, e, f = F
+    if not keyed and all(isinstance(x, float) for x in F) and \
+            max(abs(a - 1), abs(b), abs(c), abs(d - 1), abs(e), abs(f)) < 1e-9:
+        return None
+    det = _add(_mul(a, d), _neg(_mul(b, c)))
+    P = WARP_PAD
+    coords = []
+    for k, (ox, oy) in enumerate(((0, 0), (w + 2 * P, 0), (0, h + 2 * P), (w + 2 * P, h + 2 * P))):
+        # output index o is frame point o + 0.5 - P; a source point p is index p - 0.5 + P
+        dx = _add(float(ox + 0.5 - P), _neg(e))
+        dy = _add(float(oy + 0.5 - P), _neg(f))
+        sx = _add(_div(_add(_mul(d, dx), _neg(_mul(c, dy))), det), float(P - 0.5))
+        sy = _add(_div(_add(_mul(a, dy), _neg(_mul(b, dx))), det), float(P - 0.5))
+        coords.append(f"x{k}='{sx if isinstance(sx, str) else f'{sx:.9f}'}'"
+                      f":y{k}='{sy if isinstance(sy, str) else f'{sy:.9f}'}'")
+    ev = "frame" if keyed else "init"
+    return (f"[{vin}]pad={w + 2 * P}:{h + 2 * P}:{P}:{P}:black,"
+            f"perspective={':'.join(coords)}:interpolation=linear:sense=source:eval={ev},"
+            f"crop={w}:{h}:{P}:{P},format=yuv420p[{vout}]")
+
+
 def transform_graph(controls: dict | None, e: dict, w: int, h: int, rate: Fraction,
                     frames: int, vin: str, vout: str, tag: str, cmd_file: Path) -> str | None:
-    """Transform: Motion's own maths (`controls_graph`: the static crop / scale / rotate
-    over black, or the keyed per-frame warp; its Opacity over black, static or by
-    `sendcmd`) with the effect's parameters and keys, under its own pad names."""
-    synth: dict = {}
-    keys: dict = {}
-    for k in ("position_x", "position_y", "scale", "rotation", "opacity"):
-        ks = vfxmod.keys_of(controls, e, k)
+    """Transform (vfx.py THE formula, `transform_affine`): q = P + R(θ)·K·S·(p − A), drawn as
+    the inverse warp (`affine_warp`: bilinear, as Premiere's Transform samples and as the
+    Program's `geo` stage reads), its parameters static or keyed (each a `lerp_expr` of the
+    warp's frame time; a keyed scale held at >= 2 % so no coordinate overflows the warp's fixed
+    point); then its Opacity over black, static or re-set per frame by `sendcmd`."""
+    T = f"((in-1)*{float(1 / rate):.12g})"
+    vals: dict = {}
+    keyed = False
+    for p in vfxmod.KINDS["transform"].params:
+        v, ks = _vfx_param(controls, e, p.key, frames, rate)
         if ks:
-            keys[k] = [[t, v] for t, v in ks]
-    px, py = float(vfxmod.value(e, "position_x")), float(vfxmod.value(e, "position_y"))
-    if (px, py) != (0.5, 0.5):
-        synth["position"] = [px, py]
-    for k in ("scale", "rotation", "opacity"):
-        synth[k] = float(vfxmod.value(e, k))
-    if keys:
-        synth["keys"] = keys
-    return controls_graph(synth, w, h, rate, frames, vin, vout, cmd_file, tag)
+            keyed = keyed or p.key != "opacity"
+            vals[p.key] = (None, ks)
+        else:
+            vals[p.key] = (v, None)
+
+    def val(k: str):
+        v, ks = vals[k]
+        return float(v) if ks is None else lerp_expr(ks, T)
+    rad = math.pi / 180.0
+    sy = val("scale")
+    sx = sy if vfxmod.value(e, "uniform") != "off" else val("scale_width")
+    sy, sx = (max(0.0, s) / 100.0 if isinstance(s, float) else f"max({s}/100,0.02)" for s in (sy, sx))
+    t = _fn("tan", _mul(val("skew"), rad))
+    al, th = _mul(val("skew_axis"), rad), _mul(val("rotation"), rad)
+    ca, sa, co, si = _fn("cos", al), _fn("sin", al), _fn("cos", th), _fn("sin", th)
+    k11, k12 = _add(1.0, _neg(_mul(t, ca, sa))), _neg(_mul(t, ca, ca))
+    k21, k22 = _mul(t, sa, sa), _add(1.0, _mul(t, ca, sa))
+    A = _mul(_add(_mul(co, k11), _neg(_mul(si, k21))), sx)
+    C = _mul(_add(_mul(co, k12), _neg(_mul(si, k22))), sy)
+    B = _mul(_add(_mul(si, k11), _mul(co, k21)), sx)
+    D = _mul(_add(_mul(si, k12), _mul(co, k22)), sy)
+    ax, ay = _mul(val("anchor_x"), float(w)), _mul(val("anchor_y"), float(h))
+    E = _add(_mul(val("position_x"), float(w)), _neg(_add(_mul(A, ax), _mul(C, ay))))
+    Fy = _add(_mul(val("position_y"), float(h)), _neg(_add(_mul(B, ax), _mul(D, ay))))
+    graph, cur = [], vin
+    if not keyed and isinstance(A, float) and abs(A * D - B * C) < 1e-12:
+        graph.append(f"[{cur}]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill[{tag}w]")
+        cur = f"{tag}w"
+    else:
+        warp = affine_warp((A, B, C, D, E, Fy), w, h, cur, f"{tag}w", keyed)
+        if warp:
+            graph.append(warp)
+            cur = f"{tag}w"
+    op_v, op_keys = vals["opacity"]
+    if op_keys:
+        lut, changes = opacity_commands(op_keys, frames, rate, cmd_file, f"lutyuv@{tag}op")
+        cmd = f"sendcmd=f={filter_path(cmd_file)}," if changes else ""
+        graph.append(f"[{cur}]{cmd}{lut}[{vout}]")
+    elif op_v < 100.0 - 1e-9:
+        graph.append(f"[{cur}]{dim_vf(max(0.0, op_v) / 100.0)}[{vout}]")
+    elif graph:
+        graph.append(f"[{cur}]null[{vout}]")
+    return ";".join(graph) or None
+
+
+def mirror_graph(controls: dict | None, e: dict, w: int, h: int, rate: Fraction, frames: int,
+                 vin: str, vout: str, tag: str) -> str:
+    """Mirror (vfx.py THE formula): the reflection about its line is an affine map (its own
+    inverse, `mirror_affine`), so the picture reflected whole is one bilinear `affine_warp`;
+    it is laid over the picture through a mask of alpha = clip(d + 0.5, 0, 1), d the signed
+    distance past the line — a one-pixel row ramp of d (cheap at any size) turned onto the line
+    by a `perspective` warp. The mirror is continuous across its line (both sides are the same
+    picture there), so the mask's one-pixel edge never shows. Static: each warp evaluated
+    once; keyed (the centre, the angle): per frame."""
+    T = f"((in-1)*{float(1 / rate):.12g})"
+    vals = {k: _vfx_param(controls, e, k, frames, rate) for k in ("center_x", "center_y", "angle")}
+    keyed = any(ks for _, ks in vals.values())
+
+    def val(k: str):
+        v, ks = vals[k]
+        return float(v) if ks is None else lerp_expr(ks, T)
+    a = _mul(val("angle"), math.pi / 180.0)
+    co, si = _fn("cos", a), _fn("sin", a)
+    cx, cy = _mul(val("center_x"), float(w)), _mul(val("center_y"), float(h))
+    k = _mul(2.0, _add(_mul(cx, co), _mul(cy, si)))
+    R = (_add(1.0, _mul(-2.0, co, co)), _mul(-2.0, co, si), _mul(-2.0, co, si), _add(1.0, _mul(-2.0, si, si)),
+         _mul(k, co), _mul(k, si))
+    warp = affine_warp(R, w, h, f"{tag}b", f"{tag}r", keyed)
+    # the mask: output index o (point o + 0.5) reads the ramp at (w/2 + d, h/2 + t), index − 0.5;
+    # past the ramp's ends the warp holds its edge (0 kept, 255 reflected)
+    coords = []
+    for n, (ox, oy) in enumerate(((0, 0), (w, 0), (0, h), (w, h))):
+        dx, dy = _add(float(ox + 0.5), _neg(cx)), _add(float(oy + 0.5), _neg(cy))
+        d = _add(_mul(dx, co), _mul(dy, si))
+        t = _add(_mul(dy, co), _neg(_mul(dx, si)))
+        sx, sy = _add(d, w / 2.0 - 0.5), _add(t, h / 2.0 - 0.5)
+        coords.append(f"x{n}='{sx if isinstance(sx, str) else f'{sx:.9f}'}'"
+                      f":y{n}='{sy if isinstance(sy, str) else f'{sy:.9f}'}'")
+    t_ = tag
+    return (f"[{vin}]split=3[{t_}a][{t_}b][{t_}m];"
+            f"{warp};"
+            f"[{t_}m]crop={w}:2:0:0,format=gray,crop={w}:1:0:0,geq=lum='255*clip(X+1-{w / 2:g},0,1)',"
+            f"scale={w}:{h}:flags=neighbor,perspective={':'.join(coords)}:interpolation=linear:sense=source"
+            f":eval={'frame' if keyed else 'init'}[{t_}k];"
+            f"[{t_}r][{t_}k]alphamerge[{t_}f];"
+            f"[{t_}a][{t_}f]overlay=format=yuv420,format=yuv420p[{vout}]")
 
 
 def blur_graph(controls: dict | None, e: dict, w: int, h: int, rate: Fraction, frames: int,
@@ -1363,6 +1563,14 @@ def vfx_graph(controls: dict | None, w: int, h: int, rate: Fraction, frames: int
             g = crop_graph(controls, e, w, h, rate, frames, cur, out, tag)
         elif e["kind"] == "transform":
             g = transform_graph(controls, e, w, h, rate, frames, cur, out, tag, cmd)
+        elif e["kind"] == "mirror":
+            g = mirror_graph(controls, e, w, h, rate, frames, cur, out, tag)
+        elif e["kind"] == "black_white":
+            # vfx.py's Black & White: the Y' plane kept, the chroma neutral (wave 19, EFFECTS2)
+            g = f"[{cur}]lutyuv=u=128:v=128[{out}]"
+        elif e["kind"] in ("horizontal_flip", "vertical_flip"):
+            # vfx.py's Flip: pixel for pixel (wave 19, EFFECTS2)
+            g = f"[{cur}]{'hflip' if e['kind'] == 'horizontal_flip' else 'vflip'}[{out}]"
         elif e["kind"] == "sharpen":
             g = sharpen_graph(controls, e, w, h, rate, frames, cur, out, tag, cmd)
         else:
