@@ -16,6 +16,12 @@ Run with:
 """
 
 from __future__ import annotations
+import sys as _sys
+from pathlib import Path as _Path
+
+# The repo root on sys.path for every test file, so one run alone imports `roughcut`
+# (test_find, test_find_union and test_verify only collected after another file put it there).
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 
 import json
 import subprocess
