@@ -10,7 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
-- Wave 20 DIARIZE: merged with TELEM, K5UI, VERIFY, EVAL and LOCALGPU; \`speakers\` shares the \`gpu\` worker pool with \`local\`, is a background stage beside it, and the Index panel lists it ("Speakers", re-runnable as speakers/diarize).
+- Wave 20 DIARIZE: merged with TELEM, K5UI, VERIFY, EVAL and LOCALGPU; `speakers` shares the `gpu` worker pool with `local`, is a background stage beside it, and the Index panel lists it ("Speakers", re-runnable as speakers/diarize).
 - Wave 20 DIARIZE: nobody is the wearer when the best candidate is quieter than -36 dB in the speech band (Killington CLIP_10's lone 2.9 s voice at -41.7 dB is not the camera's owner).
 - Wave 20 DIARIZE: diarize.py caps its own VRAM at 3 GB (a cuDNN autotune workspace took 8.9 GB and 40 s on some clips; capped it takes 0.4 GB and 5 s), and the wearer pick ignores speakers who talk under a fifth of the main talker's time (a bystander's 2.7 s burst out-shouted the wearer's 23 s monologue on CLIP_01).
 - Wave 20 DIARIZE: the `speakers` index stage runs after asr as a background stage (offered last, never holds a clip's release), the diarizer out of process at nice 5; skipped with "not available — add a HuggingFace token" when there is no token, and reopened when one appears.
@@ -2417,7 +2417,7 @@ same commit. Releases move entries into a dated version section.
   lane `agent/tl-keys`).** `app/static/timeline-keys.js`, loaded after the foundation and
   registered by wrapping `tl.mount` (the foundation has no mounted event); a keydown
   listener on `window` in the capture phase that stops only the keys it owns, so space,
-  `u`, the brackets, the foundation's `+ - \` / ⌘Z / ⌘⇧Z and the switcher's `o` keep
+  `u`, the brackets, the foundation's `+ - ` / ⌘Z / ⌘⇧Z and the switcher's `o` keep
   their owners; nothing fires while typing. **JKL** shuttle on the monitor: `L` plays,
   again for 2× / 4× / 8× (`playbackRate` and `defaultPlaybackRate` on both buffers, so the
   hand-over at a cut keeps the speed); `J` reverses by driving `currentTime` from rAF as
@@ -2432,7 +2432,7 @@ same commit. Releases move entries into a dated version section.
   transcript line as why; `⌥I` / `⌥O` and `Esc` clear; playing the cut, `I` says to open
   a clip and `O` stays the switcher's. A **Timeline** section in the Keys panel rendered
   from the module's one table, with the trim lane's `,` `.` `S` and the foundation's
-  `+ − \`; `?` brings it up. `timeline.css` gains the marks bar and the map's rules.
+  `+ − `; `?` brings it up. `timeline.css` gains the marks bar and the map's rules.
   `test_timeline_keys.py`: eight playwright tests (L stacks to 8× and K resets both
   buffers; J moves `currentTime` back over 300 ms, stacks, crosses the cut onto CLIP_A's
   out-point; K+L; `↓` from shot 1 lands at 2.0 s with shot 2 selected, `↑` / Home / End;
@@ -2548,7 +2548,7 @@ same commit. Releases move entries into a dated version section.
   Thirteen playwright tests against the synthetic bin: the ruler's labels and end mark
   agree with the seed EDL and `#posTotal`; blocks carry the ids the page was handed and
   the first save persists, and at the fit zoom the two 2 s shots share the viewport
-  equally; `+` doubles the px/s and `\` fits; a click selects the block and its card
+  equally; `+` doubles the px/s and `` fits; a click selects the block and its card
   (and a card click selects the block), ⇧-click ranges, ⌘-click toggles, the empty ruler
   clears; a click on the ruler at 3 s parks the monitor on shot 2 at 1.0 s, paused, with
   the playhead at 3 s and space resuming from there; the playhead follows playback;
@@ -2566,7 +2566,7 @@ same commit. Releases move entries into a dated version section.
   the in-point (lazy, one frame per settled trim, never one per nudge), the clip's hue, the
   stem, the duration and the shot's strongest line, a mark on any edge that opens
   mid-sentence or cuts a line off — and the playhead as one line across the whole cut at its
-  film time. `+`/`-` zoom (⌘/ctrl + wheel around the cursor), `\` fits, ⇧ + wheel pans.
+  film time. `+`/`-` zoom (⌘/ctrl + wheel around the cursor), `` fits, ⇧ + wheel pans.
   Blocks carry the server's `data-id`, never an index; the module's selection is a set of
   ids mapped onto app.js's index `sel` at the boundary (click selects and plays from there,
   ⇧-click ranges, ⌘-click toggles, a click on the empty ruler or lane clears — the cards
