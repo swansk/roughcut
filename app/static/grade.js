@@ -2022,7 +2022,7 @@ function release() {
       if (G.cutPre && G.cutPre.v === v && G.cutPre.fs.length && playerPlaying()) {
         // (wave 18 PLAY9) the cut's kept frames are still going up (drainCut): this one after them
         try { G.cutPre.fs.push(new VideoFrame(v)); } catch (e) { /* the next one */ }
-      } else if (md && G.worker && !G.mix && playerPlaying() && !v.paused && v.playbackRate < PACE_BELOW) {
+      } else if (md && G.worker && (!G.mix || !mixFaster(v)) && playerPlaying() && !v.paused && v.playbackRate < PACE_BELOW) {
         // A slowed shot: on the pacer's clock (paceDue), the worker putting each frame up when it is
         // due. (wave 19 PLAY10, verdict 15 punch 3) Near a dissolve too (G.mixZone): drawn as they came
         // there, from 1.2 s before the window, the buffer's early-and-late first frames were on screen
