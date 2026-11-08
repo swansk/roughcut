@@ -523,3 +523,20 @@ def felt_words(clip: str, directory: Path | str | None = None) -> list[dict]:
         out.append({"start": e["start"], "end": e["end"], "kind": e["kind"],
                     "notable": e["kind"] == "air", "what": f"{e['text']} {_WORDS.get(e['kind'], '')}"})
     return out
+
+
+def main(argv: list[str] | None = None) -> int:
+    """`python -m roughcut.telemetry_events build <clip> <video> <dir> [--force]`: the
+    server runs this out of process (nice 19), because the rules are pure Python and a
+    worker thread running them holds the GIL against the event loop."""
+    a = list(sys.argv[1:] if argv is None else argv)
+    if len(a) < 4 or a[0] != "build":
+        print("usage: build <clip> <video> <dir> [--force]", file=sys.stderr)
+        return 2
+    side = build_sidecar(a[1], Path(a[2]), a[3], force="--force" in a[4:])
+    print("no gpmd stream" if side is None else f"{len(side['events'])} events")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

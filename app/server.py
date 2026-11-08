@@ -6505,7 +6505,11 @@ def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
         # The timed events (wave 20, roughcut/telemetry_events.py): airs, impacts, speed
         # drops, stops and lifts with their numbers, cached on the file's signature.
         try:
-            telemetry_events.build_sidecar(clip, clip_path(clip), telemetry_dir(), force=forced)
+            # Out of process: pure Python, ~1 s a clip, and on a worker thread it would hold
+            # the GIL against the event loop. Requests only ever read the sidecar.
+            _run_tool(["nice", "-n", "19", sys.executable,
+                       str(HERE.parent / "roughcut" / "telemetry_events.py"), "build", clip, str(clip_path(clip)), str(telemetry_dir()),
+                       *(["--force"] if forced else [])])
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"the felt events failed: {exc}") from exc
         return 0.0
