@@ -188,3 +188,81 @@ def test_find_union_is_scored_from_embeddings_and_cached_vectors_or_says_skipped
     (evald / ev.VECTORS).write_text(json.dumps({"vectors": {q["query"]: [0, 1, 0, 0] for q in qs}}))
     res = ev.evaluate(work, "tiny", evald, local)
     assert res["find_union"]["hit3_overlap"][1] >= 1 and res["headline"]["find_union_overlap"] is not None
+
+
+# ------------------------------------------------------------ the recorded checker (wave 21 EVALREV)
+
+def _record(**verdicts):
+    """The tiny bin's 6 g impact is a hero shot, so the router sends it too: record it (confirmed)."""
+    verdicts.setdefault("CLIP_A:impact:50.00", {"verdict": "reject", "kind": "none", "who": "wearer", "start": None,
+                                                 "end": None, "confidence": "high", "why": "handling", "model": "m"})
+    return {"version": 1, "bin": "tiny", "rev": "t", "mode": "hybrid", "verdicts": verdicts}
+
+
+def _v(verdict, confidence="high", kind="air"):
+    return {"verdict": verdict, "kind": kind, "who": "wearer", "start": None, "end": None,
+            "confidence": confidence, "why": "recorded", "model": "m"}
+
+
+def test_the_replay_runs_the_revs_router_and_settle_on_recorded_answers(tmp_path):
+    work = _bin(tmp_path, {"CLIP_A:air:10.00": {"verdict": "confirm", "confidence": "high"}})   # NOT read in replay
+    rec = _record(**{"CLIP_A:air:10.00": _v("reject"), "CLIP_A:air:30.00": _v("confirm")})
+    res = ev.evaluate(work, "tiny", _set(tmp_path), record=rec, replay_dir=tmp_path / "rp")
+    rp = res["replay"]
+    assert rp["recorded"] == 3 and rp["answered"] == 3 and rp["unrecorded"] == [] and rp["not_routed"] == []
+    # the sensor found the 10 s air, the recorded checker threw it out: lost, and the asserted layer misses it
+    assert res["checker_lost"] == ["air-a-10"]
+    assert res["headline"]["checker_lost"] == 1 and res["layers"]["asserted"]["recall"]["conf:high"] == [0.0, 1]
+    assert res["certainty"]["telemetry_events"] == {"claude": 1, "rejected": 1}
+    assert res["certainty"]["verdicts"] == 3        # from the replay, not from index/<bin>.verify.json
+
+
+def test_a_low_confidence_answer_is_settled_by_the_revs_code_not_the_recording(tmp_path):
+    rec = _record(**{"CLIP_A:air:10.00": _v("reject", "low"), "CLIP_A:air:30.00": _v("confirm")})
+    res = ev.evaluate(_bin(tmp_path), "tiny", _set(tmp_path), record=rec, replay_dir=tmp_path / "rp")
+    assert res["checker_lost"] == [] and res["certainty"]["telemetry_events"] == {"claude": 1, "unsure": 1}
+
+
+def test_an_event_the_rev_routes_but_the_recording_never_saw_is_named(tmp_path):
+    rec = _record(**{"CLIP_A:air:10.00": _v("confirm")})            # the 30 s air is an air: the router sends it
+    res = ev.evaluate(_bin(tmp_path), "tiny", _set(tmp_path), record=rec, replay_dir=tmp_path / "rp")
+    assert res["replay"]["unrecorded"] == ["CLIP_A_air_30.00"] and res["replay"]["answered"] == 2
+    ok, line = ev.gate_line(res, None)
+    assert "STALE RECORDING" in line and "2 of 3 routed" in line
+
+
+def test_the_replay_writes_nothing_under_the_inputs_and_calls_no_model(tmp_path):
+    from roughcut import inference
+    work = _bin(tmp_path)
+    before = sorted(p.relative_to(work).as_posix() for p in work.rglob("*"))
+    rec = _record(**{"CLIP_A:air:10.00": _v("confirm"), "CLIP_A:air:30.00": _v("confirm")})
+    ev.evaluate(work, "tiny", _set(tmp_path), record=rec, replay_dir=tmp_path / "rp")
+    assert before == sorted(p.relative_to(work).as_posix() for p in work.rglob("*"))
+    assert inference._OVERRIDE is None or inference._OVERRIDE.name != "recorded"      # put back
+    assert (tmp_path / "rp" / "replay-ledger.jsonl").read_text().count("\n") == 3       # the run dir, not ~/work
+
+
+def test_cli_frozen_modes(tmp_path):
+    work, evald = _bin(tmp_path), _set(tmp_path)
+    args = ["--frozen", str(work), "--bin", "tiny", "--eval", str(evald), "--baseline", str(tmp_path / "nobase"), "--check"]
+    assert ev.main(args + ["--record", str(tmp_path / "missing.json")]) == 3                # no recording: skipped (AMBER)
+    rec = tmp_path / "rec.json"
+    rec.write_text(json.dumps(_record(**{"CLIP_A:air:10.00": _v("confirm")})))
+    assert ev.main(args + ["--record", str(rec)]) == 4                                      # stale (AMBER)
+    rec.write_text(json.dumps(_record(**{"CLIP_A:air:10.00": _v("confirm"), "CLIP_A:air:30.00": _v("confirm")})))
+    assert ev.main(args + ["--record", str(rec)]) == 0
+    base = tmp_path / "base.json"
+    base.write_text(json.dumps({"headline": {"checker_lost": 0}}))
+    rec.write_text(json.dumps(_record(**{"CLIP_A:air:10.00": _v("reject"), "CLIP_A:air:30.00": _v("confirm")})))
+    assert ev.main(["--frozen", str(work), "--bin", "tiny", "--eval", str(evald), "--baseline", str(base),
+                    "--record", str(rec), "--check"]) == 1                                  # RED
+
+
+def test_capture_record_keeps_the_answer_before_settle(tmp_path):
+    work = _bin(tmp_path, {"CLIP_A:air:10.00": {"verdict": "unsure", "raw_verdict": "reject", "kind": "none",
+                                                "who": "wearer", "confidence": "low", "why": "w", "model": "m", "at": 1}})
+    out = tmp_path / "rec.json"
+    assert ev.main(["--capture-record", str(work), "--bin", "tiny", "--record", str(out), "--rev", "abc"]) == 0
+    got = json.loads(out.read_text())
+    assert got["rev"] == "abc" and got["verdicts"]["CLIP_A:air:10.00"]["verdict"] == "reject"
+    assert "at" not in got["verdicts"]["CLIP_A:air:10.00"]

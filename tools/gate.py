@@ -41,14 +41,23 @@ Checks (each one line in summary.md, exit 0 only if all are green):
            bin whose proxy just landed, the colour measurement patched to 10 s; green when
            the timeline's blocks and the Program frame are up in <= BOOT_CUT_MAX_S. No
            record (--quick, a narrowed suite) runs the test alone first.
-  understanding  tools/eval_understanding.py (wave 20 EVAL): recall of Karl's checked Killington
-           events (air, fall...), negatives still asserted, false events per negative minute and
-           Find hit@3, scored offline from the preview copy's sidecars against
-           research/R12-understanding/eval/baseline.json; a regression fails, an improvement
-           suggests updating the baseline; skipped (green, with the reason) when the preview
-           work dir is absent. No model call, ~1 s.
+  understanding  tools/eval_understanding.py --frozen (wave 21 EVALREV): THE REV's own index
+           pipeline (ranking, local join, router, checker settle, demotion) on a frozen read-only
+           copy of Killington's inputs ($ROUGHCUT_UNDERSTANDING_FROZEN, default
+           ~/roughcut-loop/understand/frozen-inputs/killington-neutral), with the verdicts of one
+           real Hybrid pass (research/R12-understanding/eval/recorded-verdicts.json) replayed by a
+           scripted backend: recall of Karl's checked events, negatives asserted, false events per
+           negative minute, Find hit@3, and `checker_lost` (a labelled event the sensor found and
+           the checker threw out) against research/R12-understanding/eval/baseline.json. A
+           regression is RED. Frozen inputs or the recording missing, or a rev that routes events
+           the recording never saw, is AMBER, never green. No model call, ~1 s, writes only under
+           the gate's run dir.
   hygiene  no model ID literal outside roughcut/config.py; no `import anthropic` outside
            roughcut/inference; no Windows path literal in code.
+A suite that outruns its budget ($ROUGHCUT_GATE_SUITE_TIMEOUT, 7200 s; it took 3723 s beside a
+first pass in verdict 16) is killed and is a RED "TIMED OUT" line; screens, journey, boot,
+understanding and hygiene still run and summary.md is still written. A check that raises ends in a
+RED "CRASHED" line and a summary of what ran.
 --quick skips the full suite (screens + journey + hygiene, ~2 min; the journey alone is
 ~40-60 s on the fixture, so it runs in both).
 
@@ -92,6 +101,30 @@ def run(cmd: list[str], cwd: Path, log: Path, env: dict | None = None, timeout: 
     with log.open("w") as f:
         p = subprocess.run(cmd, cwd=cwd, stdout=f, stderr=subprocess.STDOUT, env=env, timeout=timeout)
     return p.returncode
+
+
+SUITE_TIMEOUT_S = int(os.environ.get("ROUGHCUT_GATE_SUITE_TIMEOUT", 7200))
+"""The full suite's budget. Verdict 16: it took 3723 s beside a first pass and the old 3600 s
+budget ended the whole gate in a traceback with no summary. Twice that, and a suite that still
+runs out of it is a RED line, not a crash (`run_soft`)."""
+
+
+def run_soft(cmd: list[str], cwd: Path, log: Path, env: dict | None = None,
+             timeout: int = 3600) -> tuple[int, bool]:
+    """`run`, but a timeout is an answer, not an exception: (rc, timed_out). The command gets
+    its own process group and the whole group is killed (pytest's browsers and servers with it)."""
+    with log.open("w") as f:
+        p = subprocess.Popen(cmd, cwd=cwd, stdout=f, stderr=subprocess.STDOUT, env=env,
+                             start_new_session=True)
+        try:
+            return p.wait(timeout=timeout), False
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(p.pid, signal.SIGKILL)
+            except OSError:
+                pass
+            p.wait()
+            return -9, True
 
 
 def failed_ids(junit: Path) -> list[str]:
@@ -448,20 +481,33 @@ def boot_check(snap: Path, run_dir: Path, env: dict) -> tuple[bool, str]:
                    f"{'' if green else ' — ' + str(rec.get('outcome')).upper()}")
 
 
-def understanding_check(snap: Path, run_dir: Path, env: dict) -> tuple[bool, str]:
-    """Footage understanding (wave 20 EVAL): tools/eval_understanding.py scores what the planner
-    and the board assert on the Killington preview copy's sidecars (offline, no model call, a
-    second or two) against Karl's checked test set and the committed baseline. Skipped, with the
-    reason, when that work dir is not on this machine (CI, a lane's box); red on a regression."""
-    work = Path(os.environ.get("ROUGHCUT_UNDERSTANDING_WORK", "/mnt/roughcut/work/app-redesign"))
-    if not (work / "telemetry" / "killington-neutral").is_dir():
-        return True, f"skipped: no Killington preview work dir at {work}"
+FROZEN_INPUTS = Path(os.environ.get("ROUGHCUT_UNDERSTANDING_FROZEN",
+                                    Path.home() / "roughcut-loop/understand/frozen-inputs/killington-neutral"))
+
+
+def understanding_check(snap: Path, run_dir: Path, env: dict) -> tuple[bool, str, bool]:
+    """Footage understanding (wave 21 EVALREV): tools/eval_understanding.py scores THE REV's own
+    index pipeline (its ranking, local join, router, checker `settle`, demotion) on a frozen
+    read-only copy of Killington's inputs, with the verdicts of one real Hybrid pass replayed by a
+    scripted backend (no model call), against Karl's checked test set and the committed baseline.
+    Everything it writes goes under the gate's run dir. (green, line, amber): a regression is RED;
+    inputs or the recording missing, or a rev that routes events the recording never saw, is AMBER
+    (never green: it measured nothing, or not all of it)."""
+    if not (FROZEN_INPUTS / "telemetry" / "killington-neutral").is_dir():
+        return True, (f"SKIPPED, not measured: no frozen Killington inputs at {FROZEN_INPUTS} "
+                      "(tools/eval_understanding.py --freeze-from <work> --freeze-to <dir>)"), True
     log = run_dir / "understanding.log"
-    rc = run([sys.executable, "tools/eval_understanding.py", "--work", str(work), "--check",
-              "--out", str(run_dir / "understanding")], snap, log, env, timeout=120)
+    rc, timed_out = run_soft([sys.executable, "tools/eval_understanding.py", "--frozen", str(FROZEN_INPUTS),
+                              "--check", "--out", str(run_dir / "understanding")], snap, log, env, timeout=300)
     lines = [ln for ln in log.read_text(errors="replace").splitlines() if ln.startswith("understanding:")]
     line = lines[-1][len("understanding:"):].strip() if lines else f"no result (rc={rc}); see {log}"
-    return rc == 0, line
+    if timed_out:
+        return False, f"timed out after 300 s; see {log}", False
+    if rc == 3:
+        return True, "SKIPPED, not measured: " + line.removeprefix("skipped,").strip(), True
+    if rc == 4:
+        return True, line, True
+    return rc == 0, line, False
 
 
 def main() -> int:
@@ -493,6 +539,8 @@ def main() -> int:
     results: list[tuple[str, bool, str]] = []
     amber: set[str] = set()          # green, but not proven: the run is AMBER, not GREEN
     t_all = time.time()
+    _CTX.update(results=results, amber=amber, run_dir=run_dir, sha=sha, stamp=stamp, ref=ref, snap=snap,
+                t_all=t_all)
 
     # ---- browser ----
     print("browser: making Playwright's Chromium match (playwright install chromium)…", flush=True)
@@ -515,14 +563,18 @@ def main() -> int:
         perf_before = perf_run(snap, run_dir, env, "pre")
         junit = run_dir / "suite.xml"
         suite = os.environ.get("ROUGHCUT_GATE_SUITE", "app/tests")
-        rc = run(UV + [suite, "-q", "-p", "no:cacheprovider", f"--junitxml={junit}",
-                       "--deselect", PERF_ID], snap, run_dir / "suite.log", env)
-        c = counts(junit) if junit.exists() else {"passed": 0, "failed": -1, "skipped": 0}
+        rc, suite_timed_out = run_soft(UV + [suite, "-q", "-p", "no:cacheprovider", f"--junitxml={junit}",
+                                          "--deselect", PERF_ID], snap, run_dir / "suite.log", env,
+                                       timeout=SUITE_TIMEOUT_S)
+        try:
+            c = counts(junit) if junit.exists() else {"passed": 0, "failed": -1, "skipped": 0}
+        except ET.ParseError:                     # a killed run leaves a half-written XML
+            c = {"passed": 0, "failed": -1, "skipped": 0}
         flaky, broken = [], []
-        for tid in failed_ids(junit):
+        for tid in (failed_ids(junit) if not suite_timed_out else []):
             n = len(flaky) + len(broken)
-            ok = run(UV + [tid, "-q", "-p", "no:cacheprovider"], snap, run_dir / f"rerun-{n}.log",
-                     env, timeout=900) == 0
+            ok = run_soft(UV + [tid, "-q", "-p", "no:cacheprovider"], snap, run_dir / f"rerun-{n}.log",
+                          env, timeout=900) == (0, False)
             (flaky if ok else broken).append(tid)
         print("perf: test_latency_under_load after the suite…", flush=True)
         perf_after_rec, waited = perf_after(snap, run_dir, env, perf_before)
@@ -533,9 +585,13 @@ def main() -> int:
             [("before the suite", perf_before), (after_label, perf_after_rec)], os.cpu_count() or 4)
         if not perf_ok and PERF_ID not in broken:
             broken.append(PERF_ID)
-        green = c["failed"] >= 0 and not broken and (rc == 0 or c["failed"] > 0)
+        green = c["failed"] >= 0 and not broken and (rc == 0 or c["failed"] > 0) and not suite_timed_out
         line = (f"{c['passed']} passed, {c['failed']} failed in the full run, {c['skipped']} skipped"
                 f" · {len(flaky)} flaky (pass alone) · {len(broken)} broken · {time.time() - t0:.0f} s")
+        if suite_timed_out:
+            line = (f"TIMED OUT: the suite ran past its {SUITE_TIMEOUT_S} s budget "
+                    f"(ROUGHCUT_GATE_SUITE_TIMEOUT) and was killed · no pass count · {time.time() - t0:.0f} s"
+                    f" · see {run_dir / 'suite.log'}; the checks that can still run follow")
         if suite != "app/tests":
             line += f" · NARROWED to {suite} (ROUGHCUT_GATE_SUITE): not the gate's suite"
         line += "\n    " + perf_line
@@ -552,8 +608,8 @@ def main() -> int:
     if browser_ok:
         t0 = time.time()
         env_s = dict(env, ROUGHCUT_BUDGET_SHOTS=str(shots))
-        rc = run(UV + ["app/tests/test_budget.py", "-q", "-s", "-p", "no:cacheprovider"], snap,
-                 run_dir / "screens.log", env_s)
+        rc, _ = run_soft(UV + ["app/tests/test_budget.py", "-q", "-s", "-p", "no:cacheprovider"], snap,
+                         run_dir / "screens.log", env_s, timeout=3600)
         budget = [ln.strip() for ln in (run_dir / "screens.log").read_text().splitlines()
                   if ln.strip().startswith("budget ")]
         pngs = sorted(p.name for p in shots.glob("*.png")) if shots.exists() else []
@@ -574,8 +630,11 @@ def main() -> int:
     if browser_ok:
         results.append(("boot", *boot_check(snap, run_dir, env)))
 
-    # ---- understanding (wave 20 EVAL): skipped without the Killington preview work dir ----
-    results.append(("understanding", *understanding_check(snap, run_dir, env)))
+    # ---- understanding (wave 21 EVALREV): the rev's own pipeline on frozen inputs, recorded checker ----
+    u_green, u_line, u_amber = understanding_check(snap, run_dir, env)
+    results.append(("understanding", u_green, u_line))
+    if u_amber:
+        amber.add("understanding")
 
     # ---- hygiene ----
     problems = []
@@ -593,16 +652,24 @@ def main() -> int:
             problems.append(f"Windows path literal in {rel}")
     results.append(("hygiene", not problems, "clean" if not problems else "; ".join(problems)))
 
+    return write_summary(_CTX)
+
+
+def write_summary(ctx: dict) -> int:
+    """summary.md / summary.json from what has run so far; returns the exit code. Called at the
+    end of `main`, and from the crash guard when a check raised: a gate always leaves a summary."""
+    results, amber = ctx["results"], ctx["amber"]
     status, code = run_status(results, amber)
     ok = code == 0
-    summary = [f"# gate {sha} · {stamp} · {status} · {time.time() - t_all:.0f} s",
-               f"ref {ref} = {sha}; frozen copy {snap}", ""]
+    run_dir = ctx["run_dir"]
+    summary = [f"# gate {ctx['sha']} · {ctx['stamp']} · {status} · {time.time() - ctx['t_all']:.0f} s",
+               f"ref {ctx['ref']} = {ctx['sha']}; frozen copy {ctx['snap']}", ""]
     summary += [f"- **{name}** {'◐ AMBER' if name in amber else '✓' if g else '✗'} {line}"
                 for name, g, line in results]
-    summary += ["", f"screens: {shots}", f"journey: {jdir}"]
+    summary += ["", f"screens: {run_dir / 'screens'}", f"journey: {run_dir / 'journey'}"]
     (run_dir / "summary.md").write_text("\n".join(summary) + "\n")
     (run_dir / "summary.json").write_text(json.dumps(
-        {"sha": sha, "green": ok, "status": status,
+        {"sha": ctx["sha"], "green": ok, "status": status,
          "results": [{"name": n, "green": g and n not in amber, "amber": n in amber, "line": l}
                      for n, g, l in results]},
         indent=1))
@@ -611,5 +678,22 @@ def main() -> int:
     return code
 
 
+_CTX: dict = {}
+
+
+def guarded_main() -> int:
+    """`main`, and a RED summary.md (with every line that did run) if anything raised."""
+    try:
+        return main()
+    except Exception as exc:                                   # noqa: BLE001
+        import traceback
+        if not _CTX:
+            raise
+        tb = traceback.format_exc().strip().splitlines()
+        _CTX["results"].append(("gate", False, f"CRASHED: {type(exc).__name__}: {exc} · "
+                                f"{tb[-3].strip() if len(tb) >= 3 else ''} · the checks after it did not run"))
+        return write_summary(_CTX)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(guarded_main())

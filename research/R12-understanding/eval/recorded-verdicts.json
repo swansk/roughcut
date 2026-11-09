@@ -1,0 +1,770 @@
+{
+ "version": 1,
+ "bin": "killington-neutral",
+ "rev": "b2cbc31",
+ "mode": "hybrid",
+ "note": "captured by tools/eval_understanding.py --capture-record",
+ "captured_from": "/home/karl/roughcut-loop/judge16/work",
+ "verdicts": {
+  "CLIP_01:impact:58.00": {
+   "verdict": "confirm",
+   "kind": "fall",
+   "who": "wearer",
+   "start": 57.3,
+   "end": 58.7,
+   "confidence": "medium",
+   "why": "From 57.30 s the camera drops into the snow after a branch strike. Snow fills the frame at 57.30-58.30 s, the roll reaches 83-92\u00b0 at 58.05-58.17 s, and a boot shows at 58.17-58.30 s. The view then tumbles at 58.42 s and comes back up to the trees by 58.55-58.92 s, with upright riding again from 59.05 s. This looks like a slow tumble in deep powder, which fits the low GPS speed of about 1 m/s, not a handled camera.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_01:impact:78.10": {
+   "verdict": "confirm",
+   "kind": "fall",
+   "who": "wearer",
+   "start": 77.9,
+   "end": 78.65,
+   "confidence": "medium",
+   "why": "The ski is in view and steady until 77.78 s. From 77.90 s the view lurches and snow fills the frame at 78.03-78.28 s, which matches the 10.3 g impact at 78.2 s. The camera then rolls to 60-100 degrees and looks up at the trees. By 79.15-79.40 s the wearer's goggles and body are in view, so they are lying on their back in powder. This is a slow tip-over fall (GPS about 0.5 m/s) with a real going-down onset, not a handled camera.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_01:speed_drop:184.50": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "high",
+   "why": "The wearer skis smoothly toward a standing person and slows to a controlled stop (184.50-187.38 s). The poles stay in the wearer's hands and the camera stays upright, with no tumbling or snow impact. The speed drop is a deliberate stop beside another skier, not a fall.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_01:speed_drop:68.80": {
+   "verdict": "confirm",
+   "kind": "crash",
+   "who": "wearer",
+   "start": 68.95,
+   "end": 71.67,
+   "confidence": "high",
+   "why": "The view swings toward a tree trunk at 68.8-69.2 s. The camera then tumbles, with roll reaching about -57\u00b0 to -66\u00b0 and the trees blurring (69.3-70.2 s). It ends against snow at 70.3-70.5 s, and from 70.67 s the frames are dark and bluish, as if the camera is buried or pressed into snow. This matches the speed drop from 4.8 to 0.1 m/s with a 4.8 g impact, and the camera stays at snow level to the end of the window. This is a real crash, ending with the camera in the snow.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_02:air:102.13": {
+   "verdict": "confirm",
+   "kind": "air",
+   "who": "wearer",
+   "start": 102.13,
+   "end": 102.47,
+   "confidence": "medium",
+   "why": "From 102.17 to 102.67 the wearer's skis rise and point up in the frame as the slope drops away over a crest. At 102.80 the view tilts about -44\u00b0 with the skis angled up and the camera close to the snow, which fits the 4.9 g landing. After that, a glove and arm appear at snow level (103.05-103.42), so a fall or tumble probably follows the landing.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_02:air:137.36": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "The skis and glove appear at 137.00-137.25 s as the wearer pitches the view down over rough snow. At 137.36-137.63 s the view lifts to the horizon, the terrain stays continuous, and there are no skis hanging, no ground falling away and no landing jolt or spray. This looks like an unweighting over a crest during ordinary riding, with no flight visible.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_02:impact:10.00": {
+   "verdict": "confirm",
+   "kind": "crash",
+   "who": "wearer",
+   "start": 9.18,
+   "end": 10.7,
+   "confidence": "medium",
+   "why": "The wearer's view tumbles. Skis and poles swing up at 9.18-9.43, the horizon inverts (roll near -170\u00b0) and sky and snow alternate from 9.55 to 10.55, and the view is blocked by the body and a glove at 9.68-9.93. The 10.0 g impact at 10.1 falls inside this tumble. The footage after it (10.8 onward) shows someone lying and tumbling in the snow, then a glove over the lens at 11.18-11.30, which fits a fall rather than ordinary riding.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_02:impact:11.60": {
+   "verdict": "retime",
+   "kind": "camera-toss",
+   "who": "wearer",
+   "start": 10.9,
+   "end": 12.3,
+   "confidence": "medium",
+   "why": "The camera is not on a falling rider's helmet. At 10.90 it looks back at the wearer's body and orange glove. At 11.15-11.28 a glove fills the lens, as if the camera is being grabbed or released. After that the roll swings wildly (11.40-12.15) through sky, snow and a ski, and from 12.28 the view is dark, as if the camera is lying in or under snow. This reads as a handled or thrown camera tumbling, not a fall by the wearer. The 13.6 g impact at 11.7 is the camera hitting snow.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_02:impact:12.20": {
+   "verdict": "confirm",
+   "kind": "crash",
+   "who": "wearer",
+   "start": 10.88,
+   "end": 12.3,
+   "confidence": "medium",
+   "why": "At 10.75 the wearer is skiing normally. From 10.88 the view tumbles: the roll swings wildly, a glove and fingers cross the lens at 11.0-11.25, and sky and snow alternate. A ski and snow hit the lens at 12.12, and from 12.25 on the frames are dark and static, as if the camera is buried in snow. That fits the 13.8 g impact at 12.2. The tumbling began earlier, around 10.9, so the crash spans roughly 10.9-12.3 s.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_02:impact:121.70": {
+   "verdict": "confirm",
+   "kind": "fall",
+   "who": "wearer",
+   "start": 121.25,
+   "end": 121.88,
+   "confidence": "medium",
+   "why": "The camera rolls violently from 121.25 to 121.62 (-42 to -64 to +20 degrees), and the horizon is lost. At 121.75-121.88 the view is close to the snow surface, which fits the 5 g impact at 121.8. The wearer then recovers and is riding again by 122.0, with ski tips visible at 122.25 and 122.50. So it looks like a brief tumble or wipeout with a quick recovery, not an ordinary ride. I'm not certain, because the frames show no clear body or ski tumble.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_02:impact:13.30": {
+   "verdict": "retime",
+   "kind": "camera-into-snow",
+   "who": "wearer",
+   "start": 12.1,
+   "end": 14.2,
+   "confidence": "medium",
+   "why": "At 13.3 s the frames are only a blurry grey or dark view with the camera already buried or covered, so the 10.1 g reading is not the start of a fall. The going-down happens earlier. At 12.10 s the view is skis and snow at close range, and from 12.22 s the camera is in snow (the 13.8 g impact at 12.2 s). It stays covered until about 14.1 s. At 14.22 s the camera turns up and shows the wearer's face and helmet. The 13.3 s reading falls inside this burial.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_02:impact:16.90": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "The camera is a selfie-style view that keeps the wearer's face in frame (15.45-16.32 s, then again from 17.07 s). Between those, around 16.45-16.95 s, it swings to sky and snow with a large roll change and a little spray at 16.95 s. The 9.8 g impact at 16.9 s fits the camera being handled or swung, because there is no tumbling body, no hit on the snow, and the camera never ends at snow level. The wearer is upright and looking into the lens from 17.32 s onward, so I see no fall.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_02:impact:17.60": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "From 16.15 s the camera is turned back on the wearer's face, as if hand-held or on a pole, and it swings through the sky and slope in 16.27-17.40 s. The wearer stays upright and looks at the lens through 17.52-19.02 s, with no tumble, no body or skis hitting the snow, and the camera never ends at snow level. The 11 g spike at 17.6 s is the camera being jerked or handled, not a fall or crash.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_02:impact:207.50": {
+   "verdict": "confirm",
+   "kind": "crash",
+   "who": "wearer",
+   "start": 206.55,
+   "end": 207.6,
+   "confidence": "medium",
+   "why": "From about 206.5 s the view rolls violently (levelling corrections up to -97\u00b0) and swings between snow, trees and sun, which fits a tumble. The 6.3 g impact falls at 207.6 s. After that (207.68-208.9 s) the view barely changes, with a tilted slope and sun, as if the camera is resting on the snow. That is a real fall, not ordinary riding, but I can't see the body or skis, so my confidence is medium.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_02:impact:220.30": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "At 220.22-220.47 s the wearer's skis are in view and the skier ahead stays in frame, so this is ordinary riding over rough snow with no tumble or snow contact. A sharp tilt at 220.97-221.22 s (roll about -80\u00b0) shows sky, but the camera is back on the slope with a skier ahead by 221.35-221.72 s, so it reads as a stumble or recovery rather than a fall.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_02:impact:220.90": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "Around 220.95-221.2 s the view swings steeply (roll -82\u00b0) to show sky and the tree line. This looks like a hard bump or head whip, with no body or ski tumble and no camera at snow level. By 221.45 s the view is back on the slope, and 221.7-222.3 s shows steady upright riding toward the skier ahead, so the wearer never goes down.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_02:impact:23.10": {
+   "verdict": "reject",
+   "kind": "camera-toss",
+   "who": "wearer",
+   "start": 22.2,
+   "end": 23.5,
+   "confidence": "medium",
+   "why": "The camera is pointed back at the wearer's face, as if held in a selfie pose, and a glove covers the lens from 22.27 to 23.40 s. This looks like the camera being handled, and the 5.3 g spike at 23.1 s lines up with the glove blocking the lens (23.15 s is black). No snow impact or tumble shows, and the wearer is not going down. The later frames just show the camera pointing at the jacket and slope.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_02:impact:25.90": {
+   "verdict": "retime",
+   "kind": "fall",
+   "who": "wearer",
+   "start": 24.45,
+   "end": 25.7,
+   "confidence": "medium",
+   "why": "The wearer is already tumbling at 24.45\u201325.45 s: the camera is rolled about -60\u00b0, and a glove and leg sweep through the frame. By 25.57 s the camera is at snow level with the leg and ski lying on the snow, and it stays there until about 27.07 s. The fall is therefore mostly over before the 25.90 s impact. The 25.90 s frames show only a static, settled scene, with no new hit, so a separate impact at that time is not supported. At 27.20 s the view tilts up as the wearer gets up.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_02:impact:7.10": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "All 24 cells (5.65-8.53 s) show the same snow slope at a similar angle, with no tumbling, no tilt change into the snow, and no spray or going-down onset around 7.10-7.20 s. A dark object (boot or ski tip) appears at the bottom left in 7.15 s and again later, and a distant rider appears at the top in 7.03-7.28 s. The camera looks downward at the snow before and after, so the 7 g spike reads as a bump or camera handling, not a fall.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_02:impact:76.50": {
+   "verdict": "confirm",
+   "kind": "fall",
+   "who": "wearer",
+   "start": 76.3,
+   "end": 77.2,
+   "confidence": "medium",
+   "why": "The camera rolls hard from 75.8 s, reaching about -98\u00b0 at 76.55 s. It points at the sky at 76.55-76.67 s, which matches the 9 g impact at 76.5 s. The skis flail in view at 75.8-76.05 s, 76.8 s and 77.17 s. By 77.3 s the camera is back on the snow and the wearer seems to be moving again, so this looks like a quick tumble and recovery, not a camera toss.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_04:air:224.59": {
+   "verdict": "confirm",
+   "kind": "air",
+   "who": "wearer",
+   "start": 224.59,
+   "end": 224.87,
+   "confidence": "medium",
+   "why": "From 224.23 to 224.48 the wearer's own skis and legs are lifted high in view. Then at 224.60 to 224.98 the skis drop out of frame, the view pitches and the roll swings through about 25 degrees, which fits a short flight. The 7.7 g impact near 225.4 matches a landing, with the pole and arm flailing at 225.23 to 225.48. The wearer is riding upright again by 225.6, so there is no fall.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_04:air:318.40": {
+   "verdict": "confirm",
+   "kind": "air",
+   "who": "wearer",
+   "start": 318.4,
+   "end": 318.7,
+   "confidence": "medium",
+   "why": "The wearer's skis and poles come into view at 318.19-318.44 s. From 318.57 s to 318.94 s the view pitches up, the horizon drops in the frame and the skis are only at the bottom edge or out of frame. That fits a short unweighted hop over a crest, and it matches the 0.3 s free fall with a 3.9 g landing. The take-off is not crisp and there is no clear spray at landing, so confidence is only medium.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_04:air:91.29": {
+   "verdict": "confirm",
+   "kind": "air",
+   "who": "wearer",
+   "start": 91.29,
+   "end": 91.58,
+   "confidence": "medium",
+   "why": "Ski tips swing up into view at 90.94-91.31 and the roll jumps to about -25\u00b0 at 91.06-91.19. From 91.44 the camera pitches up and the ground drops away to show the valley, so a crest is passing. The view settles by about 91.69-91.81, which fits the 0.29 s free fall and the 3.1 g landing. The flight is short and not crisp in the frames.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_04:impact:105.70": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "The frames show the wearer riding down the slope behind or past another rider. The view stays upright and the camera never reaches snow level. There is no tumble. At 105.75 s the skis point up in the frame and the other rider is close, but the wearer keeps riding in 105.88-107.12 s. The 7.1 g spike with no speed change looks like the camera being bumped or handled, not a fall.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_04:impact:269.80": {
+   "verdict": "confirm",
+   "kind": "crash",
+   "who": "wearer",
+   "start": 269.85,
+   "end": 271.23,
+   "confidence": "high",
+   "why": "The wearer's own pole and glove flail through the frame at 268.85-269.1 s while the roll swings to about -36\u00b0. From 269.98 s the lens is buried in snow spray, and the horizon tumbles through 270.6-271.23 s. A ski and snow fill the frame and the camera ends up at snow level. This matches the 5 g impact at 269.9 s and is a real fall or crash.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_04:impact:289.80": {
+   "verdict": "reject",
+   "kind": "other",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "high",
+   "why": "The camera is already low and nearly still (GPS 0.6 m/s) in 288.35-289.23 s. A gloved hand and pole then reach into view (289.35-289.73 s), the frame goes black at 289.85 s, and the pole strap swings in 289.98-290.35 s. That is the wearer handling or adjusting the camera or helmet, not a going-down. No tumbling, no snow impact and no skis leaving the snow appear, so the 9.3 g spike is handling.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_04:impact:292.90": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "high",
+   "why": "The view is the same static snow slope from 291.45 to 292.57 s and again from 293.45 s on. Between them (292.70-293.32 s) a dark glove and pole strap cover the lens, which is a hand handling the camera. GPS shows the wearer stopped (about 0.5 m/s). No tumbling, snow hit or change in camera height shows a fall.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_04:speed_drop:229.00": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "The frames show the wearer slowing to a stop on the slope while a skier in dark clothing passes close by (229.75-230.00 s). The camera stays upright with a steady view, and the roll changes smoothly. There is no tumble, no hit on the snow and no camera at snow level, so this is a deceleration to a stop and not a fall.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_04:speed_drop:271.30": {
+   "verdict": "confirm",
+   "kind": "fall",
+   "who": "wearer",
+   "start": 271.3,
+   "end": 274.18,
+   "confidence": "medium",
+   "why": "At 271.30-272.7 s the wearer is tumbling. There is snow spray, a dark body or glove close to the lens, and skis and poles flailing in odd directions. The camera roll swings from -12 to +15 degrees. By 273.05-274.18 s the camera sits at snow level, looking at the sky, with a ski sticking up and the wearer stopped. This matches the speed drop from 5.5 to 1.5 m/s. The fall may have started slightly before 271.30 s, near the 269.9 s impact.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_04:speed_drop:284.90": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "The frames from 284.90 to 287.77 s show a smooth slope with a steady view and a horizon that stays level. There is no tumbling, no hit on the snow, and the camera never ends at snow level. The camera slows and the view settles, which fits a controlled stop or a gentle turn, not a fall. The 9.3 g impact at 289.9 s is outside this window and is probably handling.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_04:stopped:232.00": {
+   "verdict": "confirm",
+   "kind": "none",
+   "who": "wearer",
+   "start": 232.0,
+   "end": 236.25,
+   "confidence": "medium",
+   "why": "The wearer is stationary at the side of the trail from 232.00 to about 236.25 s. The view stays on the same slope and the same skier below, while gloves and poles fill the frame, as if the wearer is adjusting gear. From about 236.50 s the view shifts and the wearer begins to move. GPS speed of 0.1-0.9 m/s fits a stop. The frames show no air or fall.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_04:stopped:289.40": {
+   "verdict": "confirm",
+   "kind": "none",
+   "who": "wearer",
+   "start": 289.4,
+   "end": 295.15,
+   "confidence": "medium",
+   "why": "The camera is stationary at a low angle on the snow, with a static view from 290.9 to 295.15 s. Gloves and a pole pass the lens at 289.4-290.4 s and 292.65-293.15 s, which fits the wearer handling the camera or getting up, not riding. GPS speed is about 0.5 m/s, so the wearer is stopped. The two impacts are most likely handling. The onset of any fall before 289.4 s is not in these frames.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_05:air:17.97": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "The terrain is flat and continuous in the 17.97-18.27 s cells, with no crest, no ground falling away and no landing spray. The skis stay at the bottom edge and the horizon only tilts. A glove enters the frame at 17.50-17.62 s, right at the 8.3 g impact, and again at 18.75-19.12 s. That points to the wearer handling the camera or helmet, which fits the free-fall reading, and not to a jump.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_05:impact:17.60": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "high",
+   "why": "The wearer stays upright and keeps skiing down the slope toward a distant skier in every cell from 16.15 to 19.02 s. A glove enters the frame at 17.52-17.65 s, which fits a hand touching the camera and explains the 8.3 g spike with no speed change. The horizon tilts a little around 18 s and the skis show in some cells, but nothing shows a fall or the camera at snow level. The 0.30 s air at 17.97-18.27 s is not visible either: the skis stay low and the ground does not fall away.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_05:speed_drop:20.60": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "The wearer stays upright and the camera stays at standing height the whole window (20.60-23.48 s). The horizon stays level and the view advances smoothly down the slope. Skis are visible at 20.60-20.85 s and again at 23.10 s. Gloves and poles swing into frame at 20.98-21.23 s and 21.85-22.10 s, most likely a pole plant or arm movement. The speed drop (16 to 7.4 m/s) looks like deliberate slowing, with no tumble, no snow hit and no camera at snow level.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_06:air:30.17": {
+   "verdict": "confirm",
+   "kind": "air",
+   "who": "wearer",
+   "start": 30.17,
+   "end": 30.5,
+   "confidence": "medium",
+   "why": "At 30.09 s the skis are still on the snow in the trees. By 30.21-30.34 s the skis have left the frame and the view jumps to an open slope with the horizon and branches swinging past, which fits a small drop or hop out of the trees. This matches the 0.32 s free fall with a 2.6 g landing, and the view settles by 30.46-30.59 s. The wearer's gloves and poles are in frame, and the camera is not being handled.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_06:air:46.85": {
+   "verdict": "confirm",
+   "kind": "air",
+   "who": "wearer",
+   "start": 46.85,
+   "end": 47.13,
+   "confidence": "medium",
+   "why": "The camera rolls sharply from 46.99 to 47.49, with the roll value dropping to -4.2 at 47.37. The view pitches down over the slope at 47.24. Ski tips then point up in frame at 47.37-47.49, which fits a small hop off a crest and a landing. This matches the 0.28 s free fall and 4.2 g landing. The wearer is flinging their pole arm around in this stretch, so the airborne frames are not crisp. Riding continues normally afterward.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_06:impact:214.50": {
+   "verdict": "reject",
+   "kind": "other",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "The camera is already low and nearly stationary from 213.05 s (GPS about 0.3 m/s, stopped). From 214.55 to 215.18 s a gloved hand or dark object covers the lens, so the 5.5 g impact is the camera being handled or repositioned. No body, skis or poles tumble, and no snow impact appears. After 215.30 s the view is a ski and boot close to the lens from the low position, with the same horizon, so this is not a fall or crash.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_06:speed_drop:302.80": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "other",
+   "start": null,
+   "end": null,
+   "confidence": "high",
+   "why": "All frames show another skier ahead of the camera, bent over and skiing downhill in a steady crouch, with the wearer's own skis visible at the bottom edge in the later cells. The wearer does not tumble, hit the snow or end at snow level, and the other skier does not fall. The speed drop looks like ordinary slowing or following, not a fall.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_07:speed_drop:211.00": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "The wearer is slowing and stopping on a slope. A skier ahead walks or skis past from 211.0 to 212.6 s and leaves the frame. The view stays steady and level with no tumble, no impact and no snow-level camera in 211-213.9 s. The stop is a deceleration, not a fall.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_07:speed_drop:289.90": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "Across 289.90-292.77 s the camera stays upright and keeps a steady view of the lift tower and valley. It never drops to snow level, and no tumbling, snow impact or rider going down shows. The view just slows and drifts as the wearer decelerates and turns, with the roll changing smoothly. The thing at the right edge at 291.40-291.52 s looks like a glove or pole basket, not a fall. The speed drop looks like ordinary slowing or stopping.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_08:air:120.44": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "In 120.34-120.84 s the view is steady. The horizon holds, a rider stands ahead, and the snow surface comes toward the camera at the same rate, with no sign of leaving the ground or a crest dropping away. The telemetry is only WEAK, and the frames show ordinary riding over a bump. From about 120.8 s the camera rolls and tilts increasingly, and gloves swing into view at 121.3-121.7 s. That could be a loss of balance or fall starting after the candidate, but the window ends before it resolves, so I",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_08:air:209.22": {
+   "verdict": "confirm",
+   "kind": "air",
+   "who": "wearer",
+   "start": 209.22,
+   "end": 209.52,
+   "confidence": "medium",
+   "why": "The wearer's skis are in view at 209.25, then drop almost out of frame at 209.37-209.50 as the ground falls away with a steady horizon. They reappear large and close at 209.62, matching the 5.6 g landing at 209.7. It is a small hop on open snow, and the hand and pole swinging in frame at 208.9-209.1 and 210.25 is ordinary riding.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_08:air:221.28": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "In frames 221.17-221.54 s the skis stay on the snow and the horizon barely changes. The snow texture runs steadily past, and the gloves and poles move in the frame as the wearer pole-plants or adjusts. This is ordinary riding over a small bump, and the weak 0.28 s unweighting is not backed by any visible flight.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_08:air:31.00": {
+   "verdict": "retime",
+   "kind": "air",
+   "who": "wearer",
+   "start": 31.6,
+   "end": 32.26,
+   "confidence": "medium",
+   "why": "Frames 31.00-31.34 show smooth, steady riding with the same scene and no ski lift, so the claimed window isn't visible. At 31.67-31.80 the wearer's ski tips appear in the lower frame while the horizon pitches and rolls up to about 21\u00b0. The view then opens over the valley as the ground drops away, which matches the second telemetry air at 31.96-32.26. A short air around 31.6-32.3 is therefore more likely than one at 31.0.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_08:air:31.96": {
+   "verdict": "confirm",
+   "kind": "air",
+   "who": "wearer",
+   "start": 31.9,
+   "end": 32.3,
+   "confidence": "medium",
+   "why": "Ski tips come up into view at 31.73-31.86 s, then the slope drops away and the view opens onto the valley horizon at 31.98-32.23 s as the crest passes. The camera roll swings through the same stretch. This fits a short hop over a crest with free fall at 31.96-32.26 s, though the landing is not crisp in the frames.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_08:air:61.10": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "Around 61.10-61.36 s the view is steady. The horizon holds, the snow surface is continuous, and there is no crest dropping away or landing spray. At 61.48 s the wearer's ski tips appear at the bottom of the frame, which fits ordinary riding. The brief unweighting is weak (min 0.163 g) and the frames show no flight. A rider and poles at the left edge at 60.85-60.98 s are before the claimed window and do not show an air.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_08:air:75.98": {
+   "verdict": "confirm",
+   "kind": "air",
+   "who": "wearer",
+   "start": 75.98,
+   "end": 76.46,
+   "confidence": "medium",
+   "why": "Telemetry shows true free fall followed by a 5.8 g landing at about 76.8 s. The frames show a smooth forward view with no sign of the camera being handled. The camera rolls and the snow surface shifts between 76.47 and 76.72 s, and the wearer's skis only come back into view at 76.97 s after touchdown. Another rider also appears airborne at the top right near 76.09 s, which muddies the picture, but the sensor-timed flight fits the wearer.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_08:impact:229.80": {
+   "verdict": "confirm",
+   "kind": "fall",
+   "who": "wearer",
+   "start": 229.8,
+   "end": 231.22,
+   "confidence": "medium",
+   "why": "The ride is steady through 229.72 s. The 8.8 g hit at 229.8 s is followed by the horizon tilting hard (roll 9 to 33 degrees from 229.97 s). The skis then splay out of line, and from 230.72 s a black jacket or leg fills the lower frame and then the whole view by 231.22 s. GPS speed also drops from 14.7 to 9.3 m/s. This looks like the wearer losing balance and going down. The camera never reaches snow level in these frames, so medium confidence.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_08:impact:76.70": {
+   "verdict": "retime",
+   "kind": "air",
+   "who": "wearer",
+   "start": 75.98,
+   "end": 76.46,
+   "confidence": "medium",
+   "why": "The frames show no fall or crash at 76.7-76.8 s. The camera stays upright and the horizon stays level, and skis reappear at 76.88-77.0 s with the wearer still riding. The telemetry air at 75.98-76.46 s (5.8 g landing) is a small unweighting over a crest, and the roll swing at 76.5-76.7 s fits a landing. A skier is also visible ahead and a snowboarder-like object enters at 75.75-75.88 s, so the air is only weakly supported.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_08:speed_drop:164.90": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "The frames show the wearer riding down the slope and turning. A glove or pole passes through the upper right at 166.15-166.53 s. The camera stays upright above the snow and never goes down, and no body, ski or pole tumble and no snow hit appears. The speed drop looks like a slow-down or a stop, not a fall. Another rider is visible ahead in the distance.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_08:speed_drop:168.00": {
+   "verdict": "confirm",
+   "kind": "fall",
+   "who": "wearer",
+   "start": 169.0,
+   "end": 170.3,
+   "confidence": "low",
+   "why": "At 168.0-168.6 a rider is visible ahead, then the view swings and the wearer's own black-gloved arm and a pole strap flail into frame from 169.1 to 170.1. The roll swings from -5 to +12 degrees, then the view settles low on the slope with a shadow on the snow at 170.6-170.9. This fits a slow-speed fall that ends in a stop (GPS 3.3 to 0.2 m/s, stopped from 170 s), but the camera never clearly hits the snow, so I can't be sure.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_08:speed_drop:229.00": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "From 230.0 to 231.9 s the horizon rolls about 30\u00b0 and then levels again. A black glove or sleeve swings through the frame at 230.75-231.25 s, and the skis stay visible. The camera stays at standing height and the rider keeps moving down the slope, with no tumble, no snow impact and no camera at snow level. This looks like a lurch or balance recovery (a speed drop and an 8.8 g spike) rather than a fall.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_08:speed_drop:232.10": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "high",
+   "why": "In every frame from 231.85 to 234.72 s the camera stays upright and the view stays steady, and the horizon is level. The wearer's pole and glove swing into view around 232.85-233.60 s, which is a pole plant or arm movement. The camera never drops to snow level, nothing tumbles, and the rider keeps carrying on down the slope. The speed drop is ordinary slowing or turning.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_08:speed_drop:40.40": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "The wearer rides down toward a group of people, passes close to a person in a dark jacket and red helmet (41.2-42.0 s), then slows and stops upright among standing people (42.4-43.27 s). The camera stays at normal height and never goes down, and the view never drops to snow level. This is a controlled stop, not a fall. The pole and glove at 41.65-42.27 s belong to the person passing the camera, not a tumble.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_08:speed_drop:77.90": {
+   "verdict": "confirm",
+   "kind": "fall",
+   "who": "wearer",
+   "start": 78.5,
+   "end": 80.5,
+   "confidence": "medium",
+   "why": "The wearer's skis and poles tumble through the frame at 78.65-78.90 s with snow spray. Gloves and a pole fill the view at 79.53-79.65 s, and the camera ends low on the snow with a tilted horizon and a sun-facing view at 80.28-80.78 s. That fits a tumbling fall after the speed drop, not ordinary riding.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_08:speed_drop:85.10": {
+   "verdict": "confirm",
+   "kind": "fall",
+   "who": "wearer",
+   "start": 85.1,
+   "end": 88.0,
+   "confidence": "medium",
+   "why": "The view yaws sharply from facing down the slope (85.1-86.4 s) to looking across it at a skier in a yellow bib (86.6-87.4 s). The wearer's own ski and pole gear flails through the frame (85.1-85.9 s, 86.85 s, 87.47-87.6 s), with a ski flung upward at 87.47 s. The scene ends tilted and low with speed near zero, which matches the 4.2 g impact and the drop from 4.6 to 0.8 m/s. The frames do not show a crisp moment of impact, so this is a medium-confidence call.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_08:stopped:170.50": {
+   "verdict": "confirm",
+   "kind": "none",
+   "who": "wearer",
+   "start": 170.5,
+   "end": 176.25,
+   "confidence": "medium",
+   "why": "The wearer is standing still on the slope in all 24 frames. The scene barely changes, the wearer's shadow and a distant skier stay put, and the wearer's gloved hand and pole strap move in front of the camera at 171.5-175.75 s. This matches the GPS speed of about 0 m/s, so the 'stop' is real. I could only see this window, not the claimed end at 186.70 s.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_08:stopped:88.60": {
+   "verdict": "confirm",
+   "kind": "none",
+   "who": "wearer",
+   "start": 88.6,
+   "end": 94.35,
+   "confidence": "medium",
+   "why": "The wearer is stationary on the slope for the whole window. The view barely changes, other skiers are far below, and the wearer only handles their poles and gloves at 90.85-93.35 s. No fall or airborne frames appear. This matches the telemetry (speed near 0, stopped from 89 s) and the GPS speeds of 0.4-0.9 m/s.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_09:impact:150.80": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "At 150.80 s the wearer is skiing normally on snow with skis visible and the horizon steady. Early on (149.6-150.2 s) the wearer's gloves and pole straps are in frame, which looks like handling. At 151.22 s a dark object, probably the wearer's own leg or clothing, fills the frame, but the skis are back on the snow by 151.35 s and the camera never ends at snow level. I see no tumble or hard impact. The 5.7 g reading at 150.8 s fits a bump or the camera being handled, not a fall.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_09:impact:151.80": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "The wearer keeps skiing from 150.35 s to 153.22 s. Skis stay in view and on the snow, with no tumble and no camera at snow level, and the ride continues into the trees at 151.85-153.2 s. At 151.22 s a dark object (probably a body or jacket) briefly fills the frame, but the next frames show normal skiing again. The 5.1 g spike with no speed change fits handling or a bump, not a fall.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_09:speed_drop:87.00": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "The wearer slows to a stop in the trees. A person in snowshoes or boots walks past the camera at 87.00-87.62s. From 87.75s the view tilts up toward the treetops and stays steady and upright until 89.88s. No tumbling, no impact on the snow, and the camera never ends at snow level, so this is a controlled stop and not a fall.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_11:air:59.60": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "low",
+   "why": "Skis are in view at 59.12 and again at 60.00. They are out of frame from about 59.38 to 59.88 while the view pitches up and shows the slope beyond a crest. A glove swings through at 59.25-59.38, which looks like an arm or pole movement. There is no clear flight and no landing impact, and the ground stays continuous with ordinary riding. Later frames (60.38 onward) show a pole or glove in front of the lens. The telemetry is WEAK, so this reads as an unweighting over a crest.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_11:impact:143.10": {
+   "verdict": "confirm",
+   "kind": "fall",
+   "who": "wearer",
+   "start": 143.15,
+   "end": 144.53,
+   "confidence": "high",
+   "why": "At 143.15 s the view is still upright on the slope. At 143.28 s the camera lurches, and by 143.40-143.78 s the wearer's own legs and gloves fill the frame as they tumble with the horizon tilting hard. At 144.15-144.53 s the camera is at snow level in spray, matching the 5.9 g impact at 143.2 s and the roll swing to about -49\u00b0.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_11:impact:144.30": {
+   "verdict": "confirm",
+   "kind": "crash",
+   "who": "wearer",
+   "start": 143.22,
+   "end": 144.6,
+   "confidence": "high",
+   "why": "The wearer goes down. At 143.22-143.47 the legs and a pole swing across the frame and the view tumbles, with camera roll swinging to about -50 degrees. At 144.22-144.47 the camera plunges into snow and powder fills the frame, which matches the 6.7 g impact at 144.3. From 144.6 on the camera sits at snow level, looking up at the lift, with skis sticking up.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_11:impact:288.90": {
+   "verdict": "reject",
+   "kind": "camera-toss",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "Gloved hands fill the frame from 287.45 to 289.07 s, and the view goes dark at 288.82 s and again at 289.45 s. That is the camera being handled or taken off and moved. GPS speed is about 0.5 m/s and the sensors show 'stopped', so there is no riding or going-down onset. After 289.5 s the camera sits at a steady low angle looking up at the chairlift, which fits it resting on or near the snow after handling. No tumble or fall is visible.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_12:air:119.73": {
+   "verdict": "confirm",
+   "kind": "air",
+   "who": "wearer",
+   "start": 119.7,
+   "end": 120.0,
+   "confidence": "medium",
+   "why": "At 119.61-119.73 the wearer's skis and glove tip up into view while the horizon pitches. By 119.86-119.98 the skis have dropped to the bottom edge of the frame and the view settles, which fits a short hop with a landing. The 5.0 g impact at 119.2 and the knees and skis in frame at 118.73-118.98 hint at some handling or a bump just before, but the 119.7-120.0 motion looks like a small rider jump rather than a tossed camera.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_12:air:46.62": {
+   "verdict": "confirm",
+   "kind": "air",
+   "who": "wearer",
+   "start": 46.6,
+   "end": 47.0,
+   "confidence": "medium",
+   "why": "At 46.44-46.56 the skis rise and tip up in frame. From 46.69 to 47.19 the skis are gone, the view pitches up to the lift and horizon, and the ground drops away, which fits the 0.39 s free fall. At 47.44 the skis are thrown up again and the camera is low by 47.56, with gloves in frame through 48.19, so a fall or tumble follows the landing.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_12:air:50.63": {
+   "verdict": "confirm",
+   "kind": "air",
+   "who": "wearer",
+   "start": 50.63,
+   "end": 50.91,
+   "confidence": "medium",
+   "why": "At 50.77-50.90 the view pitches up to sky and trees with no snow in frame, and the roll swings from about 16\u00b0 to -10\u00b0, so the wearer's skis have left the snow over a crest. At 51.02 the snow is back, and 51.15-51.40 show skis and a dark body close to the camera, which looks like a crash or fall after the landing (7.7 g at 51.0). The camera then stays low, with a glove in frame at 51.77-52.15.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_12:impact:119.20": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "The frames show the wearer skiing slowly and upright down an open slope, with skis, gloves and poles passing in and out of view. Around 119.12-119.25 s the view just tilts up toward the lift, with no tumble and no snow contact, and the camera never ends at snow level. The 5 g impact is most likely the camera being handled or a pole or glove bump. A small air appears near 119.62-119.88 s, where the skis point up and the view changes, but that is not a fall.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_12:impact:153.20": {
+   "verdict": "confirm",
+   "kind": "fall",
+   "who": "wearer",
+   "start": 153.2,
+   "end": 153.7,
+   "confidence": "low",
+   "why": "The wearer is stationary and looking up at the chairlift until about 153.12 s. At 153.25 s the view pitches down to the skis. At 153.38-153.62 s the knees and legs fill the frame with the skis pointing up, a glove is flung out and snow is kicked up. By 153.75-153.88 s the view is back to normal riding, which fits a brief low-speed tumble with a fast recovery. It could also be the wearer handling the camera or bending over, so I can't be sure.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_12:impact:153.90": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "Around 153.2-153.7 s the camera view swings down to the wearer's own skis and gloved hands, which looks like the wearer handling the camera or helmet. Skis stay on the snow and the horizon returns level by 153.82 s. From 153.95 s the wearer skis on normally with no tumble, no camera at snow level, and no airborne frames. The 6.7 g spike fits a hand hit on the camera, not a fall.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_12:impact:45.10": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "Around 45.02-45.27s the wearer keeps skiing slowly down the slope, with the view steady and the skis in frame at 44.4-44.9s and again from 45.65s. There is no tumble, no camera at snow level and no body hitting the snow. The 5.1 g spike with no speed change looks like a bump or the camera being handled, and the dark gloves or a person at the left edge (44.4-44.8s) are other things in frame, not a fall.",
+   "model": "claude-sonnet-5-5"
+  },
+  "CLIP_12:speed_drop:121.70": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "At 121.70-122.33 s a rider in blue is passed close by and a glove sweeps through the frame. From 122.45 s the view tilts up toward the chairlift tower and sky and stays there. There is no tumbling, no hit on the snow and no camera at snow level. This reads as the wearer slowing and looking up, not as a going-down. The speed drop and 3.4 g peak are not backed by a visible fall.",
+   "model": "claude-sonnet-5-5"
+  },
+  "KX_05:air:17.97": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "The terrain is flat and smooth through 17.97-18.27 s, with no crest, no spray and no horizon pitch change that would show flight. The skis only slip out of the bottom of the frame around 18.12-18.37 s. A glove enters the frame at 17.5-17.62 s, right at the 8.3 g impact, and again at 18.75-19.12 s. That points to the wearer handling the helmet or camera, not to a jump.",
+   "model": "claude-sonnet-5-5"
+  },
+  "KX_05:speed_drop:20.60": {
+   "verdict": "reject",
+   "kind": "none",
+   "who": "wearer",
+   "start": null,
+   "end": null,
+   "confidence": "medium",
+   "why": "The wearer stays upright and keeps skiing through 20.60-23.48 s. Skis show at the bottom of the frame at 20.60-20.85 s and again at 23.10 s, and the horizon and slope stay consistent. Gloves and poles pass through the frame at about 20.85-21.10 s and 21.85-22.0 s, which looks like a pole plant or arm movement. The speed drop looks like deceleration, and the roll changes are mild. No tumbling, snow impact or camera at snow level appears, so the fall claim is not supported.",
+   "model": "claude-sonnet-5-5"
+  }
+ }
+}
