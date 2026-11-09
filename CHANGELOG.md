@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Fixed
+- A pure read, `POST /api/certainty` (the board sends it on every timeline render), no longer counts as a write to the status snapshots, so the first pass's late "importing" answer and the new-clips offer after an import work again.
+
 ### Added
 - First pass certainty counts and per-shot chips now read VERIFY's per-event verdicts (the 3080's local checks, Claude's verdicts) by event id or kind family within 0.5 s, so a moment the 3080 settled counts as "checked by the 3080" (a ruled-out fall is not a felt event); cached on the verify store, sidecar reads only.
 - Loop state: PLAY10's quiet-box playback A/B pooled (dissolves out of a slowed shot nearly clean on screen; worker clock not yet).
