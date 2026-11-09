@@ -49,6 +49,12 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-09 ~05:00: **VERDICT 16 FAIL on `b2cbc31`** (dims 9,5,9,9,9,7,8,9,7,8,8,9,9,8,9,8): K1 broken again at 1440 (the
+  panel's Re-run below the window), the judge's full gate RED and crashed past gate.py's 3600 s timeout, no-telemetry falls
+  lost with no UI to check claims, a fresh Hybrid pass regresses airs (0.80 → 0.60: Claude rejected the CLIP_05 sensor
+  air), other riders' airs 0/1, the understanding check ruled lenient (scores the preview copy, not the rev). Better: the
+  slow-motion freezes are gone (0/12 cuts into/out of 0.5x). Punch 9 done by the lead (`0f1337e`). **Wave 21 planned
+  (judge/WAVE21.md): FPPANEL, EVALREV, CHECKER, OTHERAIR, CLAIMSUI now; GRADE after, at load <= 4.**
 - 2026-11-09 ~03:40: **GATEFIX merged + deployed (`b2cbc31`).** Its 10 breaks vs 0fef473: 4 fixtures planted
   unsupported claims (now `claims_as_found` from conftest; assertions unchanged), test_index_panel_ui's stage dict gains
   `local`; 3 REAL regressions fixed in code — Project Settings lacked the `gpu` pool, POST /api/certainty counted as a

@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Changed
+- Loop state: wave 21 planned from verdict 16's punch list (judge/WAVE21.md).
 - Rubric log: the understanding check (advisory until it scores the rev), WORKER's Full/Auto cap and its test's load skip, the demotion fixture and the local model ids, as verdict 16 asked; FOR-KARL names b2cbc31 and what to try for K5/K6.
 - Loop state: verdict 16 (FAIL on b2cbc31; dims 2, 6 and 9 at 5, 7, 7).
 - Loop state: GATEFIX merged and deployed after a green full gate; judge 16 launched.
