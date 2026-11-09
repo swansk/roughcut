@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Changed
+- Loop state: verdict 16 (FAIL on b2cbc31; dims 2, 6 and 9 at 5, 7, 7).
 - Loop state: GATEFIX merged and deployed after a green full gate; judge 16 launched.
 - Tests: the seen-tab tests that plant telemetry-less claims use the shared `claims_as_found` fixture (demotion off; test_verify covers demotion); the Index panel test expects the `local` stage.
 
