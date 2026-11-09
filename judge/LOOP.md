@@ -49,6 +49,12 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-09 ~01:20: **CERTFIX merged + deployed (`fb0a251`: "40 felt by telemetry · 34 checked by the 3080 · 6 checked by
+  Claude …" on Karl's bin).** **FULL gate on `fb0a251`: RED, 3648 s** — suite 2036 passed, 9 failed, 0 flaky, **10 broken**
+  (test_deep_ui look-deeper-from-a-seen-row, test_foldin_ui project-settings workers, test_import_status_ui, test_index_panel_ui
+  retune, test_ui_flow x3 seen tab / inspector, test_workspace index panel working size x2, test_perf_latency under load);
+  screens, journey (9 ms hold), boot, understanding, hygiene GREEN. Judge 16 HELD (a red gate is a blocker). Lane GATEFIX
+  launched to find each break vs 0fef473 and fix the code or the stale fixture, then a full gate.
 - 2026-11-08 ~20:40: **PLAY10's quiet-box A/B (lead pooled `~/roughcut-loop/lane-play10/out` with absum.py; the lane agent
   stalled and was stopped; no code change).** Load 1.5-3.4, base 2600864 vs h3 (= PLAY10 merged, now in the tip):
   dissolve out of a 0.5x shot, 18 plays each: 0.4 s frame-clock held 0/18 (base 18/18), worker clock 8/18 (base 18/18);

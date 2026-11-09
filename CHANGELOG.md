@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- Loop state: the full gate on fb0a251 found 10 broken UI/perf tests after wave 20; judge 16 waits for their fix.
 - First pass certainty counts and per-shot chips now read VERIFY's per-event verdicts (the 3080's local checks, Claude's verdicts) by event id or kind family within 0.5 s, so a moment the 3080 settled counts as "checked by the 3080" (a ruled-out fall is not a felt event); cached on the verify store, sidecar reads only.
 - Loop state: PLAY10's quiet-box playback A/B pooled (dissolves out of a slowed shot nearly clean on screen; worker clock not yet).
 - Loop state: WORKER's draw-rate piece merged and on the 8766 preview.
