@@ -10,6 +10,8 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Changed
+
+- **CLAIMSUI (wave 21, verdict 16 punch 5): claims on footage without telemetry are checkable from the board.** The AI menu's claims item and the bin's button now read `GET /api/verify` (`claims_check`, `counts.claims_to_check`) and drive `POST /api/verify/claims`, price first ("Check 1 claim · free on your plan"), with the job's "k of N checked" as progress; when it ends the project reloads and a confirmed fall is in `/api/project` `events` and the seen tab (the verify job now rebuilds the ranked events file). The menu says "nothing to check" only when the server holds no claims (before the first read it says it is reading). `verify.price` says "Check 1 claim", not "1 claims". `/api/visual/audit` stays for the CLI; the board no longer calls it. New `app/tests/test_verify_ui.py` (1440 and 1920).
 - Loop state: wave 21 planned from verdict 16's punch list (judge/WAVE21.md).
 - Rubric log: the understanding check (advisory until it scores the rev), WORKER's Full/Auto cap and its test's load skip, the demotion fixture and the local model ids, as verdict 16 asked; FOR-KARL names b2cbc31 and what to try for K5/K6.
 - Loop state: verdict 16 (FAIL on b2cbc31; dims 2, 6 and 9 at 5, 7, 7).

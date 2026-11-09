@@ -4019,22 +4019,45 @@ function renderLibrary() {
  * rebuilds the rank; the price comes with /api/status like the visual pass's, and the
  * button is off when there is nothing left to audit or a pass is already running. */
 let auditPending = false;
+/* What the server holds unchecked, read from GET /api/verify (`claims_check` + `counts`):
+ * footage with no telemetry has visual fall / jump claims that were demoted as
+ * unsupported, and "Check N claims" is how Claude settles them (verdict 16, punch 5).
+ * `claims` is null until the first read, so the menu never claims "nothing to check"
+ * before it knows. */
+let claims = null;
+let claimsBusy = null;
+async function refreshClaims() {
+  if (claimsBusy) return claimsBusy;
+  claimsBusy = (async () => {
+    try {
+      const v = await (await fetch('/api/verify')).json();
+      claims = { n: (v.counts && v.counts.claims_to_check) || 0, price: v.claims_check || {},
+                 job: v.job || null };
+    } catch (e) { /* a blip keeps the last read */ } finally { claimsBusy = null; }
+    paintAudit();
+    return claims;
+  })();
+  return claimsBusy;
+}
+const claimWord = (n) => `${n} claim${n === 1 ? '' : 's'}`;
+window.rcClaims = { state: () => ({ claims, pending: auditPending }), refresh: refreshClaims };
+
 function paintAudit() {
   const row = $('#auditRow');
   if (!row) return;
-  const vz = (S && S.visual) || {};
-  const a = vz.audit || { claims: 0, windows: 0, projected_usd: 0 };
+  const n = claims ? claims.n : 0;
   // in view until it has been used once (INTAKE M16), then with the seen tab
-  row.style.display = libTab === 'seen' || (a.windows && !auditUsed()) ? 'flex' : 'none';
+  row.style.display = libTab === 'seen' || (n && !auditUsed()) ? 'flex' : 'none';
   const b = $('#auditClaims');
-  b.disabled = auditPending || !!vz.running || !a.windows;
-  b.textContent = a.windows
-    ? `Audit ${a.claims} claim${a.claims === 1 ? '' : 's'} · ${rcCost.tag(a.projected_usd, a)}`
-    : 'Audit the claims';
-  b.title = a.windows ? rcCost.note(a.projected_usd, a) : '';
-  $('#auditInfo').textContent = !a.windows ? 'every hot claim has had a close look'
-    : vz.running ? 'a visual pass is running'
-    : `${a.windows} close look${a.windows === 1 ? '' : 's'} at 1 s`;
+  const running = auditPending || !!(claims && claims.job && claims.job.state === 'running');
+  b.disabled = running || !n;
+  b.textContent = n ? `Check ${claimWord(n)} · ${rcCost.tag(claims.price.usd, claims.price)}`
+    : 'Check the claims';
+  b.title = n ? rcCost.note(claims.price.usd, claims.price) : '';
+  $('#auditInfo').textContent = !claims ? 'reading what is held…'
+    : running ? ((claims.job && claims.job.detail) || 'checking…')
+    : !n ? 'every claim has been checked'
+    : 'Claude looks at the frames around each; a confirmed one goes back on the board';
 }
 
 /* "Used once" is this viewer's click, remembered per bin (a convenience, not state). */
@@ -4048,16 +4071,30 @@ async function auditClaims() {
   auditPending = true;
   paintAudit();
   try {
-    const r = await fetch('/api/visual/audit', {
+    const r = await fetch('/api/verify/claims', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
     const d = await r.json();
-    if (!r.ok) { toast(d.detail || 'the audit could not start'); return; }
-    // The job is a `visual` job: the top bar shows it and, when it is done, adopt()
-    // reloads the project, so the seen tab repaints with the verdicts.
-    toast(`auditing ${d.claims} claim${d.claims === 1 ? '' : 's'} — ${rcCost.tag(d.projected_usd, d)}`);
+    if (!r.ok) { toast(d.detail || 'the check could not start'); return; }
+    const n = (d.price && d.price.n) || 0;
+    toast(`checking ${claimWord(n)} — ${rcCost.tag(d.price.usd, d.price)}`);
+    // progress: the job's "k of N checked" is in the button's line until it ends
+    for (;;) {
+      await refreshClaims();
+      const j = claims && claims.job;
+      if (!j || j.id !== d.job || j.state !== 'running') break;
+      await new Promise((ok) => setTimeout(ok, 400));
+    }
+    const j = claims && claims.job;
+    // the verdicts are in the verify state: the board's events and markers come from
+    // /api/project, so reload it
+    P = await (await fetch('/api/project')).json();
     await refreshStatus();
+    render();
+    toast(j && j.state === 'failed' ? `the check failed — ${j.detail || ''}`
+      : `checked ${claimWord(n)}${j && j.detail ? ' — ' + j.detail : ''}`);
   } finally {
     auditPending = false;
+    await refreshClaims();
     paintAudit();
   }
 }
@@ -5052,7 +5089,8 @@ function flowSoon() {
  * which shows only when the CLI needs Karl. */
 async function refreshStatus() {
   S = await (await fetch('/api/status')).json();
-  paintAudit();                        // its price rides on the status, like the pass's
+  paintAudit();
+  if (!claims) refreshClaims();        // the claims the server holds, read once at boot
   return S;
 }
 

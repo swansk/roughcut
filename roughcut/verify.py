@@ -553,6 +553,8 @@ def per_call_usd(model: str | None = None) -> float:
 def price(n_calls: int, noun: str = "moments") -> dict:
     """What `n_calls` strip checks cost, with the words for the button."""
     n = max(0, int(n_calls))
+    if n == 1 and noun.endswith("s"):
+        noun = noun[:-1]                      # "Check 1 claim", not "Check 1 claims"
     usd = round(n * per_call_usd(), 4)
     return {"n": n, "usd": usd, "per_call_usd": round(per_call_usd(), 4),
             "label": (f"Check {n} {noun}" if n else f"No {noun} to check"),

@@ -1180,25 +1180,36 @@
     return true;
   }
 
+  /* The menu's claims item reads the board's own read of GET /api/verify
+   * (`claims_check` / `claims_to_check`): it says "nothing to check" only when the server
+   * holds none, and otherwise the same priced words as the button. */
   function auditState() {
     const b = document.querySelector('#auditClaims');
-    if (!b) return { ok: false, why: 'the claims audit is not on this board' };
-    if (!b.disabled) return { ok: true, why: '' };
-    const info = document.querySelector('#auditInfo');
-    return { ok: false, why: (info && info.textContent.trim()) || 'nothing to check now' };
+    if (!b) return { ok: false, why: 'the claims check is not on this board', label: '', k: 'nothing to check' };
+    const c = window.rcClaims ? window.rcClaims.state() : { claims: null };
+    if (!c.claims) {
+      if (window.rcClaims) window.rcClaims.refresh();
+      return { ok: false, why: 'reading what the server holds…', label: '', k: '…' };
+    }
+    const n = c.claims.n;
+    if (!n) return { ok: false, why: 'every claim has been checked', label: '', k: 'nothing to check' };
+    const price = window.rcCost ? rcCost.tag(c.claims.price.usd, c.claims.price) : '';
+    const label = `Check ${n} claim${n === 1 ? '' : 's'}`;
+    const running = c.pending || (c.claims.job && c.claims.job.state === 'running');
+    return { ok: !running, why: running ? 'a check is running' : '', label, k: price };
   }
 
   function openAudit() {
     const a = auditState();
     if (window.dock) dock.open('bin');
-    if (!a.ok) { say(`nothing to audit: ${a.why}`); return false; }
+    if (!a.ok) { say(`nothing to check: ${a.why}`); return false; }
     const row = document.querySelector('#auditRow');
     if (row && getComputedStyle(row).display === 'none') row.style.display = 'flex';
     const b = document.querySelector('#auditClaims');
     b.scrollIntoView({ block: 'nearest' });
     b.focus({ preventScroll: true });
     flash(b);
-    say('the audit\'s price is on its button — click it to run', 4000);
+    say('the check\'s price is on its button — click it to run', 4000);
     return true;
   }
 
@@ -1233,7 +1244,7 @@
     fx: 'Designed Effects: describe an effect for the selected clip; the AI designs it and you accept it',
     deep: 'A close look at the selected clip\'s frames; its price is on its button and nothing runs until you click it',
     find: 'Find a moment in the footage by words; "Not it? Ask the model" has the AI search for it',
-    audit: 'A close look at the pass\'s unchecked jump / fall / crash claims; its price is on its button',
+    audit: 'Claude checks the pass\'s unchecked jump / fall / crash claims on the frames; its price is on its button',
   };
 
   /* Each time the AI menu opens: the first pass's words for where it stands, its price,
@@ -1270,7 +1281,7 @@
     set('deep', 'Look deeper at the selected clip…', sel ? '' : 'select a clip', !sel, 'select a clip in the Timeline first');
     set('find', 'Find a moment…', 'Selects');
     const a = auditState();
-    set('audit', 'Check the pass\'s claims…', a.ok ? '' : 'nothing to check', !a.ok, a.why);
+    set('audit', a.label ? `${a.label}…` : 'Check the pass\'s claims…', a.k !== undefined ? a.k : '', !a.ok, a.why);
   }
 
   /* ------------------------------------------------------------ "Ask AI about this…" */

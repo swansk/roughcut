@@ -185,8 +185,8 @@
   };
   const AUDIT = {
     name: 'Check the pass’s claims',
-    what: 'A one-second close look at the highest-ranked jump, fall and crash claims nobody has checked.',
-    change: 'Re-ranks the picks in Selects; the cut does not change.',
+    what: 'Claude looks at the frames around each jump, fall or crash the index claims but nothing backs, and says whether it happened.',
+    change: 'A confirmed one goes back on the board with its marker; the cut does not change.',
   };
   const FX = {
     name: 'Design an effect',

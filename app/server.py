@@ -6109,6 +6109,11 @@ async def api_visual_audit(request: Request) -> JSONResponse:
     exactly the claims that rank highest *because* nobody checked them, then rebuilds
     the rank. `{"dry_run": true}` prices it without spending — the board's button shows
     that price and the editor clicks; nothing here runs on the app's own initiative.
+
+    Wave 21 (verdict 16, punch 5): the board no longer calls this. Its button and the AI
+    menu's claims item drive `GET /api/verify` `claims_check` + `POST /api/verify/claims`
+    (Claude settles each claim on a levelled strip), which also works on footage with no
+    telemetry. This close-look route stays for the CLI and its tests.
     """
     body = await request.json()
     n = max(1, min(40, int(body.get("n", AUDIT_CLAIMS))))
@@ -8171,6 +8176,10 @@ def _verify_job(job: str, rows: list[dict]) -> None:
         entry.finish("failed", detail=str(exc)[:200])
         return
     entry["summary"] = summary
+    try:
+        rebuild_events()      # free: a confirmed claim is a ranked event / marker from now on
+    except Exception:  # noqa: BLE001 — the verdicts are saved; the rank rebuilds next pass
+        pass
     entry.finish("done", detail=verifymod.verified_sentence(summary, state["mode"], 0, 0))
 
 
