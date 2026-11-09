@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- Project Settings shows and saves the worker count of the new `gpu` pool (Local (3080)), so the form matches `/api/settings`.
 - A pure read, `POST /api/certainty` (the board sends it on every timeline render), no longer counts as a write to the status snapshots, so the first pass's late "importing" answer and the new-clips offer after an import work again.
 
 ### Added
