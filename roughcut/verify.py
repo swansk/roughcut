@@ -33,7 +33,9 @@ Claude only for the local half, and `note` says so.
 
 ## Routing in Hybrid (which events Claude gets)
 
-every air (wearer or other); every fall / crash whose local P(yes) is in 0.2-0.9 or where
+every air (wearer or other; the 3080's "another rider is airborne" candidates, `source:
+"local"` rows from `other_air_rows`, go first and always, whatever their local number);
+every fall / crash whose local P(yes) is in 0.2-0.9 or where
 the local check and telemetry disagree; every event a proposed cut uses; the top 3 hero
 shots, always. At most `CALLS_PER_RUN` (40) per first pass, in that priority order.
 Each routed row carries `route_reasons` (words). Without a local stack the falls /
@@ -57,13 +59,28 @@ claims, the moment dicts inside `visual.moments[]` / `events[]` of the project p
     evidence      ["telemetry", "local", "claude"] - who looked, in order
     asserted      bool - may the planner / board state it as fact. True for claude
                   confirm/retime and for telemetry/local-settled events; False for
-                  unsure, rejected, unsupported
+                  unsure, rejected, unsupported - EXCEPT a sensor-proven air (below)
+    sensor_proven true on an air whose own numbers prove the camera left the snow: free
+                  fall >= 0.25 s at |a| <= 0.15 g, then a landing over 2.5 g, no handling.
+                  When Claude rejected or was unsure about such an air the row reads
+                  certainty "unsure", asserted TRUE ("felt"), and carries
+                  `overruled` (words: "Claude rejected it, but the sensor read 0.30 s of
+                  free fall and a 3.0 g landing: counted as felt"); verdict.raw_verdict is
+                  still "reject" and verdict.why is what Claude saw. Show it as an air the
+                  sensor proves and Claude could not see (the chip hover: `overruled`).
+                  A camera Claude positively called thrown (kind camera-toss, confidence
+                  above low) stays rejected. Other rejects (weaker numbers) stay rejected.
     verdict       null, or {verdict, kind, who, start, end, confidence, why, model, at,
                   raw_verdict}  - Claude's answer; `raw_verdict` is what it said before
                   low confidence turned it into "unsure"
     local         optional {p_yes} from the local model (LOCALGPU)
     route_reasons why this row went (or would go) to Claude
-    facts         the numbers shown to the checker (telemetry text)
+    facts         the numbers shown to the checker (telemetry text; a sensor-proven
+                  air leads with "SENSOR PROOF: free fall X s, |a| down to Y g, landed Z g")
+    source        "telemetry" | "local" - a "local" row is the 3080's own candidate (another
+                  rider airborne: kind "air", who "other", evidence ["local"], certainty
+                  "unchecked" and asserted False until Claude confirms; Local-only mode
+                  asserts it, unchecked). See `other_air_rows` for the input contract.
 
 Index claims (old Claude-index jump / fall / crash / inverted moments) also carry:
 
@@ -81,7 +98,14 @@ backend}, job: {...}|null}. `POST /api/verify/claims {ids?: [claim ids]}` starts
 batch ("Check N claims"): a job whose state is in `GET /api/verify` `job`.
 `POST /api/verify/events {ids?: [event ids]}` checks telemetry events the same way.
 The first pass reports `plan.firstpass.verified` {mode, calls, usd, confirmed, rejected,
-retimed, unsure, shots_flagged, said}.
+retimed, unsure, shots_flagged, flagged, contradicted, said}. `contradicted` lists every
+proposed shot that rests on a moment a closer look contradicted (a Claude reject of its
+event, or the index's own old moment that a close look found nothing for):
+`[{shot (segment id), clip, in, out, event_id?, claimed ("an air"), found (what the closer
+look said), text}]`. The shot carries `unverified: true`; the same rows are in the plan's
+`checks` (Things to check, `kind: "contradicted"`, with `claimed` / `found`, and `shot` the
+proposed shot's index) - this is what the shot chip's hover shows: what was claimed, what
+the closer look found. A sensor-proven air Claude could not see is NOT contradicted.
 """
 
 from __future__ import annotations
@@ -379,7 +403,51 @@ def telemetry_events_for(clips: Iterable[str]) -> list[dict]:
             row["event_id"] = event_id(row)
             rows.append(row)
         attach_local(rows)
+        rows += other_air_rows(clip, rows)
         out += rows
+    return out
+
+
+def other_air_rows(clip: str, rows: Sequence[dict],
+                   checks: Sequence[dict] | None = None) -> list[dict]:
+    """Event rows for the 3080's "is anyone in frame airborne" candidates that name another
+    rider (`who: other`) and are not the wearer's own sensor-felt air (Karl, 2026-11-08:
+    other riders' airs count; verdict 16 punch 4).
+
+    Contract with lane OTHERAIR (`localvlm.checks(clip)` items): a check whose
+    `cand` = {kind: "air", who: "other", start, end, t} (also accepted: `who: "other"` or
+    `q: "air_other"` on the check itself), with `p_yes` when the model scored it. Each
+    becomes {kind: "air", who: "other", source: "local", start, end, t, local: {p_yes},
+    event_id, text}. `route` sends every one of them to Claude, whatever its p_yes: the
+    local model finds candidates, it never settles an air."""
+    try:
+        cs = list(checks) if checks is not None else list(_LOCAL(clip))
+    except Exception:                                      # noqa: BLE001
+        return []
+    wearer = [r for r in rows if r.get("kind") == "air"]
+    out: list[dict] = []
+    for c in cs:
+        cand = c.get("cand") or {}
+        who = str(cand.get("who") or c.get("who") or "").lower()
+        if cand.get("kind") != "air" or (who != "other" and c.get("q") != "air_other"):
+            continue
+        try:
+            t = float(cand.get("t", c.get("t")))
+            a = float(cand.get("start", t - 0.5))
+            b = float(cand.get("end", t + 0.5))
+        except (TypeError, ValueError):
+            continue
+        if any(_overlaps(a, b, float(w["start"]), float(w["end"]), 1.0) for w in wearer):
+            continue                         # the wearer's own air: telemetry has it
+        if any(abs(float(o["t"]) - t) < 1.0 for o in out):
+            continue
+        row = {"clip": clip, "kind": "air", "who": "other", "source": "local",
+               "start": round(a, 2), "end": round(b, 2), "t": round(t, 2),
+               "text": f"another rider airborne at about {t:.1f} s (the 3080's frame scan)"}
+        row["event_id"] = event_id(row)
+        if c.get("p_yes") is not None:
+            row["local"] = {**local_of(c), "advisory": True}
+        out.append(row)
     return out
 
 
@@ -511,7 +579,10 @@ def route(events: Sequence[dict], *, mode: str, local_ok: bool, used: Iterable[s
         if eid in hero:
             reasons.append("one of the top shots")
             prio = min(prio, 1)
-        if e.get("kind") == "air":
+        if e.get("kind") == "air" and e.get("who") == "other" and e.get("source") == "local":
+            reasons.append("the 3080 saw another rider airborne: Claude decides")
+            prio = min(prio, 1)
+        elif e.get("kind") == "air":
             reasons.append("every air is checked")
             prio = min(prio, 2)
         elif _is_fall_like(e):
@@ -689,12 +760,54 @@ def strength(e: dict) -> str:
             else "WEAK (an unweighting or a bump; the frames must show the flight)")
 
 
+SENSOR_AIR_S = 0.25         # free fall at least this long ...
+SENSOR_LANDING_G = 2.5      # ... then a landing harder than this ...
+                            # ... with |a| at or under STRONG_MIN_G in between: sensor-proven
+
+
+def sensor_proven(e: dict) -> bool:
+    """A telemetry air whose own numbers prove the camera left the snow: true free fall
+    (min |a| <= 0.15 g) for >= 0.25 s, then a landing over 2.5 g, and not a handled camera.
+    On Karl's set exactly one rejected air reads this way (CLIP_05 17.97: 0.30 s, 0.03 g,
+    3.0 g, a labelled high-confidence air that Claude called flat terrain); the six that
+    Claude rightly rejected are all WEAK (0.16-0.21 g). A small air over a roll is
+    invisible in a 3 s strip, so Claude's "no crest" cannot outvote the sensor."""
+    if e.get("kind") != "air" or e.get("handling") or e.get("source") == "local":
+        return False
+    try:
+        return (float(e.get("air_s") or 0.0) >= SENSOR_AIR_S - 1e-9
+                and float(e["min_g"]) <= STRONG_MIN_G
+                and float(e.get("landing_g") or 0.0) > SENSOR_LANDING_G)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def overruled(e: dict, v: dict | None) -> bool:
+    """Claude did not confirm a sensor-proven air (rejected it, or was unsure): the sensor
+    keeps it. Not when Claude positively named a handled / tossed camera with more than
+    low confidence, which is what the sensor cannot tell from a jump."""
+    if not v or v.get("verdict") not in ("reject", "unsure") or not sensor_proven(e):
+        return False
+    raw = v.get("raw_verdict") or v.get("verdict")
+    if raw == "reject" and v.get("kind") == "camera-toss" and v.get("confidence") != "low":
+        return False
+    return raw in ("reject", "unsure", "confirm")
+
+
 def facts_text(e: dict, neighbours: Sequence[dict] = ()) -> str:
     """The event's facts for the prompt: the telemetry numbers when there are any, what the
     earlier look said when it came from the old index, the local model's number when
     present, and the other sensor events inside the strip."""
     lines = []
     src = e.get("source")
+    if sensor_proven(e):
+        lines.append(
+            f"SENSOR PROOF (read this first): the camera was in true free fall for "
+            f"{float(e['air_s']):.2f} s (|a| down to {float(e['min_g']):.2f} g, a rider on the "
+            f"snow never reads under 0.15 g) and then landed at {float(e['landing_g']):.1f} g. "
+            "Something left the ground. A small air over a roll or a drop-off can look like "
+            "continuous terrain in 3 s of frames: reject only if the frames positively show the "
+            "camera handled, thrown or lying still.")
     if src == "telemetry" or e.get("kind") in ("air", "impact", "speed_drop", "stopped"):
         bits = []
         if e.get("text"):
@@ -785,12 +898,17 @@ def validate(obj: Any) -> dict:
             "why": str(obj.get("why", ""))[:500]}
 
 
-def settle(v: dict) -> dict:
-    """Low confidence is 'unsure' - shown to Karl, never asserted (R12)."""
+def settle(v: dict, e: dict | None = None) -> dict:
+    """Low confidence is 'unsure' - shown to Karl, never asserted (R12). Given the event it
+    was about: a sensor-proven air (`sensor_proven`) that Claude rejected becomes 'unsure'
+    too - shown, and still asserted as felt (`annotate_event`), `overruled: true`, with
+    `raw_verdict` still saying what Claude said."""
     v = dict(v)
     v["raw_verdict"] = v["verdict"]
     if v.get("confidence") == "low":
         v["verdict"] = "unsure"
+    if e is not None and v["raw_verdict"] == "reject" and overruled(e, {**v, "verdict": "reject"}):
+        v["verdict"], v["overruled"] = "unsure", True
     return v
 
 
@@ -804,7 +922,7 @@ def check_event(e: dict, video: Path, workdir: Path, *, neighbours: Sequence[dic
     res = inference.complete(build_prompt(e, strip, neighbours), role=ROLE,
                              images=[strip.path], schema=SCHEMA, system=SYSTEM,
                              validate=validate, isolated=True)
-    v = settle(res.content)
+    v = settle(res.content, e)
     v.update(model=res.model, at=round(time.time(), 1), strip=strip.path.name,
              strip_source=strip.source, projected_usd=res.projected_usd,
              window=[strip.times[0], strip.times[-1]])
@@ -864,9 +982,10 @@ def annotate_event(e: dict, state: dict, *, mode: str, local_ok: bool) -> dict:
     eid = row.get("event_id") or event_id(row)
     row["event_id"] = eid
     v = state.get("verdicts", {}).get(eid)
-    evidence = ["telemetry"]
+    local_src = row.get("source") == "local"
+    evidence = ["local"] if local_src else ["telemetry"]
     p = local_p(row)
-    if p is not None:
+    if p is not None and not local_src:
         evidence.append("local")
     row["verdict"] = v
     if v is not None:
@@ -875,10 +994,23 @@ def annotate_event(e: dict, state: dict, *, mode: str, local_ok: bool) -> dict:
         row["certainty"] = {"confirm": "claude", "retime": "claude", "unsure": "unsure",
                             "reject": "rejected"}[verdict]
         row["asserted"] = verdict in ("confirm", "retime")
+        if overruled(row, v):
+            # the sensor proves free fall and Claude could not see the flight: shown as
+            # unsure, still felt, never demoted (verdict 16, punch 3)
+            row["certainty"], row["asserted"], row["sensor_proven"] = "unsure", True, True
+            row["overruled"] = ("Claude " + ("rejected" if (v.get("raw_verdict") or verdict)
+                                             == "reject" else "was unsure about") +
+                                f" it, but the sensor read {float(row['air_s']):.2f} s of free "
+                                f"fall and a {float(row['landing_g']):.1f} g landing: "
+                                "counted as felt")
         if verdict == "retime" and v.get("kind") not in (None, "none", "other"):
             row["kind_checked"] = v["kind"]
         if v.get("who") in ("wearer", "other"):
             row["who"] = v["who"]
+    elif local_src:
+        # the 3080's own candidate (another rider's air): only Claude can state it as fact;
+        # Local only mode has no Claude, so it is stated, marked unchecked
+        row["certainty"], row["asserted"] = "unchecked", mode == "local"
     elif local_settles(row) is not None:
         row["certainty"], row["asserted"] = "local", bool(local_settles(row))
     elif mode == "local":
@@ -990,7 +1122,8 @@ def claim_support(m: dict, clip: str, tel: Sequence[dict], state: dict) -> dict:
                          float(t["end"]), SUPPORT_SLACK_S):
             continue
         tv = verdicts.get(t.get("event_id") or event_id({**t, "clip": clip}))
-        if tv is not None and tv["verdict"] in ("reject",):
+        if tv is not None and tv["verdict"] in ("reject",) \
+                and not overruled({**t, "clip": clip}, tv):
             continue
         by.append(f"telemetry:{tk}")
     if by:
@@ -1093,14 +1226,43 @@ def segments_using(segments: Sequence[dict], events: Sequence[dict]) -> dict[str
     return out
 
 
+def _stem_clock(clip: str, a: float, b: float) -> str:
+    def clock(t: float) -> str:
+        return f"{int(t // 60)}:{t % 60:04.1f}"
+    return f"{stem(clip)} {clock(a)}–{clock(b)}"
+
+
+def _claimed(e: dict) -> str:
+    """What an event row claimed, in words: "an air (another rider)" / the sensor's text."""
+    kind = {"impact": "fall or crash", "speed_drop": "fall", "air": "air"}.get(
+        str(e.get("kind")), str(e.get("kind") or "event"))
+    who = " by another rider" if e.get("who") == "other" else ""
+    return f"{'an' if kind[0] in 'aeiou' else 'a'} {kind}{who}"
+
+
 def apply_to_plan(plan: dict, events: Sequence[dict], state: dict, *, locked: Sequence[str] = (),
-                  durations: Callable[[str], float | None] = lambda c: None) -> dict:
-    """Re-time the proposed cut from the verdicts: a shot covering an event Claude
-    retimed is widened to hold the true moment (never narrowed; a locked shot is the
-    editor's and is left alone), and a shot that rests only on events Claude rejected is
-    flagged. Returns the `verified` summary text parts."""
+                  durations: Callable[[str], float | None] = lambda c: None,
+                  contradicted_by: Callable[[dict], str | None] | None = None) -> dict:
+    """Re-time the proposed cut from the verdicts and say which shots rest on a moment a
+    closer look contradicted.
+
+    - A shot covering an event Claude retimed is widened to hold the true moment (never
+      narrowed; a locked shot is the editor's and is left alone).
+    - A shot all of whose checked events Claude rejected (a sensor-proven air Claude could
+      not see is `unsure`, not a rejection: `overruled`) is flagged `unverified`.
+    - `contradicted_by(segment)` is the caller's hook for the index's own old moments (a
+      jump the close look called flat snow): it returns the words for what contradicted the
+      shot's moment, or None. A shot it names is flagged too.
+
+    The cut is not narrowed or reordered here (the editor may have wanted the shot for its
+    words); every flagged shot is **listed**: `contradicted` [{shot, clip, in, out, event_id?,
+    claimed, found, text}] - `revise.plan_checks` turns each into a "Things to check" line
+    that says what was claimed and what the closer look found, and the shot's chip hover
+    reads `claimed` / `found`. Returns {"flagged": [shot ids], "retimed": n, "contradicted":
+    [...]}."""
     used = segments_using(plan.get("segments") or [], events)
-    flagged, retimed = [], 0
+    by_id = {e["event_id"]: e for e in events}
+    flagged, retimed, listed = [], 0, []
     locked = set(locked)
     by_seg: dict[int, list[str]] = {}
     for eid, segs in used.items():
@@ -1108,10 +1270,8 @@ def apply_to_plan(plan: dict, events: Sequence[dict], state: dict, *, locked: Se
             by_seg.setdefault(id(s), []).append(eid)
     for s in plan.get("segments") or []:
         eids = by_seg.get(id(s), [])
-        if not eids:
-            continue
         vs = [(eid, state["verdicts"].get(eid)) for eid in eids]
-        if s.get("id") not in locked:
+        if eids and s.get("id") not in locked:
             for eid, v in vs:
                 if v and v["verdict"] == "retime" and v.get("start") is not None:
                     a = float(v["start"]) - 0.3
@@ -1123,11 +1283,31 @@ def apply_to_plan(plan: dict, events: Sequence[dict], state: dict, *, locked: Se
                     if (lo, hi) != (float(s["in"]), float(s["out"])):
                         s["in"], s["out"] = round(lo, 2), round(hi, 2)
                         retimed += 1
-        checked = [v for _, v in vs if v]
-        if checked and all(v["verdict"] == "reject" for v in checked) and len(checked) == len(vs):
-            s["unverified"] = True
-            flagged.append(s.get("id") or f"{s['clip']} {s['in']}")
-    return {"flagged": flagged, "retimed": retimed}
+        checked = [(eid, v) for eid, v in vs if v]
+        rejected = [(eid, v) for eid, v in checked
+                    if v["verdict"] == "reject" and not overruled(by_id.get(eid, {}), v)]
+        found = None
+        if checked and len(rejected) == len(checked) == len(vs):
+            eid, v = rejected[0]
+            e = by_id.get(eid, {})
+            claimed = _claimed(e)
+            found = {"event_id": eid, "claimed": claimed,
+                     "found": str(v.get("why") or "a closer look did not find it").strip()}
+        elif contradicted_by is not None:
+            why = contradicted_by(s)
+            if why:
+                found = {"claimed": "a moment this shot rests on", "found": why}
+        if found is None:
+            continue
+        s["unverified"] = True
+        sid = s.get("id") or f"{s['clip']} {s['in']}"
+        flagged.append(sid)
+        where = _stem_clock(s["clip"], float(s["in"]), float(s["out"]))
+        listed.append({"shot": s.get("id"), "clip": s["clip"], "in": s["in"], "out": s["out"],
+                       **found,
+                       "text": f"{where} rests on {found['claimed']} that a closer look "
+                               f"contradicted: {found['found']}"})
+    return {"flagged": flagged, "retimed": retimed, "contradicted": listed}
 
 
 def verified_sentence(summary: dict, mode: str, flagged: int, retimed: int,
@@ -1156,25 +1336,33 @@ def verify_cut(plan: dict, clips: Sequence[str], state: dict, *, mode: str,
                save: Callable[[dict], None] | None = None, locked: Sequence[str] = (),
                duration_of: Callable[[str], float | None] = lambda c: None,
                cancelled: Callable[[], bool] = lambda: False,
-               limit: int = CALLS_PER_RUN, local_ok: bool | None = None) -> dict:
+               limit: int = CALLS_PER_RUN, local_ok: bool | None = None,
+               contradicted_by: Callable[[dict], str | None] | None = None) -> dict:
     """The first-pass step after the cut is proposed: route, check the events the cut
-    uses (plus heroes and airs, within `limit`), re-time the shots from the verdicts.
-    Mutates `plan["segments"]` in place; returns the `verified` record."""
+    uses (plus heroes and airs, within `limit`), re-time the shots from the verdicts, and
+    list the shots that rest on a contradicted moment (`apply_to_plan`; `contradicted_by`
+    covers the index's own old moments). Mutates `plan["segments"]` in place; returns the
+    `verified` record, whose `contradicted` is the list of shots to check."""
     ok = local_available() if local_ok is None else local_ok
     eff = effective_mode(mode, ok)
     base = {"mode": mode, "effective": eff, "calls": 0, "usd": 0.0, "confirmed": 0,
             "rejected": 0, "retimed": 0, "unsure": 0, "shots_flagged": 0, "errors": []}
-    if mode == "local":
-        base["said"] = verified_sentence({}, mode, 0, 0,
-                                         "Local only: nothing was checked with Claude, "
-                                         "moments are marked unchecked.")
+    def unchecked(said: str) -> dict:
+        # nothing went to Claude, but a shot may still rest on an old moment that a closer
+        # look contradicted: it is listed all the same
+        applied = apply_to_plan(plan, [], state, locked=locked, durations=duration_of,
+                                contradicted_by=contradicted_by)
+        base.update(said=verified_sentence({}, mode, 0, 0, said),
+                    shots_flagged=len(applied["flagged"]), flagged=applied["flagged"],
+                    contradicted=applied["contradicted"])
         return base
+    if mode == "local":
+        return unchecked("Local only: nothing was checked with Claude, "
+                         "moments are marked unchecked.")
     events = telemetry_events_for(clips)
     if not events:
-        base["said"] = verified_sentence({}, mode, 0, 0,
-                                         "No telemetry events here, so there was nothing "
-                                         "to check with Claude.")
-        return base
+        return unchecked("No telemetry events here, so there was nothing "
+                         "to check with Claude.")
     used_map = segments_using(plan.get("segments") or [], events)
     rows = route(events, mode=mode, local_ok=ok, used=used_map.keys(),
                  heroes=hero_ids(events), limit=limit, verdicts=state["verdicts"])
@@ -1183,11 +1371,13 @@ def verify_cut(plan: dict, clips: Sequence[str], state: dict, *, mode: str,
                                      float(n["start"]), float(n["end"]), 0.0)]
     summary = run_checks(rows, video_of=video_of, workdir=workdir, state=state, save=save,
                          duration_of=duration_of, neighbours_of=neigh, cancelled=cancelled)
-    applied = apply_to_plan(plan, events, state, locked=locked, durations=duration_of)
+    applied = apply_to_plan(plan, events, state, locked=locked, durations=duration_of,
+                            contradicted_by=contradicted_by)
     out = {**base, **{k: summary[k] for k in ("calls", "usd", "confirmed", "rejected",
                                               "retimed", "unsure", "errors")},
            "shots_flagged": len(applied["flagged"]), "shots_widened": applied["retimed"],
-           "flagged": applied["flagged"], "routed": len(rows)}
+           "flagged": applied["flagged"], "contradicted": applied["contradicted"],
+           "routed": len(rows)}
     out["said"] = verified_sentence(summary, mode, len(applied["flagged"]), applied["retimed"])
     return out
 

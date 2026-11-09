@@ -5545,7 +5545,7 @@ function planChecks(plan, notes) {
       .concat(notesChecks(notes).map((t) => ({ text: t, k: null, cls: 'ask' })));
   }
   return plan.checks.filter((c) => c && typeof c.text === 'string' && c.text.trim()).map((c) => {
-    const model = c.kind !== 'flag' && c.kind !== 'rejected';
+    const model = c.kind !== 'flag' && c.kind !== 'rejected' && c.kind !== 'contradicted';
     const ranged = c.clip && typeof c.in === 'number' && typeof c.out === 'number';
     return { text: clipNamed(wholeWords(c.text.trim())), k: checkShot(plan, c), cls: model ? 'ask' : 'flag',
              where: model && ranged ? `${clipLabel(c.clip)} ${fmt(c.in)}–${fmt(c.out)}` : '' };

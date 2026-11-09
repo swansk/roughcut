@@ -187,6 +187,8 @@ Read the evidence word, not just the kind:
   than unaudited.
 * `unsupported` / `contradicted` — a closer look at 1s found nothing, or found a
   camera artefact where the first pass claimed an event. Do not build a shot on these.
+  If you keep a shot there for another reason (the words, the scenery), say that reason
+  in `checks` with the clip and range, so the editor is not told the event happened.
 
 Timestamps are seconds within the named clip."""
 
@@ -1498,6 +1500,19 @@ def plan_checks(plan: dict) -> list[dict]:
             text = f"{what} — you rejected this shot before: left out"
         out.append({"text": text, "clip": r["clip"], "in": r["in"], "out": r["out"],
                     "kind": "rejected", "shot": k})
+    # shots that rest on a moment a closer look contradicted (verdict 16, punch 7): what was
+    # claimed and what the look found, one line each, ahead of the model's own advice
+    verified = (plan.get("firstpass") or {}).get("verified") or {}
+    for c in verified.get("contradicted") or []:
+        if not isinstance(c, dict) or not c.get("text") or not c.get("clip"):
+            continue
+        try:
+            k = _shot_of(segs, c["clip"], float(c["in"]), float(c["out"]), exact=True)
+        except (KeyError, TypeError, ValueError):
+            k = None
+        out.append({"text": c["text"], "clip": c["clip"], "in": c.get("in"), "out": c.get("out"),
+                    "kind": "contradicted", "shot": k, "claimed": c.get("claimed"),
+                    "found": c.get("found")})
     for c in plan.get("checks") or []:
         if not isinstance(c, dict) or c.get("kind", "model") != "model" or not c.get("text"):
             continue
