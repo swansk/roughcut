@@ -627,3 +627,17 @@ next judge runs, and the next judge rules it honest or lenient.
   community-1) live in `localgpu/` and the diarize tool, outside `roughcut/config.py`: section S's "one place for model
   ids" was written for Claude ids; wave 21 moves the local ids into config.py's table (lane EVALREV is not it: lane
   OTHERAIR owns localvlm and does it).
+- 2026-11-09 (wave 21 lane EVALREV, verdict 16 punch 2 and the gate half of 8): **the gate's `understanding` check now
+  measures the rev.** It replays the rev's own `verify.route` / `run_checks` (prompt, settle, demotion, local join) over a
+  frozen read-only copy of Killington's inputs (`~/roughcut-loop/understand/frozen-inputs`, `ROUGHCUT_UNDERSTANDING_FROZEN`)
+  with the 76 recorded Claude checker verdicts of judge 16's real Hybrid pass on b2cbc31
+  (`research/R12-understanding/eval/recorded-verdicts.json`), through a scripted backend: no model call, ~1 s, writes only
+  under the gate's run dir. STRICTER: (a) scores the rev, not a past preview copy; (b) the baseline carries checker verdicts
+  and a new `checker_lost` metric (a labelled high-confidence event the sensor found and the checker rejected; baseline 0)
+  fails on any loss; (c) the other riders' air row is printed; (d) missing inputs, a missing recording, or a rev that routes
+  events the recording never saw ("STALE RECORDING") are AMBER, never green; (e) a suite that outruns its budget (now 7200 s,
+  was 3600 s) is a RED `TIMED OUT` line with a written summary and the later checks still run; a crashing check is a RED
+  `CRASHED` line. LOOSER, on purpose: the recorded answers are one pass's and the old prompt's, so a checker-prompt change
+  shows only after a re-record (`--capture-record`); Find + 3080 is skipped while the frozen copy has 12 of 15 clips
+  embedded. On b2cbc31 it reads recall 0.78, air 0.60, checker_lost 1 and fails, as judge 16 read on a fresh pass. The
+  earlier "advisory only" status of this line ends.
