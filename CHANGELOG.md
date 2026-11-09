@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Changed
+- Gate/EVALREV (verdict 16 punch 2): the `understanding` check scores the REV's own index pipeline. `tools/eval_understanding.py --frozen` runs `verify.route` + `run_checks` (prompt, validate, settle, demotion, local join) over a frozen read-only copy of Killington's inputs (`--freeze-from`, kept at `~/roughcut-loop/understand/frozen-inputs`) with the 76 Claude checker answers of one real Hybrid pass (`research/R12-understanding/eval/recorded-verdicts.json`, `--capture-record`) replayed by a scripted `inference` backend keyed by event id: no model call, ~1 s, writes only under the run dir. New headline `checker_lost` (a labelled high-confidence event the sensor found and the checker rejected; baseline 0) and the other riders' air row. On b2cbc31 it reads recall 0.78 / air 0.60 / checker_lost 1 (what judge 16's fresh pass read) and fails. Exit 3 (no inputs or recording) and 4 (the rev routes events the recording never saw) are AMBER in the gate. Tests: replay, settle by the rev's code, stale recording, read-only inputs, CLI exit codes.
 - Loop state: wave 21 planned from verdict 16's punch list (judge/WAVE21.md).
 - Rubric log: the understanding check (advisory until it scores the rev), WORKER's Full/Auto cap and its test's load skip, the demotion fixture and the local model ids, as verdict 16 asked; FOR-KARL names b2cbc31 and what to try for K5/K6.
 - Loop state: verdict 16 (FAIL on b2cbc31; dims 2, 6 and 9 at 5, 7, 7).

@@ -1,6 +1,6 @@
 {
  "bin": "killington-neutral",
- "note": "written by tools/eval_understanding.py --write-baseline",
+ "note": "The BAR the rev's own pass must meet (wave 21 EVALREV): measured with checker verdicts, i.e. `tools/eval_understanding.py --frozen ... --check` replays research/R12-understanding/eval/recorded-verdicts.json (76 real Claude strip-check answers from one Hybrid pass) through the rev's router and checker. These numbers are the previous good state (telemetry alone found them; verdict 16 punch 3 'Done'); a checker that throws out a sensor-proven air (`checker_lost` > 0) or a pass below them is RED. Do not rewrite this from a failing run.",
  "headline": {
   "recall_high": 0.889,
   "recall_karl": 0.6,
@@ -12,7 +12,9 @@
   "find_overlap": 0.632,
   "find_iou": 0.421,
   "find_union_overlap": 0.789,
-  "find_union_iou": 0.474
+  "find_union_iou": 0.474,
+  "checker_lost": 0,
+  "recall_other_air": null
  },
  "layers": {
   "index_raw": {

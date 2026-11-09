@@ -31,6 +31,20 @@ against Karl's checked test set (`research/R12-understanding/eval/*.checked.json
             never in the gate: `--rerank` runs it (about one call per query) and reports it apart
   certainty counts by certainty of the events and held claims
 
+THE REV, NOT A COPY (wave 21 EVALREV, verdict 16 punch 2). `--frozen DIR` scores the rev's own
+pipeline instead of whatever an old 8766 pass left in a work dir: DIR is a frozen read-only copy of
+a bin's inputs (`--freeze-from WORK --freeze-to DIR` copies visual / audio / telemetry / local, never
+verdicts or video), and the checker's verdicts come from `<eval>/recorded-verdicts.json`
+(`--capture-record WORK --rev SHA` writes it from one real pass's `index/<bin>.verify.json`, keeping
+the model's answer before `verify.settle`). The tool then runs the rev's `verify.route` and
+`verify.run_checks` (prompt, validate, settle, demotion, local join) with a scripted `inference`
+backend that answers each strip from the record, keyed by event id. A first pass and a re-run, as the
+judge's session did. No model call, no video; everything is written under --out. Exit 4 = the rev
+routes events the recording never saw (re-record on a fresh pass; the gate shows AMBER), 3 = no
+inputs or no recording (AMBER, "not measured"). The headline adds `checker_lost`: labelled
+high-confidence events the sensor found that the checker threw out (baseline 0), and prints the
+other riders' air row. A prompt change cannot show here (the answers are the old prompt's): re-record.
+
 Scoring rules are the bake-off's (`eval/README.md`, `bench/score.py`): camera-toss is a
 negative for fall / crash (a thrown camera is not a fall).
 
@@ -45,7 +59,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import re
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -68,6 +85,7 @@ LAYERS = ("index_raw", "asserted", "felt", "confirmed")
 TOLERANCE = {
     "recall_high": ("higher", 0.05), "recall_karl": ("higher", 0.05),
     "recall_air": ("higher", 0.05), "recall_fall": ("higher", 0.05),
+    "checker_lost": ("lower", 0),
     "negatives_asserted": ("lower", 1), "fa_per_neg_min": ("lower", 0.5),
     "find_overlap": ("higher", 0.05), "find_iou": ("higher", 0.05),
     "find_union_overlap": ("higher", 0.05), "find_union_iou": ("higher", 0.05),
@@ -173,6 +191,7 @@ def score_events(moments: list[dict], preds: list[dict]) -> dict:
                    for p in by_clip.get(m["clip"], []))
 
     rec: dict[str, list] = {}
+    found_high: list[str] = []
     for m in moments:
         if m["polarity"] != "positive":
             continue
@@ -185,6 +204,8 @@ def score_events(moments: list[dict], preds: list[dict]) -> dict:
         hit = found(m)
         rec.setdefault(f"conf:{m['confidence']}", []).append(hit)
         if m["confidence"] == "high":
+            if hit:
+                found_high.append(m["id"])
             rec.setdefault("kind:air" if k == "air" else "kind:fall", []).append(hit)
             if k == "air":
                 rec.setdefault(f"air_who:{m.get('who') or 'wearer'}", []).append(hit)
@@ -211,6 +232,7 @@ def score_events(moments: list[dict], preds: list[dict]) -> dict:
     mins = neg_minutes(moments)
     return {
         "recall": {k: rate(v) for k, v in sorted(rec.items())},
+        "found_high": found_high,
         "negatives_asserted": [len(asserted_neg), len(negs)],
         "negatives_hit": asserted_neg,
         "false_events": false_events,
@@ -313,12 +335,18 @@ def preds_from_felt(rows: list[dict]) -> list[dict]:
     return out
 
 
-def collect(work: Path, bin_name: str) -> dict:
-    """Everything the layers need, from the sidecars only (read-only)."""
+def collect(work: Path, bin_name: str, record: dict | None = None, replay_dir: Path | None = None) -> dict:
+    """Everything the layers need, from the sidecars only (read-only).
+
+    With `record` (a recorded-verdicts file, see `load_record`) the verdicts are NOT read from
+    `<work>/index/<bin>.verify.json`: the rev's own router picks the events to check and the
+    rev's own checker code (prompt, `validate`, `settle`) takes the recorded answers from a
+    scripted backend (`replay_state`), so a change in routing / settling / demotion shows."""
     from roughcut import events, find, telemetry_events as te, verify
 
     vis, aud, tel = work / "visual" / bin_name, work / "audio" / bin_name, work / "telemetry" / bin_name
-    state = verify.load_state(verify.state_path(work, bin_name))
+    state = (verify.load_state(verify.state_path(work, bin_name)) if record is None
+             else {"mode": verify.DEFAULT_MODE, "verdicts": {}})
     prev_dir = te._DIR
     te.use_telemetry_dir(tel)
     local_dir = work / "local" / bin_name
@@ -336,9 +364,12 @@ def collect(work: Path, bin_name: str) -> dict:
         raw_clips = {c: {**d, "felt": None} for c, d in per_clip.items()}
         ranked_raw = events.rank_bin(raw_clips)
         ranked = events.rank_bin(per_clip)
-        asserted, held = verify.demote_ranked(ranked, state)
         clips_all = sorted({Path(c).name for c in per_clip} | {p.name[: -len(".felt.json")] + ".MP4"
                                                                for p in tel.glob("*.felt.json")})
+        replay = None
+        if record is not None:
+            replay = replay_state(clips_all, state, record, Path(replay_dir or tempfile.mkdtemp(prefix="replay-")))
+        asserted, held = verify.demote_ranked(ranked, state)
         annotated = [verify.annotate_event(e, state, mode=state["mode"], local_ok=False)
                      for e in verify.telemetry_events_for(clips_all)]
         felt_all = [e for e in annotated if (e.get("check") or e.get("kind") == "air") and not e.get("handling")]
@@ -367,10 +398,141 @@ def collect(work: Path, bin_name: str) -> dict:
                 "confirmed": (preds_from_felt([e for e in confirmed if e.get("source") == "telemetry"])
                               + preds_from_ranked([e for e in confirmed if e.get("source") != "telemetry"])),
                 "search": search, "clips": clips, "state": state, "held": held, "annotated": annotated,
-                "ranked_raw": ranked_raw, "asserted_rows": asserted}
+                "ranked_raw": ranked_raw, "asserted_rows": asserted, "replay": replay}
     finally:
         verify.set_providers()
         te.use_telemetry_dir(prev_dir)
+
+
+# ------------------------------------------------------------------ the recorded checker
+
+RECORD = "recorded-verdicts.json"
+RECORD_KEYS = ("verdict", "kind", "who", "start", "end", "confidence", "why")
+
+
+def _strip_key(event_id: str) -> str:
+    """The name `verify.check_event` gives an event's strip image (its stem)."""
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", event_id)
+
+
+def extract_record(work: Path, bin_name: str, rev: str = "", note: str = "") -> dict:
+    """The verdicts of one real pass (`<work>/index/<bin>.verify.json`) as a replayable record: the
+    model's ANSWER (its `raw_verdict`, before `verify.settle` turned a low confidence into unsure),
+    keyed by event id. What the rev does with the answer is the rev's code at replay time."""
+    from roughcut import verify
+    st = verify.load_state(verify.state_path(work, bin_name))
+    out = {}
+    for eid, v in sorted(st["verdicts"].items()):
+        raw = {k: v.get(k) for k in RECORD_KEYS}
+        raw["verdict"] = v.get("raw_verdict") or v.get("verdict")
+        raw["model"] = v.get("model", "")
+        out[eid] = raw
+    return {"version": 1, "bin": bin_name, "rev": rev, "mode": st["mode"], "note": note,
+            "captured_from": str(work), "verdicts": out}
+
+
+def load_record(path: Path) -> dict | None:
+    try:
+        d = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return d if isinstance(d, dict) and isinstance(d.get("verdicts"), dict) else None
+
+
+class RecordedChecker:
+    """An `inference` backend that answers a checker call from the record, keyed by the strip image
+    the call carries (named for the event id). An event with no record raises, which
+    `verify.run_checks` stores as an error and counts: the rev routed something the recording
+    never saw."""
+    name = "recorded"
+
+    def __init__(self, record: dict):
+        self.by_key = {_strip_key(k): v for k, v in record["verdicts"].items()}
+        self.answered: list[str] = []
+        self.missing: list[str] = []
+
+    def complete(self, request):
+        from roughcut import inference
+        key = Path(request.images[0]).stem if request.images else ""
+        v = self.by_key.get(key)
+        if v is None:
+            self.missing.append(key)
+            raise inference.InferenceError(f"no recorded verdict for {key}")
+        self.answered.append(key)
+        raw = json.dumps({k: v.get(k) for k in RECORD_KEYS})
+        return inference.Result(content=None, input_tokens=0, output_tokens=0, backend=self.name,
+                                model=v.get("model") or "recorded", projected_usd=0.0, latency_ms=0, raw=raw)
+
+
+def replay_state(clips: list[str], state: dict, record: dict, workdir: Path, passes: int = 2) -> dict:
+    """Run the rev's router and checker over the bin's telemetry events with the recorded answers.
+
+    Mirrors the judge's session: a first pass and a re-run (the router skips what has a verdict),
+    each limited to `verify.CALLS_PER_RUN`; the events the recorded pass checked count as used by the
+    cut (the cut itself is not replayed), the router adds heroes, airs and doubtful falls by its own rules. Fills `state["verdicts"]`. No model call, no video, no strip drawn:
+    `verify.build_strip` is replaced by a stub that only names the strip."""
+    from roughcut import inference, verify
+    events = verify.telemetry_events_for(clips)
+    checker = RecordedChecker(record)
+    neigh = lambda e: [n for n in events if n["clip"] == e["clip"]                       # noqa: E731
+                       and verify._overlaps(float(e["start"]) - 2, float(e["end"]) + 2,
+                                            float(n["start"]), float(n["end"]), 0.0)]
+
+    def stub_strip(video, clip, start, end, out, *, duration=None):
+        t0, w = verify.window_for(start, end, duration)
+        times = [round(t0 + k * w / verify.STRIP_CELLS, 3) for k in range(verify.STRIP_CELLS)]
+        return verify.Strip(Path(out), times, [0.0] * verify.STRIP_CELLS, (1566, 588), "recorded")
+
+    old_strip, old_backend = verify.build_strip, inference._OVERRIDE
+    old_ledger = os.environ.get("ROUGHCUT_LEDGER")
+    Path(workdir).mkdir(parents=True, exist_ok=True)
+    os.environ["ROUGHCUT_LEDGER"] = str(Path(workdir) / "replay-ledger.jsonl")
+    verify.build_strip = stub_strip
+    inference.set_backend(checker)
+    routed_ids: set[str] = set()
+    summaries = []
+    try:
+        for _ in range(passes):
+            rows = verify.route(events, mode=state["mode"], local_ok=True,
+                                used=[e["event_id"] for e in events if e["event_id"] in record["verdicts"]
+                                      and verify.is_checkable(e)],
+                                heroes=verify.hero_ids(events), limit=verify.CALLS_PER_RUN,
+                                verdicts=state["verdicts"])
+            routed_ids |= {r["event_id"] for r in rows}
+            if not rows:
+                break
+            summaries.append(verify.run_checks(rows, video_of=lambda c: Path("/nonexistent") / c,
+                                               workdir=Path(workdir), state=state, neighbours_of=neigh))
+    finally:
+        verify.build_strip = old_strip
+        inference.set_backend(old_backend)
+        if old_ledger is None:
+            os.environ.pop("ROUGHCUT_LEDGER", None)
+        else:
+            os.environ["ROUGHCUT_LEDGER"] = old_ledger
+    return {"recorded": len(record["verdicts"]), "routed": len(routed_ids), "answered": len(checker.answered),
+            "unrecorded": sorted(set(checker.missing)),
+            "not_routed": sorted(set(record["verdicts"]) - set(state["verdicts"])),
+            "rev": record.get("rev", ""), "passes": len(summaries)}
+
+
+def freeze_inputs(work: Path, bin_name: str, dest: Path | None) -> str:
+    """Copy the sidecars the pipeline reads (never the verdicts, proxies or footage) to `dest` and
+    make them read-only: the frozen input of the gate's understanding check."""
+    import shutil
+    if dest is None:
+        return "--freeze-to is required"
+    for d in ("visual", "audio", "telemetry", "local"):
+        src = Path(work) / d / bin_name
+        if src.is_dir():
+            shutil.copytree(src, Path(dest) / d / bin_name, dirs_exist_ok=True)
+    for root, dirs, files in os.walk(dest):
+        for n in files:
+            os.chmod(Path(root) / n, 0o444)
+        for n in dirs:
+            os.chmod(Path(root) / n, 0o555)
+    os.chmod(dest, 0o555)
+    return f"froze {bin_name} from {work} to {dest} (read-only)"
 
 
 def certainty_counts(data: dict) -> dict:
@@ -442,9 +604,10 @@ def union_find(data: dict, queries: list[dict], local_dir: Path, eval_dir: Path)
 
 
 def evaluate(work: Path, bin_name: str, eval_dir: Path, local_dir: Path | None = None,
-             rerank: bool = False, rerank_cache: Path | None = None) -> dict:
+             rerank: bool = False, rerank_cache: Path | None = None, record: dict | None = None,
+             replay_dir: Path | None = None) -> dict:
     moments, queries = load_set(eval_dir)
-    data = collect(work, bin_name)
+    data = collect(work, bin_name, record, replay_dir)
     layers = {k: score_events(moments, data[k]) for k in LAYERS}
     find = score_find(queries, data["search"])
     usearch, why = union_find(data, queries, local_dir or (work / "local" / bin_name), eval_dir)
@@ -452,20 +615,24 @@ def evaluate(work: Path, bin_name: str, eval_dir: Path, local_dir: Path | None =
     if usearch and rerank:
         find_union["rerank"] = score_rerank(queries, usearch, work, bin_name, rerank_cache)
     return {"bin": bin_name, "work": str(work), "layers": layers, "find": find, "find_union": find_union,
-            "certainty": certainty_counts(data),
+            "certainty": certainty_counts(data), "replay": data.get("replay"),
+            "checker_lost": sorted(set(layers["felt"]["found_high"]) - set(layers["asserted"]["found_high"])),
             "set": {"positives": sum(1 for m in moments if m["polarity"] == "positive"),
                     "negatives": len(negatives(moments)), "queries": len(queries)},
-            "headline": headline(layers["asserted"], find, find_union)}
+            "headline": headline(layers["asserted"], find, find_union,
+                                 len(sorted(set(layers["felt"]["found_high"]) - set(layers["asserted"]["found_high"]))))}
 
 
 # ------------------------------------------------------------------ headline, baseline, gate
 
-def headline(asserted: dict, find: dict, find_union: dict | None = None) -> dict:
+def headline(asserted: dict, find: dict, find_union: dict | None = None, checker_lost: int = 0) -> dict:
     fu = find_union if find_union and "skipped" not in find_union else None
     r = asserted["recall"]
     pick = lambda k: (r.get(k) or [None, 0])[0]                      # noqa: E731
     return {"recall_high": pick("conf:high"), "recall_karl": pick("karl_ok"),
             "recall_air": pick("kind:air"), "recall_fall": pick("kind:fall"),
+            "recall_other_air": pick("air_who:other"),
+            "checker_lost": checker_lost,
             "negatives_asserted": asserted["negatives_asserted"][0],
             "negatives_total": asserted["negatives_asserted"][1],
             "fa_per_neg_min": asserted["fa_per_neg_min"],
@@ -491,14 +658,27 @@ def compare(base: dict, cur: dict, tol: dict | None = None) -> tuple[list[str], 
     return bad, good
 
 
+def _f(x) -> str:
+    return "-" if x is None else f"{x:.2f}"
+
+
 def gate_line(res: dict, base: dict | None) -> tuple[bool, str]:
     h = res["headline"]
-    line = (f"recall {h['recall_high']:.2f} (karl-confirmed {h['recall_karl']:.2f}; air {h['recall_air']:.2f}, "
-            f"fall {h['recall_fall']:.2f}) · {h['negatives_asserted']} of {h['negatives_total']} negatives asserted · "
-            f"{h['fa_per_neg_min']:.2f} false events/negative-min · Find hit@3 {h['find_overlap']:.2f} "
-            f"(IoU>=0.3 {h['find_iou']:.2f}) · Find + 3080 "
+    line = (f"recall {_f(h['recall_high'])} (karl-confirmed {_f(h['recall_karl'])}; air {_f(h['recall_air'])}, "
+            f"fall {_f(h['recall_fall'])}) · {h['negatives_asserted']} of {h['negatives_total']} negatives asserted · "
+            f"{_f(h['fa_per_neg_min'])} false events/negative-min · Find hit@3 {_f(h['find_overlap'])} "
+            f"(IoU>=0.3 {_f(h['find_iou'])}) · Find + 3080 "
             + (f"{h['find_union_overlap']:.2f} (IoU>=0.3 {h['find_union_iou']:.2f})"
-               if h.get("find_union_overlap") is not None else "skipped: no local stack here"))
+               if h.get("find_union_overlap") is not None else "skipped: " + str((res.get("find_union") or {}).get("skipped", "no local stack here")).removeprefix("skipped: ")))
+    oa = h.get("recall_other_air")
+    line += f" · other riders' airs {'-' if oa is None else f'{oa:.2f}'}"
+    rp = res.get("replay")
+    if rp:
+        line += (f" · the rev's own router + checker over {rp['recorded']} recorded Claude verdicts"
+                 f" ({rp['rev'] or '?'}): {rp['answered']} of {rp['routed']} routed events answered, "
+                 f"{h['checker_lost']} labelled high-confidence event(s) the sensor found and the checker lost")
+        if rp["unrecorded"]:
+            line += f" · STALE RECORDING: the rev routes {len(rp['unrecorded'])} event(s) it never saw (re-record)"
     if base is None:
         return True, line + " · no baseline to compare"
     bad, good = compare(base["headline"], h)
@@ -541,6 +721,13 @@ def markdown(res: dict) -> str:
             rr = fu["rerank"]
             out += ["", f"Find + 3080 + Claude rerank ({rr['calls']} calls, ${rr['usd']}): overlap {rr['hit3_overlap'][0]}, "
                     f"IoU>=0.3 {rr['hit3_iou03'][0]}. Misses: {', '.join(rr['misses']) or 'none'}."]
+    rp = res.get("replay")
+    if rp:
+        out += ["", f"Recorded checker ({rp['rev'] or '?'}): {rp['recorded']} recorded verdicts, {rp['passes']} pass(es), "
+                f"{rp['routed']} events routed by this rev, {rp['answered']} answered from the record, "
+                f"{len(rp['unrecorded'])} routed with no record ({', '.join(rp['unrecorded'][:8]) or 'none'}), "
+                f"{len(rp['not_routed'])} recorded but not routed ({', '.join(rp['not_routed'][:8]) or 'none'}). "
+                f"Found by the sensor, lost by the checker: {', '.join(res['checker_lost']) or 'none'}."]
     out += ["",
             f"Certainty: {json.dumps(res['certainty'])}"]
     ex = {k: v for k, v in L["asserted"]["recall"].items() if k.startswith(("extra:", "air_who:"))}
@@ -563,16 +750,43 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--refresh-vectors", action="store_true", help="encode the Find queries on the 3080 into <eval>/query-vectors.json")
     ap.add_argument("--rerank", action="store_true", help="also score the Claude rerank (one call per non-low query; not for the gate)")
     ap.add_argument("--rerank-cache", type=Path, default=None)
+    ap.add_argument("--frozen", type=Path, default=None,
+                    help="score the REV: a frozen read-only copy of a bin's inputs (see --freeze-from) with the recorded "
+                         "checker verdicts replayed through the rev's own router and checker (implies --work)")
+    ap.add_argument("--record", type=Path, default=None, help=f"recorded verdicts (default <eval>/{RECORD})")
+    ap.add_argument("--capture-record", type=Path, default=None, metavar="WORK",
+                    help="write --record from the verdicts of the real pass in WORK (<WORK>/index/<bin>.verify.json)")
+    ap.add_argument("--rev", default="", help="the rev the captured pass ran (goes in the record)")
+    ap.add_argument("--freeze-from", type=Path, default=None, metavar="WORK",
+                    help="copy WORK's visual / audio / telemetry / local sidecars of --bin to --freeze-to, read-only")
+    ap.add_argument("--freeze-to", type=Path, default=None)
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--write-baseline", action="store_true")
     a = ap.parse_args(argv)
     baseline = a.baseline or (a.eval / "baseline.json")
+    record_path = a.record or (a.eval / RECORD)
+    if a.freeze_from:
+        print(freeze_inputs(a.freeze_from, a.bin, a.freeze_to))
+        return 0
+    if a.capture_record:
+        rec = extract_record(a.capture_record, a.bin, a.rev, "captured by tools/eval_understanding.py --capture-record")
+        record_path.write_text(json.dumps(rec, indent=1) + "\n")
+        print(f"wrote {record_path}: {len(rec['verdicts'])} verdicts")
+        return 0
+    record = None
+    if a.frozen:
+        a.work = a.frozen
+        record = load_record(record_path)
+        if record is None:
+            print(f"understanding: skipped, no recorded checker verdicts at {record_path}")
+            return 3
     if not (a.work / "telemetry" / a.bin).is_dir() and not (a.work / "visual" / a.bin).is_dir():
         print(f"understanding: skipped, no work dir for {a.bin} at {a.work}")
         return 3
     if a.refresh_vectors:
         print(refresh_vectors(a.eval, load_set(a.eval)[1]))
-    res = evaluate(a.work, a.bin, a.eval, a.local, rerank=a.rerank, rerank_cache=a.rerank_cache)
+    res = evaluate(a.work, a.bin, a.eval, a.local, rerank=a.rerank, rerank_cache=a.rerank_cache,
+                   record=record, replay_dir=(a.out / "replay") if a.out else None)
     if a.out:
         a.out.mkdir(parents=True, exist_ok=True)
         (a.out / "understanding.json").write_text(json.dumps(res, indent=1))
@@ -588,7 +802,11 @@ def main(argv: list[str] | None = None) -> int:
     ok, line = gate_line(res, base)
     print(markdown(res) if not a.check else "")
     print("understanding:", line)
-    return 0 if ok or not a.check else 1
+    if a.check and not ok:
+        return 1
+    if a.check and (res.get("replay") or {}).get("unrecorded"):
+        return 4          # not a regression, but the recording no longer covers what the rev routes
+    return 0
 
 
 if __name__ == "__main__":
