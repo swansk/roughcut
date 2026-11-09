@@ -145,8 +145,10 @@
   }
   function keepLine(w, waiting) {
     const keep = (w && w.keep) || [], rep = (w && w.replace) || [];
-    // a proposal that is waiting is the cut-to-be: "No cut yet" under it was stale (verdict 16)
-    if (!keep.length && !rep.length) return waiting ? '' : 'No cut yet — it proposes a first one.';
+    // a proposal that is waiting is the cut-to-be: "it proposes a first one" under it was stale (verdict 16)
+    if (!keep.length && !rep.length) {
+      return waiting ? 'The timeline is empty until you accept the proposal.' : 'No cut yet — it proposes a first one.';
+    }
     if (!FP.keepMine) {
       const none = keep.some(byAI) ? 'Keeps none of the edited shots' : 'Keeps none of your hand cuts';
       return `${none} · ${KEEPS_GRADE} · may replace all ${keep.length + rep.length}`;

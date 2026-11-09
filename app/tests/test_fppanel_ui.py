@@ -137,7 +137,8 @@ def test_a_waiting_proposal_does_not_say_no_cut_yet(pg):
     _panel(pg)
     text = pg.locator(PANEL).inner_text()
     assert "A proposed cut of 19 shots is waiting" in text, text
-    assert "No cut yet" not in text, text
+    assert "No cut yet" not in text and "it proposes a first one" not in text, text
+    assert "The timeline is empty until you accept the proposal." in text, text
     # but a bin that never ran still says it
     _serve(pg, _state("never-run"), _acct("never-run"))
     assert "No cut yet" in pg.locator(PANEL).inner_text()
