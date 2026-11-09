@@ -43,6 +43,11 @@
                  local: 'Local (3080)' };
   // The 3080's column (wave 20 LOCALGPU's `local` stage): drawn only when the report has it
   const LOCAL_COL = ['local', 'Local (3080)', 'Local (3080) — the GPU in this machine looks at every frame of the footage: free, and it checks falls and finds what you search for'];
+  const MODE_SHORT = {
+    hybrid: 'The 3080 scans for free; Claude double-checks only what the cut uses.',
+    local: 'Only the 3080 looks, free; nothing is double-checked.',
+    claude: 'Claude reads the sheets and checks the events; no 3080.',
+  };
   /* Understanding, per bin (wave 20, Karl's K6): who looks at the footage, and what each
    * costs. The words come from the server when it sends them (GET /api/index/mode). */
   const MODES = {
@@ -272,13 +277,13 @@
         <select class="ix-what" data-testid="index-what" aria-label="what to run again" title="what to run again">${WHAT.map(([k, l, t]) => `<option value="${k}" title="${esc(t)}">${l}</option>`).join('')}</select>
         <select class="ix-iv" data-testid="index-interval" aria-label="look at one frame every" title="the look reads one frame every N seconds: finer sees more and costs more sheets"></select>
         <span class="ix-price" data-testid="index-price"></span>
-        <span class="ix-mode" data-testid="index-modebar" hidden>
-          <select id="ixMode" class="ix-modesel" data-testid="index-mode" aria-label="Understanding: who looks at the footage in this bin"></select>
-          <span class="ix-modeline" data-testid="index-modeline"></span>
-        </span>
         <span class="grow"></span>
         <button type="button" class="ix-run" data-testid="index-rerun">Run</button>
         <button type="button" class="ix-stop" data-testid="index-stop" hidden title="stop the index: what finished is kept">Stop</button>
+      </div>
+      <div class="ix-mode" data-testid="index-modebar" hidden>
+        <select id="ixMode" class="ix-modesel" data-testid="index-mode" aria-label="Understanding: who looks at the footage in this bin"></select>
+        <span class="ix-modeline" data-testid="index-modeline"></span>
       </div>`;
     sec.setAttribute('data-testid', 'index-panel');
     const tb = $('tbody', sec);
@@ -335,7 +340,8 @@
       if (v.again === 'waiting') { text += ' ↻'; title += ' — asked again, not run yet (stopped): runs with the next index'; }
       if (v.again === 'failed') { text += ' !'; title += ` — running it again failed: ${v.error || 'failed'}`; }
     } else if (st === 'running') {
-      text = v.pct != null ? `${v.pct}%` : (v.elapsed_s != null ? clock(v.elapsed_s) : '…');
+      // the 3080's stage has no % of its own: a bare clock read as a time of day, so it says "running"
+      text = v.pct != null ? `${v.pct}%` : (v.elapsed_s != null ? (k === 'local' ? `running ${clock(v.elapsed_s)}` : clock(v.elapsed_s)) : '…');
       title += `running${v.elapsed_s != null ? ` for ${clock(v.elapsed_s)}` : ''}${v.pct != null ? ` (about ${v.pct}% by its usual time)` : ''}`;
     } else if (st === 'queued') {
       text = 'queued';
@@ -547,8 +553,13 @@
     const line = $('.ix-modeline', sec);
     const effective = IX.mode.effective && IX.mode.effective !== IX.mode.mode && IX.mode.note ? IX.mode.note : '';
     const t = [IX.modeErr || modeWords(IX.mode.mode)[1], gone ? `The 3080 is not available: ${gone}.` : '', effective].filter(Boolean).join(' ');
-    line.textContent = t;
-    line.title = Object.keys(MODES).map((m) => `${modeWords(m)[0]}: ${modeWords(m)[1]}`).join('\n');
+    // what the eye reads under the foot is ONE line (verdict 16 punch 10: the Index panel keeps
+    // its rows): the mode's short sentence, or why the 3080 is out; the whole of it is in the hover
+    const short = IX.modeErr
+      || (gone && IX.mode.mode !== 'claude' ? `${IX.mode.mode === 'hybrid' ? 'No 3080' : 'The 3080 is not available'} (${gone.replace(/ on this machine$/, '')})${IX.mode.mode === 'hybrid' ? ': runs as Claude only.' : '.'}` : '')
+      || (MODE_SHORT[IX.mode.mode] || modeWords(IX.mode.mode)[1]);
+    line.textContent = short;
+    line.title = `${t}\n\n${Object.keys(MODES).map((m) => `${modeWords(m)[0]}: ${modeWords(m)[1]}`).join('\n')}`;
     sel.title = t;
     line.classList.toggle('bad', !!IX.modeErr);
   }

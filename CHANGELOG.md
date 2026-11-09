@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Changed
+- Index panel (punch 10): the Understanding select reads its full name ("Hybrid (3080 + Claude)") and its one-line sentence is on screen in its own row under the foot (the long wording stays in the hover); the 3080 column says "running 10:28", not a bare clock; the panel's rows were tightened by 17 px so 10 rows still show with a clip's detail open at 1440x900. `test_workspace`'s size check now covers the foot's selects and `.ix-modeline`.
 - Loop state: wave 21 planned from verdict 16's punch list (judge/WAVE21.md).
 - Rubric log: the understanding check (advisory until it scores the rev), WORKER's Full/Auto cap and its test's load skip, the demotion fixture and the local model ids, as verdict 16 asked; FOR-KARL names b2cbc31 and what to try for K5/K6.
 - Loop state: verdict 16 (FAIL on b2cbc31; dims 2, 6 and 9 at 5, 7, 7).
