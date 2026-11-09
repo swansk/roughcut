@@ -5435,6 +5435,15 @@ def _firstpass_job(job: str) -> None:
         _firstpass_walk(job, fp)
 
 
+def _weak_claims(state: dict) -> list[dict]:
+    """The index's fall / crash claims that rest on a long stop alone, as rows the first
+    pass's checker looks at (verify.weak_claim_rows)."""
+    try:
+        return verifymod.weak_claim_rows(events.load(STATE["visual"]), state)
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _contradicted_by():
     """verify_cut's hook: for a proposed shot, the words for what a closer look found
     against the moment it rests on (the index's own jump / fall that a close look called
@@ -5468,7 +5477,7 @@ def _fp_verify(fp: dict, plan: dict, locked: list[str]) -> dict:
             plan, footage_clips(), st, mode=st["mode"], video_of=_verify_video,
             workdir=_verify_workdir(), save=_verify_save, locked=locked,
             duration_of=clip_duration, cancelled=lambda: bool(fp.get("cancel")),
-            contradicted_by=_contradicted_by())
+            contradicted_by=_contradicted_by(), claims=_weak_claims(st))
     except Exception as exc:  # noqa: BLE001
         return {"mode": st["mode"], "calls": 0, "usd": 0.0, "error": str(exc)[:200],
                 "said": "The Claude check of the cut's moments did not run "

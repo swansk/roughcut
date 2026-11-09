@@ -672,3 +672,62 @@ def test_the_contradicted_shots_reach_things_to_check(project, tmp_path, scripte
                            video_of=lambda c: project["footage"] / c, workdir=tmp_path,
                            contradicted_by=lambda s: "a close look called it flat snow")
     assert r2["shots_flagged"] == 1 and "flat snow" in r2["contradicted"][0]["found"]
+
+
+def test_a_fall_claim_resting_on_a_long_stop_alone_is_checked_in_the_first_pass(
+        project, tmp_path, scripted):
+    stop = {"clip": "CLIP_A.MP4", "kind": "stopped", "start": 0.9, "end": 43.9, "t": 0.9,
+            "source": "telemetry", "check": False, "who": "wearer", "text": "stopped 1-44"}
+    stop["event_id"] = verify.event_id(stop)
+    real = impact(t=20.0)                              # a real candidate backs the second claim
+    ranked = [{"clip": "CLIP_A.MP4", "kind": "crash", "start": 1.4, "end": 1.6,
+               "what": "a crash", "source": "sheet"},
+              {"clip": "CLIP_A.MP4", "kind": "fall", "start": 19.8, "end": 20.2,
+               "what": "a fall", "source": "sheet"},
+              {"clip": "CLIP_A.MP4", "kind": "crash", "start": 60.0, "end": 61.0,
+               "what": "nothing backs this", "source": "sheet"}]
+    rows = verify.weak_claim_rows(ranked, {"verdicts": {}}, tel_of=lambda c: [stop, real])
+    assert [(r["kind"], r["start"]) for r in rows] == [("crash", 1.4)]
+    assert rows[0]["weak_claim"] and rows[0]["event_id"] == "CLIP_A:claim:crash:1.40"
+    routed = verify.route(rows, mode="hybrid", local_ok=True, heroes=[])
+    assert routed and "long stop" in routed[0]["route_reasons"][0]
+    # once Claude has answered, the claim is no longer weak, and a reject holds it
+    st = {"verdicts": {rows[0]["event_id"]: _reject(why="the wearer stands still")}}
+    assert verify.weak_claim_rows(ranked, st, tel_of=lambda c: [stop, real]) == []
+    held = verify.demote([ranked[0]], "CLIP_A.MP4", st, tel=[stop, real])
+    assert not held[0] and held[1][0]["claim_status"] == "rejected"
+    # the first pass spends its calls on it
+    verify.set_providers(telemetry=lambda c: [stop])
+    try:
+        scripted([{"verdict": "reject", "kind": "none", "who": "wearer", "start": None,
+                   "end": None, "confidence": "high", "why": "standing still"}])
+        rec = verify.verify_cut({"segments": []}, ["CLIP_A.MP4"], {"mode": "hybrid",
+                                "verdicts": {}}, mode="claude",
+                                video_of=lambda c: project["footage"] / c, workdir=tmp_path,
+                                local_ok=False, claims=rows)
+    finally:
+        verify.set_providers()
+    assert rec["calls"] == 1 and rec["rejected"] == 1
+
+
+def test_a_rider_already_down_in_a_stopped_window_stays_shown_as_unsure_not_rejected():
+    stop = {"clip": "CLIP_A.MP4", "kind": "stopped", "start": 96.9, "end": 160.7, "t": 96.9,
+            "source": "telemetry", "check": False, "who": "wearer", "text": "stopped 97-161"}
+    stop["event_id"] = verify.event_id(stop)
+    claim = {"clip": "CLIP_A.MP4", "kind": "fall", "start": 103.0, "end": 109.0,
+             "what": "A skier is down and half-buried in powder"}
+    cid = verify.claim_id("CLIP_A.MP4", "fall", 103.0)
+    down = {"verdict": "reject", "raw_verdict": "reject", "kind": "lying-down",
+            "confidence": "medium", "why": "already down for the whole window"}
+    kept, held = verify.demote([claim], "CLIP_A.MP4", {"verdicts": {cid: down}}, tel=[stop])
+    assert len(kept) == 1 and not held
+    assert kept[0]["certainty"] == "unsure" and kept[0]["already_down"] and kept[0]["asserted"]
+    # a camera Claude calls tossed, or nothing at all, is still a rejection
+    for kind in ("camera-toss", "none"):
+        kept, held = verify.demote([claim], "CLIP_A.MP4",
+                                   {"verdicts": {cid: {**down, "kind": kind}}}, tel=[stop])
+        assert not kept and held[0]["claim_status"] == "rejected"
+    # and a claim a real impact backs is not "weak": the lying-down answer rejects it
+    real = impact(t=105.0)
+    kept, held = verify.demote([claim], "CLIP_A.MP4", {"verdicts": {cid: down}}, tel=[stop, real])
+    assert not kept and held[0]["claim_status"] == "rejected"

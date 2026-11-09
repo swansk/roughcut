@@ -87,6 +87,11 @@ Index claims (old Claude-index jump / fall / crash / inverted moments) also carr
     claim_status  "supported" (telemetry overlaps, or Claude confirmed) | "unsupported"
                   (nothing backs it) | "rejected" (Claude looked, not there)
     supported_by  ["telemetry:air", "claude"]
+    already_down  true on a fall claim backed only by a long "stopped" period that Claude
+                  answered `lying-down` (the rider is down for the whole window, the going-
+                  down is outside it): stays supported, certainty "unsure", never rejected
+    weak_claim    (checkable rows only) a fall claim backed by nothing but a long stop: the
+                  first pass sends these to Claude (`weak_claim_rows`)
 
 and are *moved*, not deleted: `visual.moments[]` keeps only asserted ones; the rest are in
 `visual.unsupported[]` with `claim_status`; the project payload's `events[]` keeps asserted
@@ -578,6 +583,9 @@ def route(events: Sequence[dict], *, mode: str, local_ok: bool, used: Iterable[s
             prio = min(prio, 0)
         if eid in hero:
             reasons.append("one of the top shots")
+            prio = min(prio, 1)
+        if e.get("weak_claim"):
+            reasons.append("the board would state this fall on a long stop alone")
             prio = min(prio, 1)
         if e.get("kind") == "air" and e.get("who") == "other" and e.get("source") == "local":
             reasons.append("the 3080 saw another rider airborne: Claude decides")
@@ -1097,6 +1105,23 @@ def claim_family(m: dict) -> str:
     return "air" if _INVERTED.search(str(m.get("what", ""))) else "down"
 
 
+def _down_supporters(m: dict, tel: Sequence[dict]) -> list[dict]:
+    """Telemetry events of the fall family that overlap the claim (a second of slack)."""
+    try:
+        a, b = float(m["start"]), float(m.get("end", m["start"]))
+    except (KeyError, TypeError, ValueError):
+        return []
+    return [t for t in tel if t.get("kind") in DOWN_TELEMETRY and not t.get("handling")
+            and _overlaps(a, b, float(t["start"]), float(t["end"]), SUPPORT_SLACK_S)]
+
+
+def weakly_backed(m: dict, tel: Sequence[dict]) -> bool:
+    """A fall / crash claim whose only sensor backing is a long `stopped` period (events the
+    telemetry module itself does not offer for a check)."""
+    sup = _down_supporters(m, tel)
+    return bool(sup) and all(t.get("check") is False for t in sup)
+
+
 def claim_support(m: dict, clip: str, tel: Sequence[dict], state: dict) -> dict:
     """Is this claim backed? -> {claim_status, supported_by}. Backed = a sensor event of
     the same family within a second, which the checker has not rejected, or Claude's own
@@ -1105,6 +1130,14 @@ def claim_support(m: dict, clip: str, tel: Sequence[dict], state: dict) -> dict:
     cid = claim_id(clip, str(m.get("kind", "")), float(m["start"]))
     v = verdicts.get(cid)
     if v is not None:
+        if v["verdict"] == "reject" and v.get("kind") == "lying-down" \
+                and claim_family(m) == "down" and weakly_backed(m, tel):
+            # The index said the rider is down and a stop backs it; Claude looked and saw the
+            # rider already down for the whole window, the going-down itself outside it. The
+            # state is real, only "fall" as an event is not in these frames: shown and stated,
+            # marked unsure, never rejected (Karl's set: CLIP_01 83-111 "skier down, buried")
+            return {"claim_status": "supported", "supported_by": ["telemetry:stopped", "claude"],
+                    "claim_id": cid, "verdict": v, "already_down": True}
         if v["verdict"] == "reject":
             return {"claim_status": "rejected", "supported_by": [], "claim_id": cid,
                     "verdict": v}
@@ -1170,6 +1203,9 @@ def demote(moments: Sequence[dict], clip: str, state: dict,
                             else "claude", "unsupported": "unsupported",
                             "rejected": "rejected"}[s["claim_status"]]
         row["asserted"] = s["claim_status"] == "supported"
+        if s.get("already_down"):
+            row["certainty"] = "unsure"
+            row["already_down"] = True
         (asserted if row["asserted"] else held).append(row)
     return asserted, held
 
@@ -1213,6 +1249,43 @@ def claim_rows(clips_moments: dict[str, Sequence[dict]], state: dict,
     return out
 
 
+def weak_claim_rows(ranked: Sequence[dict], state: dict,
+                    tel_of: Callable[[str], Sequence[dict]] | None = None) -> list[dict]:
+    """Index fall / crash claims the board would state as fact on the strength of nothing but
+    a long `stopped` telemetry period (or a handled-camera impact): the sensor module itself
+    does not offer those for a check, a stop cannot date a fall, and a standing wearer is
+    "stopped" for a minute. Unchecked ones come back as checkable claim rows (`weak_claim`),
+    so the first pass sends them to Claude: on Karl's set three labelled non-events (CLIP_11
+    252-260, CLIP_06 204-220, CLIP_12 1.4-1.6) were stated as falls on a stop alone, and
+    one real fall (CLIP_01 103-109) rests on the same kind of stop - only a look tells them
+    apart. `ranked` are ranked event rows or index moments with `clip`, `kind`, `start`,
+    `end`."""
+    out, seen = [], set()
+    cache: dict[str, list[dict]] = {}
+    for m in ranked:
+        clip = m.get("clip") or ""
+        if not clip or not is_claim(m) or claim_family(m) != "down" \
+                or m.get("source") == "telemetry":
+            continue
+        try:
+            a, b = float(m["start"]), float(m["end"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        cid = claim_id(clip, str(m.get("kind", "")), a)
+        if cid in state.get("verdicts", {}) or cid in seen:
+            continue
+        if clip not in cache:
+            cache[clip] = list(tel_of(clip)) if tel_of else telemetry_events_for([clip])
+        if not weakly_backed(m, cache[clip]):
+            continue                     # backed by a real candidate (or by nothing: unsupported)
+        seen.add(cid)
+        out.append({"clip": clip, "kind": str(m.get("kind") or "fall"), "start": a, "end": b,
+                    "t": (a + b) / 2, "what": m.get("what", ""), "who": "wearer",
+                    "source": "index", "event_id": cid, "claim_kind": m.get("kind"),
+                    "weak_claim": True})
+    return out
+
+
 # ------------------------------------------------------------- first-pass hook
 
 def segments_using(segments: Sequence[dict], events: Sequence[dict]) -> dict[str, list[dict]]:
@@ -1230,6 +1303,20 @@ def _stem_clock(clip: str, a: float, b: float) -> str:
     def clock(t: float) -> str:
         return f"{int(t // 60)}:{t % 60:04.1f}"
     return f"{stem(clip)} {clock(a)}–{clock(b)}"
+
+
+def _short(text: str, limit: int = 220) -> str:
+    """The closer look's words for a Things-to-check line: whole sentences up to `limit`
+    characters (the full text stays in `found`, which the chip hover shows)."""
+    text = " ".join(str(text).split())
+    if len(text) <= limit:
+        return text
+    out = ""
+    for sent in re.split(r"(?<=[.!?])\s+", text):
+        if out and len(out) + len(sent) + 1 > limit:
+            break
+        out = f"{out} {sent}".strip()
+    return out if out and len(out) <= limit + 60 else text[:limit].rstrip() + "…"
 
 
 def _claimed(e: dict) -> str:
@@ -1306,7 +1393,7 @@ def apply_to_plan(plan: dict, events: Sequence[dict], state: dict, *, locked: Se
         listed.append({"shot": s.get("id"), "clip": s["clip"], "in": s["in"], "out": s["out"],
                        **found,
                        "text": f"{where} rests on {found['claimed']} that a closer look "
-                               f"contradicted: {found['found']}"})
+                               f"contradicted: {_short(found['found'])}"})
     return {"flagged": flagged, "retimed": retimed, "contradicted": listed}
 
 
@@ -1337,12 +1424,14 @@ def verify_cut(plan: dict, clips: Sequence[str], state: dict, *, mode: str,
                duration_of: Callable[[str], float | None] = lambda c: None,
                cancelled: Callable[[], bool] = lambda: False,
                limit: int = CALLS_PER_RUN, local_ok: bool | None = None,
-               contradicted_by: Callable[[dict], str | None] | None = None) -> dict:
+               contradicted_by: Callable[[dict], str | None] | None = None,
+               claims: Sequence[dict] = ()) -> dict:
     """The first-pass step after the cut is proposed: route, check the events the cut
     uses (plus heroes and airs, within `limit`), re-time the shots from the verdicts, and
     list the shots that rest on a contradicted moment (`apply_to_plan`; `contradicted_by`
     covers the index's own old moments). Mutates `plan["segments"]` in place; returns the
-    `verified` record, whose `contradicted` is the list of shots to check."""
+    `verified` record, whose `contradicted` is the list of shots to check. `claims` are
+    `weak_claim_rows` (index falls resting on a stop alone), checked within the same limit."""
     ok = local_available() if local_ok is None else local_ok
     eff = effective_mode(mode, ok)
     base = {"mode": mode, "effective": eff, "calls": 0, "usd": 0.0, "confirmed": 0,
@@ -1364,7 +1453,7 @@ def verify_cut(plan: dict, clips: Sequence[str], state: dict, *, mode: str,
         return unchecked("No telemetry events here, so there was nothing "
                          "to check with Claude.")
     used_map = segments_using(plan.get("segments") or [], events)
-    rows = route(events, mode=mode, local_ok=ok, used=used_map.keys(),
+    rows = route([*events, *claims], mode=mode, local_ok=ok, used=used_map.keys(),
                  heroes=hero_ids(events), limit=limit, verdicts=state["verdicts"])
     neigh = lambda e: [n for n in events if n["clip"] == e["clip"]
                        and _overlaps(float(e["start"]) - 2, float(e["end"]) + 2,
