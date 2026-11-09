@@ -9,7 +9,7 @@
 
 /* the bin's one line (verdict 14, punch 8: it took two at 438 px); its words whole in its
    hover, should a panel dragged narrow have no room for them */
-.ix-sum { flex: none; padding: 4px 8px; font-size: 11px; line-height: 15px; color: var(--text);
+.ix-sum { flex: none; padding: 3px 8px; font-size: 11px; line-height: 14px; color: var(--text);
           border-bottom: 1px solid #0f0f10; font-variant-numeric: tabular-nums;
           white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
@@ -25,7 +25,7 @@ table.ixt col.c-telemetry { width: 58px; }
 table.ixt col.c-proxy { width: 48px; }
 table.ixt col.c-cost { width: 36px; }
 table.ixt col.c-ran { width: 46px; }
-table.ixt th { top: 0; height: 22px; padding: 0 5px; background: var(--head);
+table.ixt th { top: 0; height: 20px; padding: 0 5px; background: var(--head);
                border-bottom: 1px solid #0f0f10; border-right: 1px solid #2c2c30; color: var(--dim);
                font-weight: 400; cursor: default; }
 table.ixt th:last-child { border-right: 0; }
@@ -59,13 +59,13 @@ table.ixt td.cost, table.ixt td.ran { color: var(--dim); }
 table.ixt tr.empty td { padding: 8px; height: auto; }
 
 /* the focused clip, in Premiere's Metadata way: a name and a property per line */
-.ix-detail { flex: none; max-height: 42%; overflow: auto; padding: 4px 8px 4px; font-size: 11px;
+.ix-detail { flex: none; max-height: 42%; overflow: auto; padding: 3px 8px 2px; font-size: 11px;
              border-top: 1px solid #0f0f10; background: #19191b; }
 .ix-detail[hidden] { display: none; }
-.ix-dh { display: flex; gap: 8px; align-items: baseline; margin-bottom: 1px; white-space: nowrap; }
+.ix-dh { display: flex; gap: 8px; align-items: baseline; margin-bottom: 0; white-space: nowrap; }
 .ix-dh b { font-weight: 600; }
 .ix-dh span { color: var(--dim); }
-.ix-dl { display: flex; gap: 8px; line-height: 17px; white-space: nowrap; min-width: 0; }
+.ix-dl { display: flex; gap: 8px; line-height: 16px; white-space: nowrap; min-width: 0; }
 .ix-dl .k { flex: none; width: 74px; color: var(--dim); }
 .ix-dl .v { min-width: 0; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 .ix-dl .bad, .ix-detail .bad { color: var(--bad); }
@@ -87,10 +87,10 @@ table.ixt tr.empty td { padding: 8px; height: auto; }
 /* the foot: Premiere's bottom bar, the re-run on it — one row (verdict 14, punch 8: at 438
    px Stop wrapped under it): the scope and the price give way first, cut with … (whole in
    their hovers); only a panel dragged narrower than the bar wraps it */
-.ix-foot { flex: none; min-height: 28px; display: flex; flex-wrap: nowrap; align-items: center; gap: 3px 4px;
-           padding: 2px 4px; border-top: 1px solid #0f0f10; background: var(--head); white-space: nowrap; }
+.ix-foot { flex: none; min-height: 24px; display: flex; flex-wrap: nowrap; align-items: center; gap: 3px 4px;
+           padding: 1px 4px; border-top: 1px solid #0f0f10; background: var(--head); white-space: nowrap; }
 @container ixpanel (max-width: 439px) { .ix-foot { flex-wrap: wrap; } }
-.ix-foot select { padding: 1px 4px; font-size: 11px; height: 22px; }
+.ix-foot select { padding: 1px 4px; font-size: 11px; height: 20px; }
 .ix-foot select[hidden] { display: none; }
 .ix-foot .ix-scope { flex: 0 1 auto; min-width: 28px; max-width: 90px; overflow: hidden;
                      text-overflow: ellipsis; color: var(--text); font-size: 11px; padding: 0 3px; }
@@ -108,20 +108,16 @@ button.ix-open-link { display: inline; height: auto; padding: 0; border: 0; back
                       color: var(--accent, #4a9df8); font: inherit; line-height: inherit; cursor: pointer; }
 button.ix-open-link:hover { background: transparent; text-decoration: underline; }
 
-/* Understanding (wave 20, K6): who looks at this bin's footage. It lives in the foot's free
-   space, not a row of its own: a row cost the list three rows and broke the working size
-   (>= 10 rows in view with a clip's detail open, test_workspace). The select is the control;
-   its words (`.ix-modeline`, kept in the DOM for screen readers and tests) have no room in
-   the foot: they are whole in the hover of the select and of the line, and a failed change
-   also toasts (indexpanel.js setMode). */
-.ix-foot .ix-mode { flex: none; width: 112px; display: flex; align-items: center; position: relative; }
-.ix-foot .ix-mode[hidden] { display: none; }
-.ix-foot .ix-modesel { flex: none; width: 112px; }
-/* the words are read aloud (and by tests), the eye gets them in the hover */
-.ix-foot .ix-modeline { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
-                        overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
+/* Understanding (wave 20, K6; verdict 16 punch 10): who looks at this bin's footage. Its own
+   one-line row under the foot (the foot stays one row, the list keeps its rows): the select at
+   its full name ("Hybrid (3080 + Claude)") and the mode's short sentence beside it, on screen;
+   the long wording is in the hover. */
+.ix-mode { flex: none; display: flex; align-items: center; gap: 8px; height: 18px; padding: 0 6px;
+           border-top: 1px solid #0f0f10; background: var(--head); white-space: nowrap; }
+.ix-mode[hidden] { display: none; }
+.ix-modesel { flex: none; width: 160px; padding: 0 4px; font-size: 11px; height: 16px; }
 .ix-modeline { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-               color: var(--dim); font-size: 11px; }
+               color: var(--dim); font-size: 11px; cursor: help; }
 .ix-modeline.bad { color: var(--bad, #e46a6a); }
-table.ixt col.c-local { width: 64px; }
+table.ixt col.c-local { width: 92px; }
 table.ixt td.s-unavailable { color: var(--dim); font-style: italic; }

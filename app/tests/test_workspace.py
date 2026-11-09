@@ -1350,7 +1350,24 @@ INDEX_SIZE_JS = """() => {
   const cut = [...sec.querySelectorAll('.ix-sum, .ix-foot > span, .ix-dl .v, .ix-dh, th')]
     .filter((el) => el.getClientRects().length && el.scrollWidth > el.clientWidth + 1)
     .map((el) => el.className + ':' + el.textContent.slice(0, 40));
-  return {panel: document.querySelector('#pProject').getBoundingClientRect().width,
+  // verdict 16 punch 10: every select in the foot and the mode bar shows its whole selected
+  // name (measured with the select's own font), and the mode's sentence is whole and visible
+  const cv = document.createElement('canvas').getContext('2d');
+  const selects = [...sec.querySelectorAll('.ix-foot select, .ix-modesel')]
+    .filter((el) => el.getClientRects().length).map((el) => {
+      const cs = getComputedStyle(el); cv.font = `${cs.fontSize} ${cs.fontFamily}`;
+      const text = el.options[el.selectedIndex] ? el.options[el.selectedIndex].text : '';
+      return {cls: el.className, text, need: Math.ceil(cv.measureText(text).width) + 22, have: el.clientWidth};
+    });
+  const ml = sec.querySelector('.ix-modeline'), mb = sec.querySelector('.ix-mode');
+  const modeline = ml && ml.getClientRects().length ? {
+    text: ml.textContent, w: ml.clientWidth, lines: Math.round(ml.getBoundingClientRect().height / 14), cut_x: ml.scrollWidth - ml.clientWidth,
+    cut_y: ml.scrollHeight - ml.clientHeight, visible: getComputedStyle(ml).clip === 'auto'
+      && ml.getBoundingClientRect().width > 100 && ml.getBoundingClientRect().height > 8,
+    bottom: mb.getBoundingClientRect().bottom, foot_bottom: foot.getBoundingClientRect().bottom,
+    vh: innerHeight} : null;
+  return {selects, modeline,
+          panel: document.querySelector('#pProject').getBoundingClientRect().width,
           section: sec.clientWidth, list_h: lr.height, row_h: rowH,
           capacity: Math.floor((lr.bottom - hb) / (rowH || 1)), seen,
           detail_h: sec.querySelector('.ix-detail').getBoundingClientRect().height,
@@ -1398,6 +1415,15 @@ def test_the_index_panel_opens_at_a_working_size(live_server, project, browser, 
     assert m["sum_lines"] == 1 and "looked 12 (10 at 4 s, 2 at 2 s)" in m["sum_text"], m
     assert m["wrapped"] == [] and m["cut"] == [], m
     assert m["page_scroll"] <= 0 and m["tl"] >= 460, m
+    # verdict 16 punch 10: the mode select reads its full name and its sentence is on screen
+    assert m["modeline"] and m["modeline"]["visible"] and m["modeline"]["cut_x"] <= 0 \
+        and m["modeline"]["cut_y"] <= 1, m["modeline"]
+    assert m["modeline"]["text"], m["modeline"]
+    assert m["modeline"]["lines"] == 1, m["modeline"]           # ONE line: the list keeps its rows
+    assert m["modeline"]["bottom"] <= m["modeline"]["vh"], m["modeline"]
+    modesel = next(x for x in m["selects"] if "ix-modesel" in x["cls"])
+    assert modesel["text"] == "Hybrid (3080 + Claude)", modesel
+    assert all(x["need"] <= x["have"] for x in m["selects"]), m["selects"]
     assert pg.locator('[data-testid="index-stop"]').is_visible()
     # the Project tab gives the width back
     pg.locator(".ws-tab[data-tool=project]").click()

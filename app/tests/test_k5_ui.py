@@ -319,13 +319,15 @@ def test_the_mode_control_round_trips_and_says_what_each_costs(pg):
     assert [o.inner_text() for o in sel.locator("option").all()] == [
         "Hybrid (3080 + Claude)", "Local only (3080, free)", "Claude only"]
     line = pg.locator("[data-testid=index-modeline]")
-    assert "Claude double-checks only the moments the cut uses" in line.inner_text()
+    assert "Claude double-checks only what the cut uses" in line.inner_text()
+    assert "Claude double-checks only the moments the cut uses" in line.get_attribute("title")
     sel.select_option("local")
-    pg.wait_for_function("document.querySelector('[data-testid=index-modeline]').innerText.includes('Costs nothing')")
+    pg.wait_for_function("document.querySelector('[data-testid=index-modeline]').innerText.includes('nothing is double-checked')")
+    assert "Costs nothing" in line.get_attribute("title")
     assert seen == [{"mode": "local"}] and sel.input_value() == "local"
     assert rcIndex_state(pg)["mode"] == "local"
     sel.select_option("claude")
-    pg.wait_for_function("document.querySelector('[data-testid=index-modeline]').innerText.includes('the 3080 is not used')")
+    pg.wait_for_function("document.querySelector('[data-testid=index-modeline]').innerText.includes('no 3080')")
     assert seen[-1] == {"mode": "claude"}
     assert "Hybrid (3080 + Claude)" in line.get_attribute("title")        # all three in the hover
     _inside(pg, "[data-testid=index-modebar]")
@@ -407,8 +409,10 @@ def test_no_gpu_says_not_available_with_the_reason(pg):
     assert cell.get_attribute("data-state") == "unavailable"
     assert "not available — no NVIDIA GPU found" in cell.get_attribute("title")
     assert pg.locator("[data-testid=index-mode] option[value=local]").is_disabled()
-    assert "The 3080 is not available: no NVIDIA GPU found." in \
+    assert "No 3080 (no NVIDIA GPU found): runs as Claude only." in \
         pg.locator("[data-testid=index-modeline]").inner_text()
+    assert "The 3080 is not available: no NVIDIA GPU found." in \
+        pg.locator("[data-testid=index-modeline]").get_attribute("title")
     assert "not available" in pg.locator("[data-testid=index-mode] option[value=local]").inner_text()
     pg.locator('[data-testid=index-panel]').screenshot(path=str(SHOTS / f"9-index-nogpu-{pg.size[0]}.png"))
 
@@ -423,6 +427,7 @@ def test_verifys_mode_payload_without_a_local_stack_says_what_actually_runs(pg):
     sel.wait_for(state="visible", timeout=10000)
     assert sel.input_value() == "hybrid"
     assert pg.locator("[data-testid=index-mode] option[value=local]").is_disabled()
-    line = pg.locator("[data-testid=index-modeline]").inner_text()
-    assert "No local model here, so Hybrid runs as Claude only." in line
-    assert "The 3080 is not available" in line
+    el = pg.locator("[data-testid=index-modeline]")
+    assert "No 3080 (no local model): runs as Claude only." in el.inner_text()
+    assert "The 3080 is not available" in el.get_attribute("title")
+    assert "No local model here, so Hybrid runs as Claude only." in el.get_attribute("title")

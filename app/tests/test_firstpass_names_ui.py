@@ -135,6 +135,9 @@ def _open_panel(pg) -> str:
     pg.wait_for_selector(PANEL, state="visible", timeout=5000)
     pg.wait_for_function("document.querySelector('[data-testid=\"firstpass-panel\"] "
                          ".fp-steps li') !== null", timeout=10000)
+    toggle = pg.locator('[data-testid="firstpass-kept-toggle"]')     # the kept shots are collapsed
+    if toggle.count() and toggle.get_attribute("aria-expanded") == "false":
+        toggle.click()
     return pg.locator(PANEL).inner_text()
 
 
