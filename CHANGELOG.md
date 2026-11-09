@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Added
+- `roughcut/localvlm.py` docstring: the shape of an other-rider air candidate (`who: other`, `source: local-scan`, advisory, never settled locally) so the checker can route it before the scan lands (wave 21, OTHERAIR).
+
 ### Changed
 - Loop state: wave 21 planned from verdict 16's punch list (judge/WAVE21.md).
 - Rubric log: the understanding check (advisory until it scores the rev), WORKER's Full/Auto cap and its test's load skip, the demotion fixture and the local model ids, as verdict 16 asked; FOR-KARL names b2cbc31 and what to try for K5/K6.

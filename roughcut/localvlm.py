@@ -25,6 +25,26 @@ A check (one entry of a sidecar's "checks"):
 `p_yes >= 0.2` on a fall question is "likely" (the bake-off cut; the 0.2-0.9 band is for Claude
 to settle); an air question is only ever "advisory" — **an air is never settled locally**.
 
+Other riders' airs (wave 21, lane OTHERAIR). Telemetry only feels the camera wearer, so a
+levelled frame scan asks "is anyone else in frame airborne?" over the high-motion windows of a
+clip that have NO telemetry air near them, and returns CANDIDATES — never a verdict:
+
+    other_airs(clip)   -> list of candidates (from `<stem>.local.json` "other_airs"), [] when none
+    scan_other_air(clips, ...)  runs the scan (one subprocess, models load once)
+
+An other-air candidate (the shape lane CHECKER routes — every one goes to Claude, none is
+settled locally, none is shown to Karl as an event until Claude confirms it):
+    {"kind": "air", "who": "other", "source": "local-scan", "q": "other_air",
+     "start", "end", "t",             # seconds in the clip; t = the scan's peak (or the window centre)
+     "p_yes",                         # P(yes) of the whole 3 s window (a ranking number, not a probability of truth)
+     "scan_peak_t", "scan_peak_p",    # the 1 s / 0.5 s timing scan's best sub-window, when p_yes was above the scan floor
+     "motion_z",                      # the window's motion-track z (why it was looked at)
+     "verdict": "advisory", "settles": False,
+     "frames": {t0, t1, n, fps, levelled, sharp_of}, "gpu_s"}
+It carries the same keys a `checks` entry has (so a reader of checks reads it unchanged) plus
+`who` and `motion_z`. `events.py` turns a Claude-confirmed one into an `air` event with
+`who: "other"`; an unconfirmed one is never an event.
+
 Context: the server binds the bin (`bind(footage, work, tools)`); every path below hangs off
 `<work>/local/<bin>/`. `ROUGHCUT_LOCALGPU=0` turns the whole thing off (the test suite does).
 """
