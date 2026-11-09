@@ -63,6 +63,8 @@ from typing import Callable
 
 import numpy as np
 
+from . import config
+
 REPO = Path(__file__).resolve().parent.parent
 LOCALGPU_DIR = REPO / "localgpu"
 NICE = 5                              # GPU jobs yield to the editor's own work
@@ -132,9 +134,9 @@ def _probe(deep: bool) -> dict:
         return {"ok": False, "why": "the local stack is not installed (scripts/install-local-models.sh)",
                 "gpu": gpu}
     miss = []
-    if not (models_dir() / "qwen35-4b-bnb4").is_dir():
+    if not (models_dir() / config.local_model(config.LOCAL_VLM)["dir"]).is_dir():
         miss.append("Qwen3.5-4B")
-    hub = models_dir() / "hf" / "hub" / "models--timm--PE-Core-L-14-336" / "snapshots"
+    hub = models_dir() / "hf" / "hub" / ("models--" + config.local_model(config.LOCAL_EMBED)["repo"].replace("/", "--")) / "snapshots"
     if not (hub.is_dir() and any(hub.iterdir())):
         miss.append("PE-Core")
     if miss:

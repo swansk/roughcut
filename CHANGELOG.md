@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Changed
+- The local models' ids (Qwen3.5-4B repo + folder, PE-Core repo) moved from `localgpu/rcgpu/config.py` and `roughcut/localvlm.py` literals into `roughcut/config.py`'s `local_model()` table (env override `ROUGHCUT_LOCAL_<KEY>_REPO/_DIR`); both read it. pyannote's id stays in `research/tools/diarize.py` (a standalone uv script that cannot import the package). Verdict 16 section S (OTHERAIR).
+
 ### Added
 - `roughcut/localvlm.py` docstring: the shape of an other-rider air candidate (`who: other`, `source: local-scan`, advisory, never settled locally) so the checker can route it before the scan lands (wave 21, OTHERAIR).
 

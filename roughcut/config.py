@@ -52,6 +52,32 @@ def model_for(role: str) -> str:
     return os.environ.get(f"ROUGHCUT_MODEL_{role.upper()}", _DEFAULT_MODELS[role])
 
 
+# --- local models -----------------------------------------------------------
+# The 3080 stage's models (wave 20-21, `localgpu/`, `roughcut/localvlm.py`). They are not
+# inference roles (nothing here calls the Claude backend; they run in a subprocess on the
+# user's GPU), but the "model IDs live here" rule covers them: a repo id or the folder a
+# quantised copy lives in is configuration. `localgpu/rcgpu/config.py` and `localvlm.py` read
+# this table. Both modules stdlib-only, so the heavy environment can import it.
+# pyannote's id (`pyannote/speaker-diarization-community-1`) stays in research/tools/diarize.py:
+# that script is a standalone uv project (its own pins, run by path) that cannot import this package.
+LOCAL_VLM = "vlm"            # the yes/no CHECK model
+LOCAL_EMBED = "embed"        # Find's image/text embeddings
+_LOCAL_MODELS = {
+    LOCAL_VLM: {"repo": "Qwen/Qwen3.5-4B", "dir": "qwen35-4b-bnb4"},
+    LOCAL_EMBED: {"repo": "timm/PE-Core-L-14-336", "dir": ""},
+}
+
+
+def local_model(key: str) -> dict:
+    """{"repo", "dir"} of a local model; `ROUGHCUT_LOCAL_<KEY>_REPO` / `_DIR` override."""
+    if key not in _LOCAL_MODELS:
+        raise ValueError(f"unknown local model {key!r}; expected one of {sorted(_LOCAL_MODELS)}")
+    d = dict(_LOCAL_MODELS[key])
+    for f in ("repo", "dir"):
+        d[f] = os.environ.get(f"ROUGHCUT_LOCAL_{key.upper()}_{f.upper()}", d[f])
+    return d
+
+
 # --- pricing ---------------------------------------------------------------
 # SPEC §6.3 reference prices, USD per million tokens (input, output). These feed
 # `projected_usd` and nothing else — they are a projection, never a runtime
