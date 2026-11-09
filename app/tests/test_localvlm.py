@@ -378,6 +378,42 @@ def test_the_stage_runs_every_clip_in_one_batch_and_resumes(fake_stack, tmp_path
         assert server.load_journal().state(server.footage_clips()[0], "local") == "done"
 
 
+def test_the_stage_also_scans_for_other_riders_and_stays_resumable(fake_stack, tmp_path, project, monkeypatch):
+    import server
+    monkeypatch.setenv("ROUGHCUT_LOCALGPU", "1")
+    monkeypatch.setattr(localvlm, "other_air_windows",
+                        lambda ctx, clip, **kw: [{"start": 0.0, "end": 4.0, "at": 14.0, "z": 9.0}])
+    with _fresh(tmp_path, project, sidecars=project["sidecars"], visual=None) as c:
+        s = _index_all(c, server, monkeypatch, tmp_path)
+        assert s["state"] == "done", s
+        ctx = server.local_context()
+        for clip in server.footage_clips():
+            assert server.local_sidecar(clip).exists()
+            assert localvlm.other_air_scan(clip, ctx) is not None
+            assert localvlm.other_airs(clip, ctx)[0]["who"] == "other"
+        j = server.load_journal()
+        assert all(j.state(clip, "local") == "done" for clip in server.footage_clips())
+
+
+def test_a_failed_scan_is_retried_once_and_never_fails_the_stage(monkeypatch):
+    import server
+    calls = []
+
+    def fake(clips, ctx, force=False, **kw):
+        calls.append((list(clips), force))
+        return {"done": [Path(c).stem for c in clips if Path(c).stem != "B"],
+                "failed": {"B": "boom"} if "B.MP4" in clips else {}}
+    monkeypatch.setattr(localvlm, "scan_other_air", fake)
+    r = server._other_air_scan(["A.MP4", "B.MP4"], None, True, lambda: False)
+    assert [c[0] for c in calls] == [["A.MP4", "B.MP4"], ["B.MP4"]] and calls[1][1] is False
+    assert r["failed"] == {"B": "boom"}
+
+    def boom(*a, **k):
+        raise localvlm.NotAvailable("gone")
+    monkeypatch.setattr(localvlm, "scan_other_air", boom)
+    assert server._other_air_scan(["A.MP4"], None, False, lambda: False)["done"] == []
+
+
 def test_the_stage_is_skipped_when_nothing_is_available_and_taken_again_when_it_is(
         fake_stack, tmp_path, project, monkeypatch):
     import server

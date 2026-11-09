@@ -253,7 +253,19 @@ def _default_local(clip: str) -> list[dict]:
         return []
 
 
+def _default_other_airs(clip: str) -> list[dict]:
+    """The 3080 scan's `who: other` air candidates for a clip (OTHERAIR's `.otherair.json`), []
+    when there are none."""
+    try:
+        from . import localvlm
+        return list(localvlm.other_airs(clip))
+    except Exception:                                      # noqa: BLE001
+        return []
+
+
+LOCAL_SOURCES = ("local", "local-scan")        # a row the 3080 raised (never settled there)
 _LOCAL: Callable[[str], list[dict]] = _default_local
+_OTHER_AIRS: Callable[[str], list[dict]] = _default_other_airs
 _TELEMETRY: Callable[[str], list[dict]] = _default_telemetry
 _LEVELLING: Callable[[str, Sequence[float]], list[float]] = _default_levelling
 _FRAMES: Callable[..., Any] | None = None       # None: localvlm if there, else ffmpeg
@@ -262,10 +274,12 @@ _FRAMES: Callable[..., Any] | None = None       # None: localvlm if there, else 
 def set_providers(*, telemetry: Callable[[str], list[dict]] | None = None,
                   levelling: Callable[[str, Sequence[float]], list[float]] | None = None,
                   frames: Callable[..., Any] | None = None,
-                  local: Callable[[str], list[dict]] | None = None) -> None:
+                  local: Callable[[str], list[dict]] | None = None,
+                  other_airs: Callable[[str], list[dict]] | None = None) -> None:
     """Replace a provider; None puts the default back. Tests and the eval script use it."""
-    global _TELEMETRY, _LEVELLING, _FRAMES, _LOCAL
+    global _TELEMETRY, _LEVELLING, _FRAMES, _LOCAL, _OTHER_AIRS
     _LOCAL = local or _default_local
+    _OTHER_AIRS = other_airs or _default_other_airs
     _TELEMETRY = telemetry or _default_telemetry
     _LEVELLING = levelling or _default_levelling
     _FRAMES = frames
@@ -414,7 +428,8 @@ def telemetry_events_for(clips: Iterable[str]) -> list[dict]:
 
 
 def other_air_rows(clip: str, rows: Sequence[dict],
-                   checks: Sequence[dict] | None = None) -> list[dict]:
+                   checks: Sequence[dict] | None = None,
+                   scan: Sequence[dict] | None = None) -> list[dict]:
     """Event rows for the 3080's "is anyone in frame airborne" candidates that name another
     rider (`who: other`) and are not the wearer's own sensor-felt air (Karl, 2026-11-08:
     other riders' airs count; verdict 16 punch 4).
@@ -424,13 +439,38 @@ def other_air_rows(clip: str, rows: Sequence[dict],
     `q: "air_other"` on the check itself), with `p_yes` when the model scored it. Each
     becomes {kind: "air", who: "other", source: "local", start, end, t, local: {p_yes},
     event_id, text}. `route` sends every one of them to Claude, whatever its p_yes: the
-    local model finds candidates, it never settles an air."""
+    local model finds candidates, it never settles an air.
+
+    Primary source (wave 21): the frame scan's own sidecar, `localvlm.other_airs(clip)` (or
+    `scan`), candidates {kind: "air", who: "other", source: "local-scan", start, end, t, p_yes,
+    ...}. Those become rows with `source: "local-scan"`, listed ahead of the `checks` ones."""
     try:
         cs = list(checks) if checks is not None else list(_LOCAL(clip))
+        sc = list(scan) if scan is not None else list(_OTHER_AIRS(clip))
     except Exception:                                      # noqa: BLE001
         return []
     wearer = [r for r in rows if r.get("kind") == "air"]
     out: list[dict] = []
+    for c in sc:
+        if str(c.get("who", "")).lower() != "other" or c.get("kind") != "air":
+            continue
+        try:
+            t = float(c.get("t", (float(c["start"]) + float(c["end"])) / 2))
+            a, b = float(c.get("start", t - 0.75)), float(c.get("end", t + 0.75))
+        except (KeyError, TypeError, ValueError):
+            continue
+        if any(_overlaps(a, b, float(w["start"]), float(w["end"]), 1.0) for w in wearer):
+            continue
+        if any(abs(float(o["t"]) - t) < 1.0 for o in out):
+            continue
+        row = {"clip": clip, "kind": "air", "who": "other", "source": "local-scan",
+               "start": round(a, 2), "end": round(b, 2), "t": round(t, 2),
+               "text": f"another rider airborne at about {t:.1f} s (the 3080's frame scan)"}
+        row["event_id"] = event_id(row)
+        if c.get("p_yes") is not None:
+            row["local"] = {"p_yes": c["p_yes"], "verdict": "advisory", "advisory": True,
+                            "model": "Qwen3.5-4B nf4", "frames": c.get("frames")}
+        out.append(row)
     for c in cs:
         cand = c.get("cand") or {}
         who = str(cand.get("who") or c.get("who") or "").lower()
@@ -587,7 +627,7 @@ def route(events: Sequence[dict], *, mode: str, local_ok: bool, used: Iterable[s
         if e.get("weak_claim"):
             reasons.append("the board would state this fall on a long stop alone")
             prio = min(prio, 1)
-        if e.get("kind") == "air" and e.get("who") == "other" and e.get("source") == "local":
+        if e.get("kind") == "air" and e.get("who") == "other" and e.get("source") in LOCAL_SOURCES:
             reasons.append("the 3080 saw another rider airborne: Claude decides")
             prio = min(prio, 1)
         elif e.get("kind") == "air":
@@ -782,7 +822,7 @@ def sensor_proven(e: dict) -> bool:
     3.0 g, a labelled high-confidence air that Claude called flat terrain); the six that
     Claude rightly rejected are all WEAK (0.16-0.21 g). A small air over a roll is
     invisible in a 3 s strip, so Claude's "no crest" cannot outvote the sensor."""
-    if e.get("kind") != "air" or e.get("handling") or e.get("source") == "local":
+    if e.get("kind") != "air" or e.get("handling") or e.get("source") in LOCAL_SOURCES:
         return False
     try:
         return (float(e.get("air_s") or 0.0) >= SENSOR_AIR_S - 1e-9
@@ -992,7 +1032,7 @@ def annotate_event(e: dict, state: dict, *, mode: str, local_ok: bool) -> dict:
     eid = row.get("event_id") or event_id(row)
     row["event_id"] = eid
     v = state.get("verdicts", {}).get(eid)
-    local_src = row.get("source") == "local"
+    local_src = row.get("source") in LOCAL_SOURCES
     evidence = ["local"] if local_src else ["telemetry"]
     p = local_p(row)
     if p is not None and not local_src:

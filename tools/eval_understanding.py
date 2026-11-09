@@ -358,7 +358,16 @@ def collect(work: Path, bin_name: str, record: dict | None = None, replay_dir: P
             return []
         return [{**c, "model": sc.get("model", "")} for c in sc.get("checks") or []]
 
-    verify.set_providers(telemetry=lambda c: te.telemetry_events(c, tel), local=local_checks)
+    def other_airs(clip: str) -> list[dict]:
+        """OTHERAIR's frame-scan candidates (`<stem>.otherair.json`, frozen with the rest of local/)."""
+        try:
+            d = json.loads((local_dir / f"{Path(clip).stem}.otherair.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        return list(d.get("candidates") or [])
+
+    verify.set_providers(telemetry=lambda c: te.telemetry_events(c, tel), local=local_checks,
+                         other_airs=other_airs)
     try:
         per_clip = events.gather(vis, aud)
         raw_clips = {c: {**d, "felt": None} for c, d in per_clip.items()}

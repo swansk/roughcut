@@ -6877,6 +6877,26 @@ def _gate_local(j: journal.Journal, only):
     return gated
 
 
+def _other_air_scan(clips: list[str], ctx, force: bool, cancelled) -> dict:
+    """Wave 21 OTHERAIR: after embed + check, the same stage asks the 3080 whether another rider
+    is airborne in each clip's high-motion windows (`<stem>.otherair.json`, advisory candidates
+    the checker sends to Claude). Same GPU lock, resumable (a clip with a sidecar is skipped), a
+    failed clip retried once. Optional by nature: it never fails or skips the stage."""
+    out = {"done": [], "failed": {}}
+    todo = list(clips)
+    for attempt in (1, 2):
+        if not todo or cancelled():
+            break
+        try:
+            r = localvlm.scan_other_air(todo, ctx, force=force and attempt == 1)
+        except (localvlm.NotAvailable, RuntimeError, OSError):
+            break
+        out["done"] += r["done"]
+        out["failed"] = r["failed"]
+        todo = [c for c in todo if Path(c).stem in r["failed"]]
+    return out
+
+
 def _local_stage(j: journal.Journal, clip: str, allow) -> float:
     a = localvlm.available()
     if not a["ok"]:
@@ -6918,6 +6938,7 @@ def _local_stage(j: journal.Journal, clip: str, allow) -> float:
             raise
         raise _Skip("failed: " + str(exc)[:160])
     settle_others(res, None)
+    _other_air_scan([c for c in wanted if Path(c).stem in res["done"]], ctx, again, cancelled)
     if cancelled() and not (Path(clip).stem in res["done"] and local_sidecar(clip).exists()):
         raise RuntimeError("stopped")          # a clip that landed before the Stop stays done
     if Path(clip).stem not in res["done"] or not local_sidecar(clip).exists():

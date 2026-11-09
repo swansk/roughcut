@@ -428,6 +428,8 @@ def scan_other_air(clips: list[str], ctx: Context | None = None, *, force: bool 
         n_win += len(win)
         job["clips"].append({"stem": Path(clip).stem, "video": str(ctx.video(clip)),
                              "sensors": pre["sensors"], "windows": win})
+    if not job["clips"]:                       # nothing high-motion anywhere: no subprocess, no model load
+        return {"done": [], "failed": {}, "events": [], "returncode": 0, "windows": 0}
     r = _run_stream("scan", job, ctx, on_event)
     r["windows"] = n_win
     return r

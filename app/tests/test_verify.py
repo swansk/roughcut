@@ -600,6 +600,32 @@ def test_every_local_other_air_candidate_goes_to_claude():
     assert verify.route(rows, mode="local", local_ok=True) == []
 
 
+def test_the_scan_sidecar_is_the_primary_source_of_other_airs():
+    wearer = air(t=2.0)
+    scan = [{"kind": "air", "who": "other", "source": "local-scan", "start": 24.6, "end": 26.1, "t": 25.4,
+             "p_yes": 0.82, "verdict": "advisory"},
+            {"kind": "air", "who": "other", "start": 1.5, "end": 3.0, "t": 2.2, "p_yes": 0.9},   # the wearer's air
+            {"kind": "air", "who": "wearer", "start": 40, "end": 41, "t": 40.5}]
+    rows = verify.other_air_rows("CLIP_A.MP4", [wearer], [], scan)
+    assert [(r["kind"], r["who"], r["source"], r["t"]) for r in rows] == [("air", "other", "local-scan", 25.4)]
+    assert rows[0]["local"]["p_yes"] == 0.82 and rows[0]["local"]["advisory"]
+    for mode, ok in (("hybrid", True), ("claude", False)):
+        routed = verify.route([wearer, *rows], mode=mode, local_ok=ok, heroes=[])
+        assert rows[0]["event_id"] in [r["event_id"] for r in routed]
+    assert verify.route(rows, mode="local", local_ok=True) == []
+    base = verify.annotate_event(rows[0], {"verdicts": {}}, mode="hybrid", local_ok=True)
+    assert base["certainty"] == "unchecked" and not base["asserted"] and base["evidence"] == ["local"]
+    assert verify.annotate_event(rows[0], {"verdicts": {}}, mode="local", local_ok=True)["asserted"]
+    # through the provider, with the checks list empty; a checks item for the same moment is not doubled
+    verify.set_providers(telemetry=lambda c: [wearer], local=lambda c: [_local_other(25.5)],
+                         other_airs=lambda c: scan)
+    try:
+        evs = verify.telemetry_events_for(["CLIP_A.MP4"])
+    finally:
+        verify.set_providers()
+    assert [(e["who"], e["source"]) for e in evs if e["who"] == "other"] == [("other", "local-scan")]
+
+
 def test_a_local_other_air_is_stated_only_after_claude_confirms_it():
     row = verify.other_air_rows("CLIP_A.MP4", [], [_local_other()])[0]
     base = verify.annotate_event(row, {"verdicts": {}}, mode="hybrid", local_ok=True)
