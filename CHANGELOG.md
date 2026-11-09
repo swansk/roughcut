@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- Loop state: all of wave 21's first five lanes merged and on the 8766 preview.
 - Wiring for other riders' airs (wave 21, OTHERAIR): the `local` stage now scans each indexed clip for `who: other` airs after embed + check (same lock, `<stem>.otherair.json` resumable, failed clips retried once, never fails the stage); `verify.other_air_rows` reads `localvlm.other_airs` first and returns `source: local-scan` rows (routed to Claude at priority 1, unchecked until it confirms); `tools/eval_understanding.py` reads the frozen bin's `.otherair.json`. Killington offline eval with the sidecars: other riders' airs 0.00 -> 1.00, 1 of 19 negatives asserted (unchanged); one routed event (the CLIP_10 candidate) has no recorded verdict yet.
 ### Added
 - Other riders' airs (wave 21, OTHERAIR): `rcgpu scan` + `localvlm.scan_other_air / other_airs / other_air_scan / other_air_windows` ask the 3080 "is a person other than the wearer airborne" over the top-3 motion windows per clip that have no telemetry air, on levelled 10 fps frames, and write `<stem>.otherair.json` with `who: other` candidates (advisory, never settled locally; `events.other_air_moments` shapes them for the checker). Killington: CLIP_10's 25 s air is found (P 0.82, timing peak 25.37), 1 candidate on the whole 12-clip bin, 0 on the 19 negatives (45 windows, 2.75 min, top P 0.56); 187 GPU-s for the bin plus a 23 s model load.

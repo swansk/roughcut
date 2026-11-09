@@ -49,6 +49,14 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-09 ~05:50: **Wave 21 lanes all merged (CLAIMSUI a076167, EVALREV dd4c6b5, CHECKER 0b48995, OTHERAIR d36695a +
+  wiring 6abec01, FPPANEL 9f62472); quick gates on `9f62472` GREEN 2/2 at load 3.9-4.8; 8766 deployed on `9f62472`.**
+  Understanding (replay of the rev's router + checker on frozen inputs): recall 0.89, air 0.80, 1 of 19 negatives,
+  checker_lost 0. Open: other riders' airs 0.00 in the replay (frozen inputs lack the scan sidecar; the CLIP_10 candidate
+  needs a recorded verdict → one re-record on a fresh Hybrid pass, ~45 calls); CHECKER overran its call cap (88 vs 60, plan,
+  unbilled) and its final eval line is offline-scored after its `already_down` rule; the journey's step 24 export-size
+  estimate (-36 %) fails intermittently on base and head under load (a follow-up); GRADE (sharpen + hand-off) next at load
+  <= 4, then a full gate and judge 17.
 - 2026-11-09 ~05:00: **VERDICT 16 FAIL on `b2cbc31`** (dims 9,5,9,9,9,7,8,9,7,8,8,9,9,8,9,8): K1 broken again at 1440 (the
   panel's Re-run below the window), the judge's full gate RED and crashed past gate.py's 3600 s timeout, no-telemetry falls
   lost with no UI to check claims, a fresh Hybrid pass regresses airs (0.80 → 0.60: Claude rejected the CLIP_05 sensor
