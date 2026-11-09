@@ -5435,6 +5435,38 @@ def _firstpass_job(job: str) -> None:
         _firstpass_walk(job, fp)
 
 
+def _weak_claims(state: dict) -> list[dict]:
+    """The index's fall / crash claims that rest on a long stop alone, as rows the first
+    pass's checker looks at (verify.weak_claim_rows)."""
+    try:
+        return verifymod.weak_claim_rows(events.load(STATE["visual"]), state)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _contradicted_by():
+    """verify_cut's hook: for a proposed shot, the words for what a closer look found
+    against the moment it rests on (the index's own jump / fall that a close look called
+    flat snow, a Claude strip check that rejected it), or None."""
+    try:
+        moments = bin_certified()
+    except Exception:  # noqa: BLE001
+        return None
+
+    def why(seg: dict) -> str | None:
+        m = flowmod.shot_moment(moments.get(seg.get("clip"), []), float(seg["in"]),
+                                float(seg["out"]))
+        if not m:
+            return None
+        c = flowmod.certainty(m)
+        if c["level"] != "contradicted":
+            return None
+        v = m.get("verdict") if isinstance(m.get("verdict"), dict) else {}
+        what = str(m.get("what") or m.get("kind") or "a moment").strip()
+        return f"“{what[:90]}”: {str(v.get('why') or c['title'])[:200]}"
+    return why
+
+
 def _fp_verify(fp: dict, plan: dict, locked: list[str]) -> dict:
     """The first pass's check step (wave 20 VERIFY): after the cut is proposed, Claude
     checks the events it uses (and the heroes and airs, <= 40 calls), and the shots are
@@ -5444,7 +5476,8 @@ def _fp_verify(fp: dict, plan: dict, locked: list[str]) -> dict:
         return verifymod.verify_cut(
             plan, footage_clips(), st, mode=st["mode"], video_of=_verify_video,
             workdir=_verify_workdir(), save=_verify_save, locked=locked,
-            duration_of=clip_duration, cancelled=lambda: bool(fp.get("cancel")))
+            duration_of=clip_duration, cancelled=lambda: bool(fp.get("cancel")),
+            contradicted_by=_contradicted_by(), claims=_weak_claims(st))
     except Exception as exc:  # noqa: BLE001
         return {"mode": st["mode"], "calls": 0, "usd": 0.0, "error": str(exc)[:200],
                 "said": "The Claude check of the cut's moments did not run "

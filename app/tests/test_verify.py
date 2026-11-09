@@ -507,3 +507,227 @@ def test_local_available_reads_the_dict(monkeypatch):
     assert verify.local_available() is False
     monkeypatch.setattr(localvlm, "available", lambda *a, **k: {"ok": True})
     assert verify.local_available() is True
+
+
+# ----------------------------------------- wave 21 CHECKER: sensor-proven airs, other airs
+
+def proven(clip="CLIP_A.MP4", t=2.0, **kw):
+    """CLIP_05 17.97's numbers: 0.30 s of true free fall (0.03 g), a 3.0 g landing."""
+    return air(clip=clip, t=t, air_s=0.30, min_g=0.031, landing_g=3.0, **kw)
+
+
+def _reject(kind="none", conf="medium", why="flat terrain, no crest"):
+    return {"verdict": "reject", "raw_verdict": "reject", "kind": kind, "who": "wearer",
+            "confidence": conf, "why": why}
+
+
+def test_a_sensor_proven_air_is_recognised_by_its_numbers_only():
+    assert verify.sensor_proven(proven())
+    assert not verify.sensor_proven(air(air_s=0.3, min_g=0.176, landing_g=3.8))   # WEAK
+    assert not verify.sensor_proven(air(air_s=0.2, min_g=0.03, landing_g=4.0))    # too short
+    assert not verify.sensor_proven(air(air_s=0.3, min_g=0.03, landing_g=2.4))    # soft landing
+    assert not verify.sensor_proven(proven(handling=True))                        # a handled camera
+    assert not verify.sensor_proven(impact())
+
+
+def test_claude_rejecting_a_sensor_proven_air_makes_it_unsure_but_still_felt():
+    a = proven()
+    v = verify.settle({**_reject(), "start": None, "end": None}, a)
+    assert v["verdict"] == "unsure" and v["raw_verdict"] == "reject" and v["overruled"]
+    r = verify.annotate_event(a, {"verdicts": {a["event_id"]: v}}, mode="hybrid", local_ok=False)
+    assert r["certainty"] == "unsure" and r["asserted"] and r["sensor_proven"]
+    assert "0.30 s of free fall" in r["overruled"] and r["verdict"]["raw_verdict"] == "reject"
+    # a verdict stored before this rule (still a plain reject) reads the same way
+    old = verify.annotate_event(a, {"verdicts": {a["event_id"]: _reject()}}, mode="hybrid",
+                                local_ok=False)
+    assert old["certainty"] == "unsure" and old["asserted"]
+    # never demoted: an index jump over it stays supported
+    held = verify.demote([{"kind": "jump", "start": 1.9, "end": 2.2, "what": "jump"}],
+                         "CLIP_A.MP4", {"verdicts": {a["event_id"]: _reject()}}, tel=[a])
+    assert len(held[0]) == 1 and not held[1]
+
+
+def test_a_false_telemetry_air_is_still_rejected():
+    for a in (air(),                                        # WEAK numbers (min 0.3 g)
+              air(air_s=0.3, min_g=0.176, landing_g=3.8),   # the real, correctly rejected airs
+              proven(handling=True)):                       # the camera was handled
+        v = verify.settle(_reject(), a)
+        assert v["verdict"] == "reject" and not v.get("overruled")
+        r = verify.annotate_event(a, {"verdicts": {a["event_id"]: v}}, mode="hybrid",
+                                  local_ok=False)
+        assert r["certainty"] == "rejected" and not r["asserted"]
+    # Claude positively naming a tossed camera (not low confidence) is believed over the sensor
+    toss = verify.settle(_reject(kind="camera-toss", why="the camera is thrown"), proven())
+    assert toss["verdict"] == "reject"
+    held = verify.demote([{"kind": "jump", "start": 1.9, "end": 2.2, "what": "jump"}],
+                         "CLIP_A.MP4", {"verdicts": {air()["event_id"]: _reject()}}, tel=[air()])
+    assert not held[0] and len(held[1]) == 1
+
+
+def test_the_prompt_leads_with_the_free_fall_numbers(project, tmp_path):
+    a = proven()
+    strip = verify.Strip(path=tmp_path / "s.jpg", times=[1.0 + i / 8 for i in range(24)],
+                         angles=[0.0] * 24, source="x", size=(1566, 1044))
+    text = verify.build_prompt(a, strip)
+    head = text.split("\n", 2)[1]
+    assert head.startswith("SENSOR PROOF") and "0.30 s" in head and "0.03 g" in head \
+        and "3.0 g" in head
+    weak = verify.build_prompt(air(), strip)
+    assert "SENSOR PROOF" not in weak
+
+
+def _local_other(t=25.0, p=0.1, **kw):
+    return {"t": t, "q": "air_other", "p_yes": p, "cand": {"kind": "air", "who": "other",
+            "start": t - 0.5, "end": t + 0.5, "t": t, **kw}}
+
+
+def test_every_local_other_air_candidate_goes_to_claude():
+    wearer = air(t=2.0)
+    cs = [_local_other(25.0, p=0.05), _local_other(40.0, p=0.9),
+          _local_other(2.1),                       # the wearer's own air, already felt
+          {"t": 9, "cand": {"kind": "speed_drop", "start": 8, "end": 9, "t": 9}, "q": "fall",
+           "p_yes": 0.5}]
+    rows = verify.other_air_rows("CLIP_A.MP4", [wearer], cs)
+    assert [(r["kind"], r["who"], r["source"]) for r in rows] == [("air", "other", "local")] * 2
+    assert {r["t"] for r in rows} == {25.0, 40.0}
+    # whatever the local number, hybrid and claude modes send them, ahead of ordinary airs
+    for mode, ok in (("hybrid", True), ("hybrid", False), ("claude", False)):
+        routed = verify.route([wearer, *rows], mode=mode, local_ok=ok, heroes=[])
+        ids = [r["event_id"] for r in routed]
+        assert all(r["event_id"] in ids for r in rows)
+        assert all("another rider" in " ".join(r["route_reasons"]) for r in routed
+                   if r["who"] == "other")
+    assert verify.route(rows, mode="local", local_ok=True) == []
+
+
+def test_a_local_other_air_is_stated_only_after_claude_confirms_it():
+    row = verify.other_air_rows("CLIP_A.MP4", [], [_local_other()])[0]
+    base = verify.annotate_event(row, {"verdicts": {}}, mode="hybrid", local_ok=True)
+    assert base["certainty"] == "unchecked" and not base["asserted"] \
+        and base["evidence"] == ["local"]
+    yes = {"verdicts": {row["event_id"]: {"verdict": "confirm", "kind": "air", "who": "other",
+                                          "confidence": "high"}}}
+    r = verify.annotate_event(row, yes, mode="hybrid", local_ok=True)
+    assert r["certainty"] == "claude" and r["asserted"] and r["who"] == "other"
+    assert verify.annotate_event(row, {"verdicts": {}}, mode="local",
+                                 local_ok=True)["asserted"]
+    # telemetry_events_for picks the candidates up through the local provider
+    verify.set_providers(telemetry=lambda c: [air(t=2.0)], local=lambda c: [_local_other()])
+    try:
+        evs = verify.telemetry_events_for(["CLIP_A.MP4"])
+    finally:
+        verify.set_providers()
+    assert [e["who"] for e in evs] == ["wearer", "other"]
+
+
+def test_apply_to_plan_lists_a_shot_on_a_rejected_moment_with_what_contradicted_it():
+    a = air(t=2.0)
+    ev = impact(t=10.0)
+    plan = {"segments": [{"id": "s1", "clip": "CLIP_A.MP4", "in": 1.5, "out": 3.0},
+                         {"id": "s2", "clip": "CLIP_A.MP4", "in": 9.5, "out": 11.0},
+                         {"id": "s3", "clip": "CLIP_B.MP4", "in": 4.0, "out": 6.0}]}
+    st = {"verdicts": {a["event_id"]: _reject(why="Ordinary riding over rough snow."),
+                       ev["event_id"]: {"verdict": "confirm", "kind": "fall", "who": "wearer",
+                                        "confidence": "high", "why": "tumbles"}}}
+    seen = []
+    res = verify.apply_to_plan(plan, [a, ev], st,
+                               contradicted_by=lambda s: seen.append(s["id"]) or (
+                                   "a close look found a handled camera"
+                                   if s["id"] == "s3" else None))
+    assert res["flagged"] == ["s1", "s3"]
+    assert [s.get("unverified") for s in plan["segments"]] == [True, None, True]
+    first, third = res["contradicted"]
+    assert first["claimed"] == "an air" and first["event_id"] == a["event_id"]
+    assert "Ordinary riding over rough snow." in first["text"] and "CLIP_A" in first["text"]
+    assert first["shot"] == "s1" and (first["in"], first["out"]) == (1.5, 3.0)
+    assert "handled camera" in third["found"] and third["clip"] == "CLIP_B.MP4"
+    # a sensor-proven air Claude rejected is NOT a contradiction (it is unsure, felt)
+    p2 = {"segments": [{"id": "s1", "clip": "CLIP_A.MP4", "in": 1.5, "out": 3.0}]}
+    pa = proven()
+    r2 = verify.apply_to_plan(p2, [pa], {"verdicts": {pa["event_id"]: _reject()}})
+    assert r2["flagged"] == [] and r2["contradicted"] == [] and not p2["segments"][0].get("unverified")
+
+
+def test_the_contradicted_shots_reach_things_to_check(project, tmp_path, scripted):
+    from roughcut import revise
+    a = air(t=2.0)
+    verify.set_providers(telemetry=lambda c: [a])
+    try:
+        scripted([{"verdict": "reject", "kind": "none", "who": "wearer", "start": None,
+                   "end": None, "confidence": "high", "why": "ordinary riding"}])
+        plan = {"segments": [{"id": "s1", "clip": "CLIP_A.MP4", "in": 1.5, "out": 3.0}]}
+        rec = verify.verify_cut(plan, ["CLIP_A.MP4"], {"mode": "claude", "verdicts": {}},
+                                mode="claude", video_of=lambda c: project["footage"] / c,
+                                workdir=tmp_path, local_ok=False)
+    finally:
+        verify.set_providers()
+    assert rec["contradicted"] and rec["shots_flagged"] == 1
+    plan["firstpass"] = {"verified": rec}
+    checks = revise.plan_checks(plan)
+    row = next(c for c in checks if c["kind"] == "contradicted")
+    assert row["shot"] == 0 and "ordinary riding" in row["text"] and row["claimed"] and row["found"]
+    # local-only passes still list a shot the index's own old moment contradicted
+    p2 = {"segments": [{"id": "s9", "clip": "CLIP_A.MP4", "in": 5.0, "out": 7.0}]}
+    r2 = verify.verify_cut(p2, ["CLIP_A.MP4"], {"mode": "local", "verdicts": {}}, mode="local",
+                           video_of=lambda c: project["footage"] / c, workdir=tmp_path,
+                           contradicted_by=lambda s: "a close look called it flat snow")
+    assert r2["shots_flagged"] == 1 and "flat snow" in r2["contradicted"][0]["found"]
+
+
+def test_a_fall_claim_resting_on_a_long_stop_alone_is_checked_in_the_first_pass(
+        project, tmp_path, scripted):
+    stop = {"clip": "CLIP_A.MP4", "kind": "stopped", "start": 0.9, "end": 43.9, "t": 0.9,
+            "source": "telemetry", "check": False, "who": "wearer", "text": "stopped 1-44"}
+    stop["event_id"] = verify.event_id(stop)
+    real = impact(t=20.0)                              # a real candidate backs the second claim
+    ranked = [{"clip": "CLIP_A.MP4", "kind": "crash", "start": 1.4, "end": 1.6,
+               "what": "a crash", "source": "sheet"},
+              {"clip": "CLIP_A.MP4", "kind": "fall", "start": 19.8, "end": 20.2,
+               "what": "a fall", "source": "sheet"},
+              {"clip": "CLIP_A.MP4", "kind": "crash", "start": 60.0, "end": 61.0,
+               "what": "nothing backs this", "source": "sheet"}]
+    rows = verify.weak_claim_rows(ranked, {"verdicts": {}}, tel_of=lambda c: [stop, real])
+    assert [(r["kind"], r["start"]) for r in rows] == [("crash", 1.4)]
+    assert rows[0]["weak_claim"] and rows[0]["event_id"] == "CLIP_A:claim:crash:1.40"
+    routed = verify.route(rows, mode="hybrid", local_ok=True, heroes=[])
+    assert routed and "long stop" in routed[0]["route_reasons"][0]
+    # once Claude has answered, the claim is no longer weak, and a reject holds it
+    st = {"verdicts": {rows[0]["event_id"]: _reject(why="the wearer stands still")}}
+    assert verify.weak_claim_rows(ranked, st, tel_of=lambda c: [stop, real]) == []
+    held = verify.demote([ranked[0]], "CLIP_A.MP4", st, tel=[stop, real])
+    assert not held[0] and held[1][0]["claim_status"] == "rejected"
+    # the first pass spends its calls on it
+    verify.set_providers(telemetry=lambda c: [stop])
+    try:
+        scripted([{"verdict": "reject", "kind": "none", "who": "wearer", "start": None,
+                   "end": None, "confidence": "high", "why": "standing still"}])
+        rec = verify.verify_cut({"segments": []}, ["CLIP_A.MP4"], {"mode": "hybrid",
+                                "verdicts": {}}, mode="claude",
+                                video_of=lambda c: project["footage"] / c, workdir=tmp_path,
+                                local_ok=False, claims=rows)
+    finally:
+        verify.set_providers()
+    assert rec["calls"] == 1 and rec["rejected"] == 1
+
+
+def test_a_rider_already_down_in_a_stopped_window_stays_shown_as_unsure_not_rejected():
+    stop = {"clip": "CLIP_A.MP4", "kind": "stopped", "start": 96.9, "end": 160.7, "t": 96.9,
+            "source": "telemetry", "check": False, "who": "wearer", "text": "stopped 97-161"}
+    stop["event_id"] = verify.event_id(stop)
+    claim = {"clip": "CLIP_A.MP4", "kind": "fall", "start": 103.0, "end": 109.0,
+             "what": "A skier is down and half-buried in powder"}
+    cid = verify.claim_id("CLIP_A.MP4", "fall", 103.0)
+    down = {"verdict": "reject", "raw_verdict": "reject", "kind": "lying-down",
+            "confidence": "medium", "why": "already down for the whole window"}
+    kept, held = verify.demote([claim], "CLIP_A.MP4", {"verdicts": {cid: down}}, tel=[stop])
+    assert len(kept) == 1 and not held
+    assert kept[0]["certainty"] == "unsure" and kept[0]["already_down"] and kept[0]["asserted"]
+    # a camera Claude calls tossed, or nothing at all, is still a rejection
+    for kind in ("camera-toss", "none"):
+        kept, held = verify.demote([claim], "CLIP_A.MP4",
+                                   {"verdicts": {cid: {**down, "kind": kind}}}, tel=[stop])
+        assert not kept and held[0]["claim_status"] == "rejected"
+    # and a claim a real impact backs is not "weak": the lying-down answer rejects it
+    real = impact(t=105.0)
+    kept, held = verify.demote([claim], "CLIP_A.MP4", {"verdicts": {cid: down}}, tel=[stop, real])
+    assert not kept and held[0]["claim_status"] == "rejected"
