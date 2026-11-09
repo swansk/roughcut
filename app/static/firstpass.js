@@ -27,7 +27,7 @@
 (function () {
   'use strict';
   const POLL_MS = 5000, FAST_MS = 1500;
-  const FP = { s: null, open: false, keepMine: true, busy: false, watching: null,
+  const FP = { s: null, open: false, keepMine: true, keptOpen: false, busy: false, watching: null,
                shown: null, timer: 0, err: '', jobs: [], jobsKey: '[]',
                acct: null, acctKey: '', acctAt: 0, acctBusy: false };
 
@@ -143,9 +143,10 @@
     if (!hand) return `${plural(ai, 'shot')} edited by the AI`;
     return `${plural(keep.length, 'edited shot')} (${hand} cut by hand, ${ai} by the AI)`;
   }
-  function keepLine(w) {
+  function keepLine(w, waiting) {
     const keep = (w && w.keep) || [], rep = (w && w.replace) || [];
-    if (!keep.length && !rep.length) return 'No cut yet — it proposes a first one.';
+    // a proposal that is waiting is the cut-to-be: "No cut yet" under it was stale (verdict 16)
+    if (!keep.length && !rep.length) return waiting ? '' : 'No cut yet — it proposes a first one.';
     if (!FP.keepMine) {
       const none = keep.some(byAI) ? 'Keeps none of the edited shots' : 'Keeps none of your hand cuts';
       return `${none} · ${KEEPS_GRADE} · may replace all ${keep.length + rep.length}`;
@@ -410,13 +411,14 @@
     const keep = w.keep || [];
     const steps = (w.steps || []).map((st) => stepRow(st, live ? s : null)).join('');
     const kept = FP.keepMine && keep.length
-      ? `<ul class="fp-kept" data-testid="firstpass-kept">${keep.map((r) =>
+      ? `<ul class="fp-kept" data-testid="firstpass-kept"${FP.keptOpen ? '' : ' hidden'}>${keep.map((r) =>
         `<li data-shot="${esc(r.id)}">${esc(shotLine(r))}</li>`).join('')}</ul>` : '';
     const toggleKeep = keep.length && !live
       ? `<label class="fp-keepmine"><input type="checkbox" data-fp="keepmine"${FP.keepMine ? ' checked' : ''}>`
         + `${keep.some(byAI) ? ' keep the edited shots, exactly' : ' keep the shots I cut by hand, exactly'}</label>` : '';
     const p = s.proposal || {};
-    const pending = !live && p.pending && p.job
+    const waiting = !live && !!(p.pending && p.job);
+    const pending = waiting
       ? `<div class="fp-result">${esc(p.sentence || 'A proposed cut is waiting.')} `
         + '<button type="button" class="fp-link" data-fp="show">Show it</button></div>' : '';
     const cost = w.cost || {};
@@ -427,16 +429,47 @@
         + `${FP.busy || w.error ? ' disabled' : ''} title="${esc(cost.hover || '')}">${esc(label(s))}</button>`
         + `<span class="fp-cost" title="${esc(cost.hover || '')}">${esc(cost.words || '')}</span>`
         + '<span class="fp-note">nothing changes until you accept the proposal</span>';
+    // the keep line: what a re-run keeps, with "▸" to list the shots (collapsed by default,
+    // so the panel stays short and the Run button stays on screen: verdict 16 punch 1)
+    const kl = keepLine(w, waiting);
+    const keepRow = kl
+      ? `<div class="fp-keep" data-testid="firstpass-keep"><span>${esc(kl)}</span>`
+        + (keep.length && FP.keepMine
+          ? ` <button type="button" class="fp-link fp-keeptoggle" data-fp="keptlist" data-testid="firstpass-kept-toggle"`
+            + ` aria-expanded="${FP.keptOpen}">${FP.keptOpen ? 'hide' : 'show'} ${keep.length} ${FP.keptOpen ? '▾' : '▸'}</button>` : '')
+        + '</div>' : '';
+    const prev = panel.querySelector('.fp-body');
+    const scroll = prev ? prev.scrollTop : 0;
     panel.innerHTML = '<div class="fp-head"><b>First pass</b>'
       + '<span class="fp-sub">index · picks · a proposed rough cut</span>'
       + '<button type="button" class="fp-close" data-fp="close" aria-label="close">×</button></div>'
+      + '<div class="fp-body" data-testid="firstpass-body">'
       + `<div class="fp-status">${statusLine(s)}</div>${pending}${headlineHtml()}`
-      + `<ol class="fp-steps">${steps}</ol>${certaintyHtml()}`
+      + `<ol class="fp-steps">${steps}</ol>${linesHtml()}${certaintyHtml()}`
       + (w.error ? `<div class="fp-bad">${esc(w.error)}</div>` : '')
-      + `<div class="fp-keep" data-testid="firstpass-keep">${esc(keepLine(w))}</div>${kept}${toggleKeep}`
+      + `${keepRow}${kept}${toggleKeep}`
       + rejectedLine(w)
       + (FP.err ? `<div class="fp-bad">${esc(FP.err)}</div>` : '')
-      + `<div class="fp-foot">${foot}</div>`;
+      + `</div><div class="fp-foot" data-testid="firstpass-foot">${foot}</div>`;
+    fit(panel, host);
+    const body = panel.querySelector('.fp-body');
+    if (body && scroll) body.scrollTop = scroll;
+  }
+
+  /* The panel drops from the header and may never run off the window: its height is the
+   * room under its own top, its body scrolls and its foot (Run / Stop, the price) is pinned. */
+  function fit(panel, host) {
+    const top = (host || panel.parentElement).getBoundingClientRect().bottom + 7;
+    panel.style.setProperty('--fp-top', `${Math.max(0, Math.round(top))}px`);
+  }
+
+  /* The 3080's and Claude's lines (the account's `lines`): what each checked and how finely */
+  function linesHtml() {
+    const ls = (FP.acct && FP.acct.lines) || [];
+    return ls.length
+      ? `<ul class="fp-lines" data-testid="firstpass-lines">${ls.map((l) =>
+        `<li data-line="${esc(l.key)}" data-testid="firstpass-line-${esc(l.key)}">${esc(l.text)}</li>`).join('')}</ul>`
+      : '';
   }
 
   function onPanelClick(e) {
@@ -450,6 +483,7 @@
     else if (what === 'show') showResult(FP.s && FP.s.proposal && FP.s.proposal.job, true);
     else if (what === 'index') openIndex();
     else if (what === 'keepmine') { FP.keepMine = !!t.checked; paintPanel(); }
+    else if (what === 'keptlist') { FP.keptOpen = !FP.keptOpen; paintPanel(); }
   }
 
   function open() {
@@ -642,6 +676,7 @@
     });
     // an edit on the board can make the pass stale: re-read when the window comes back
     window.addEventListener('focus', () => refresh());
+    window.addEventListener('resize', () => { if (FP.open) paintPanel(); });
     watchChips();
     loop();
   }

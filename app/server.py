@@ -5042,6 +5042,7 @@ async def api_firstpass() -> JSONResponse:
     now with their `cost` words, `keep` — the shots a re-run locks — and `replace`),
     `manual_edits` (the editor's own shots and how), `backend` / `charged`. From the
     snapshot (`_snapped`); a running pass's Ask detail is merged in from memory."""
+    account_prewarm()
     return await snap_respond("firstpass", firstpass_payload, live=_fp_live_ask)
 
 
@@ -5078,10 +5079,10 @@ _COV: dict = {"at": 0.0, "covs": None}
 _COV_TTL_S = 3.0
 
 
-def bin_coverage() -> list[dict]:
+def bin_coverage(fresh: bool = False) -> list[dict]:
     """Every clip's coverage (moments, layers) — a few seconds of reuse so a panel polling
-    its account does not re-rank the bin each time."""
-    if _COV["covs"] is not None and time.time() - _COV["at"] < _COV_TTL_S:
+    its account does not re-rank the bin each time (`fresh` skips the reuse)."""
+    if not fresh and _COV["covs"] is not None and time.time() - _COV["at"] < _COV_TTL_S:
         return _COV["covs"]
     covs = []
     for c in footage_clips():
@@ -5147,7 +5148,7 @@ def account_inputs(covs: list[dict]) -> dict:
         "looked": {"clips": len(looked), "frames": sum(len(lk.get("frames") or []) for lk in looked),
                    "intervals": ivs, "interval_s": look_interval(), "width": first.get("width"),
                    "cols": first.get("cols"), "rows": first.get("rows"),
-                   "model": _layer_model(first) if first else None},
+                   "model": _layer_model(first) if first else _layer_model({"role": "analysis"})},
         "close": {"clips": len(closed),
                   "windows": sum(len(c.get("windows") or []) for c in closed),
                   "seconds": sum(float(w[1]) - float(w[0]) for c in closed
@@ -5159,15 +5160,71 @@ def account_inputs(covs: list[dict]) -> dict:
                    "hz": events.MOTION_HZ},
         "moments": sum(len(c.get("moments") or []) for c in covs),
     }
+    out["looked"]["expected_frames"] = round(
+        sum(float(c.get("duration") or 0) for c in covs) / max(1.0, look_interval()))
     try:                       # lanes LOCALGPU / VERIFY put these on the Index report
         rep = _snapped("index_clips", index_clips_payload)
-        if isinstance(rep.get("local"), dict):
-            out["local"] = rep["local"]
         if rep.get("mode") in flowmod.MODE_WORDS:
             out["mode"] = rep["mode"]
+        out["local"] = _local_account(covs, rep)
     except Exception:  # noqa: BLE001 — the account is words; a report error never blocks it
         pass
+    try:
+        out["verify"] = _verify_account()
+        if "mode" not in out:
+            out["mode"] = verify_state()["mode"]
+    except Exception:  # noqa: BLE001
+        pass
     return out
+
+
+def _local_account(covs: list[dict], rep: dict) -> dict:
+    """What the 3080 stage did on the bin, off its sidecars and the index report: windows
+    checked (and at what rate), frames embedded for Find, clips still to go. Sidecar reads."""
+    ctx = local_context()
+    clips = [c["clip"] for c in covs]
+    checked = embedded = done = 0
+    fps = efps = None
+    model = embed_model = None
+    for clip in clips:
+        sc = localvlm.sidecar(clip, ctx)
+        if not sc:
+            continue
+        done += 1
+        ck = sc.get("checks") or []
+        checked += len(ck)
+        embedded += int((sc.get("embed") or {}).get("n") or 0)
+        efps = (sc.get("embed") or {}).get("fps") or efps
+        for c in ck:
+            fps = (c.get("frames") or {}).get("fps") or fps
+        model = sc.get("model") or model
+        embed_model = sc.get("embed_model") or embed_model
+    pending = 0
+    for r in rep.get("rows") or []:
+        st = ((r.get("stages") or {}).get("local") or {}).get("state")
+        if st in ("running", "queued", "held"):
+            pending += 1
+    av = localvlm.available()
+    return {"available": bool(av.get("ok")), "reason": av.get("why") or "",
+            "clips": len(clips), "clips_done": done, "pending": pending,
+            "checked": checked, "fps": fps, "embedded": embedded, "embed_fps": efps,
+            "model": model, "embed_model": embed_model}
+
+
+def _verify_account() -> dict:
+    """Claude's checks on this bin, off the verdict store: how many, and what they said."""
+    n = ok = bad = unsure = 0
+    for v in (verify_state().get("verdicts") or {}).values():
+        n += 1
+        w = (v or {}).get("verdict")
+        if w in ("confirm", "retime"):
+            ok += 1
+        elif w == "reject":
+            bad += 1
+        else:
+            unsure += 1
+    return {"checked": n, "confirmed": ok, "rejected": bad, "unsure": unsure,
+            "fps": 8}
 
 
 def _cut_shots(job: str | None) -> tuple[list[dict], str]:
@@ -5180,6 +5237,45 @@ def _cut_shots(job: str | None) -> tuple[list[dict], str]:
 
 
 _CERT: dict = {"key": None, "by": {}}
+
+
+def _closer_found(clip: str, m: dict, fine: dict, deep: dict) -> str:
+    """What the closer looks found where a claim stood, in a phrase."""
+    span = (float(m["start"]), float(m["end"]))
+
+    def hit(x) -> bool:
+        return min(span[1], float(x["end"])) - max(span[0], float(x["start"])) > 0
+    seen = [f"{e.get('kind') or 'something'}: {str(e.get('what') or '').strip()}".rstrip(": ")
+            for e in list(events.deep_events(deep)) + list(fine.get("moments") or [])
+            if "start" in e and hit(e) and e.get("kind") != "junk"]
+    if seen:
+        return "; ".join(dict.fromkeys(seen[:2]))[:220]
+    if any(u for u in (fine.get("unusable") or []) if "start" in u and hit(u)) or any(
+            x.get("kind") == "junk" and hit(x) for x in fine.get("moments") or []):
+        return "nothing usable (a lens cover, a blur or a black frame)"
+    return "nothing there"
+
+
+def _explain_contradicted(clip: str, ms: list[dict], rows: list[dict], state: dict) -> list[dict]:
+    """Moments a closer look contradicted or found nothing for carry what was claimed and
+    what the look found (`found`), so a chip's hover can say both."""
+    out, fine, deep = [], None, None
+    for m in ms:
+        lv = flowmod.certainty(m)["level"] if m.get("what") is not None else ""
+        if lv not in ("contradicted", "unsupported"):
+            out.append(m)
+            continue
+        found = ""
+        r = verifymod.match_event(m, rows) if rows else None
+        v = (r or {}).get("verdict") or {}
+        if v.get("why"):
+            found = f"Claude's check: {str(v['why']).strip()}"[:220]
+        if not found:
+            if fine is None:
+                fine, deep = load_fine(Path(clip).stem), deepmod.load(STATE["visual"], Path(clip).stem)
+            found = f"the closer look found {_closer_found(clip, m, fine, deep)}"
+        out.append({**m, "found": found})
+    return out
 
 
 def bin_certified() -> dict[str, list[dict]]:
@@ -5200,21 +5296,124 @@ def bin_certified() -> dict[str, list[dict]]:
     by: dict[str, list[dict]] = {}
     for c in covs:
         ms = c.get("moments") or []
+        rows: list[dict] = []
         try:
             rows = [verifymod.annotate_event(e, state, mode=state["mode"], local_ok=ok)
                     for e in verifymod.telemetry_events_for([c["clip"]])]
             ms = verifymod.certify_moments(ms, rows)
         except Exception:  # noqa: BLE001 — the counts are words; a read error keeps coverage's
             pass
+        try:
+            ms = _explain_contradicted(c["clip"], ms, rows, state)
+        except Exception:  # noqa: BLE001 — a hover, never a blocker
+            pass
         by[c["clip"]] = ms
     _CERT.update(key=key, by=by)
     return by
 
 
+# The account's heavy half (every clip's coverage, the certainty of every moment, the 3080's
+# and Claude's counts) is rebuilt only when a sidecar it reads changed, and never while the
+# request waits more than ACCT_WAIT_S: a changed bin serves the last build at once and
+# rebuilds on one worker thread (verdict 16 punch 10: 320-508 ms under a first pass).
+_ACCT: dict = {"sig": None, "val": None, "thread": None}
+_ACCT_LOCK = threading.Lock()
+ACCT_WAIT_S = 0.1
+
+
+def _tree_sig(d: Path, suffixes: tuple[str, ...] = (".json",)) -> tuple:
+    try:
+        with os.scandir(d) as it:
+            return tuple(sorted((e.name, e.stat().st_mtime_ns, e.stat().st_size)
+                                for e in it if e.name.endswith(suffixes)))
+    except OSError:
+        return ()
+
+
+def _file_sig(p: Path) -> tuple | None:
+    try:
+        st = p.stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def account_sig() -> tuple:
+    """What the account's heavy half reads, by mtime: the sidecar folders, the verdict
+    store, the index journal, the cut."""
+    return (str(STATE["work"]), str(STATE["footage"]), str(STATE["visual"]), str(STATE["sidecars"]),
+            tuple(footage_clips()), _tree_sig(STATE["visual"]), _tree_sig(STATE["sidecars"]),
+            _tree_sig(telemetry_dir()), _tree_sig(local_dir()), _file_sig(verify_path()),
+            _file_sig(journal_path()), _file_sig(STATE["edl"]),
+            tuple(sorted((x["id"], x["state"]) for x in INDEXES.values())))
+
+
+def _account_build(sig: tuple) -> dict:
+    covs = bin_coverage(fresh=True)
+    a = account_inputs(covs)
+    return {"inputs": a, "moments": bin_certified(), "built": time.time()}
+
+
+def _account_refresh(sig: tuple | None) -> None:
+    try:
+        sig = sig if sig is not None else account_sig()
+        val = _account_build(sig)
+        with _ACCT_LOCK:
+            _ACCT.update(sig=sig, val=val)
+    finally:
+        with _ACCT_LOCK:
+            _ACCT["thread"] = None
+
+
+def account_bundle() -> dict:
+    """The account's heavy half. The first call builds it here (a request thread, never
+    the event loop); after that a changed bin returns the last build and refreshes on a
+    worker, waiting for it at most ACCT_WAIT_S."""
+    sig = account_sig()
+    with _ACCT_LOCK:
+        if _ACCT["val"] is not None and _ACCT["sig"] == sig:
+            return _ACCT["val"]
+        have = _ACCT["val"]
+        th = _ACCT["thread"]
+        if have is not None and th is None:
+            th = threading.Thread(target=_account_refresh, args=(sig,), daemon=True,
+                                  name="account-refresh")
+            _ACCT["thread"] = th
+            th.start()
+    if have is None:
+        if th is not None:
+            th.join()
+        else:
+            _account_refresh_inline(sig)
+        return _ACCT["val"]
+    if th is not None:
+        th.join(ACCT_WAIT_S)
+    return _ACCT["val"]
+
+
+def account_prewarm() -> None:
+    """Start the first build off any request, so the panel's first account is not cold
+    (the page reads /api/firstpass as it loads). Cheap and safe to call on the event loop:
+    it only starts a thread."""
+    with _ACCT_LOCK:
+        if _ACCT["val"] is not None or _ACCT["thread"] is not None:
+            return
+        th = threading.Thread(target=_account_refresh, args=(None,), daemon=True,
+                              name="account-prewarm")
+        _ACCT["thread"] = th
+        th.start()
+
+
+def _account_refresh_inline(sig: tuple) -> None:
+    val = _account_build(sig)
+    with _ACCT_LOCK:
+        _ACCT.update(sig=sig, val=val)
+
+
 @app.get("/api/firstpass/account")
 def api_firstpass_account(job: str | None = None) -> JSONResponse:
-    covs = bin_coverage()
-    a = account_inputs(covs)
+    bundle = account_bundle()
+    a = bundle["inputs"]
     st = firstpass_payload()
     prop = st.get("proposal") or {}
     produced = st.get("produced") or {}
@@ -5227,7 +5426,7 @@ def api_firstpass_account(job: str | None = None) -> JSONResponse:
            "picks": produced.get("picks"), "shots": (produced.get("cut") or {}).get("shots"),
            "cut_detail": cut.get("detail")}
     out = flowmod.pass_account(a, run)
-    moments = bin_certified()
+    moments = bundle["moments"]
     every = [m for ms in moments.values() for m in ms]
     shots, src = _cut_shots(job or (prop.get("job") if prop.get("pending") else None))
     rows = [flowmod.shot_moment(moments.get(s.get("clip"), []), float(s["in"]), float(s["out"]))

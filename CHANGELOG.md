@@ -9,8 +9,17 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Fixed
+- First-pass panel (verdict 16 punch 1, K1): at 1440x900 after manual edits and new clips the Re-run button sat at y 925-953 in a window 900 px tall inside a panel that did not scroll. The panel is now no taller than the room under its own top (`--fp-top`), its body scrolls, and its foot (Run / Stop, the price, the note) is pinned; the shots a re-run keeps are a collapsed "show 10 ▸" list under the keep line. An ordinary click() on the foot's button works at 1440x900 and 1920x1080 in the never-run, running, done, stale-after-edits-with-new-clips and proposal-waiting states (`test_fppanel_ui.py`).
+- "No cut yet — it proposes a first one." is no longer printed under a waiting proposal (punch 6).
+
+### Added
+- First-pass account (K5, punch 6): while the Index step runs it names its models and counts as they are known ("Whisper large-v3 · 7 of 12 heard; Sonnet · 1 frame every 4 s, 320 px, 312 of 645 frames"); two new lines under the steps, "3080 (Qwen3.5-4B, PE-Core): checked N windows at 10 fps, levelled; embedded N frames at 2 fps for Find · still running on M clips" and "Claude checked N moments on levelled 8 fps strips: X confirmed · Y rejected · Z unsure", read off the 3080's sidecars and the verdict store (`flow.local_line` / `claude_line`, `server._local_account` / `_verify_account`).
+- A "contradicted" or "unsupported" certainty chip's hover says what was claimed and what the closer look found ("Claimed: "..." The closer look found nothing usable..." / "Claude's check: ..."), so a contradicted speech line is explained (punch 7, UI half; `server._explain_contradicted`).
+
 ### Changed
 - Index panel (punch 10): the Understanding select reads its full name ("Hybrid (3080 + Claude)") and its one-line sentence is on screen in its own row under the foot (the long wording stays in the hover); the 3080 column says "running 10:28", not a bare clock; the panel's rows were tightened by 17 px so 10 rows still show with a clip's detail open at 1440x900. `test_workspace`'s size check now covers the foot's selects and `.ix-modeline`.
+- `GET /api/firstpass/account` (punch 10): its heavy half (coverage, certainty of every moment, the 3080's and Claude's counts) is cached on the sidecars' mtimes and rebuilt on one worker thread; a changed bin answers at once with the last build (waiting at most 0.1 s), the first build is prewarmed when the page reads /api/firstpass. Measured on Killington's work copy at load 22 with a sidecar changing every second: median 24 ms, p95 163 ms, max 238 ms (was 320-508 ms at load 8-15); `test_account_speed.py`.
 - Loop state: wave 21 planned from verdict 16's punch list (judge/WAVE21.md).
 - Rubric log: the understanding check (advisory until it scores the rev), WORKER's Full/Auto cap and its test's load skip, the demotion fixture and the local model ids, as verdict 16 asked; FOR-KARL names b2cbc31 and what to try for K5/K6.
 - Loop state: verdict 16 (FAIL on b2cbc31; dims 2, 6 and 9 at 5, 7, 7).

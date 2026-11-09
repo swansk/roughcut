@@ -799,6 +799,14 @@ def certainty(m: dict) -> dict:
     origin = ("telemetry" if tele else "the contact sheets" if source in ("", "sheet")
               else source)
     title = " · ".join(x for x in (_numbers(m) or str(m.get("what") or ""), origin, how) if x)
+    if level in ("contradicted", "unsupported") and m.get("what"):
+        # what was claimed and what the closer look found (verdict 16 punch 7), after the one-liner
+        claim = str(m["what"]).strip()
+        claim = claim if len(claim) <= 140 else claim[:137].rstrip() + "..."
+        found = str(m.get("found") or "").strip() or (
+            "the closer look found nothing there" if level == "unsupported"
+            else "the closer look found something else")
+        title += f". Claimed: \u201c{claim}\u201d. {found[:1].upper() + found[1:]}"
     return {"level": level, "chip": CERT_CHIP[level], "name": CERT_NAMES[level],
             "title": title}
 
@@ -888,7 +896,7 @@ def close_words(a: dict) -> str:
 
 def local_words(a: dict) -> str:
     lc = a.get("local")
-    if not isinstance(lc, dict) or not lc:
+    if not isinstance(lc, dict) or not lc or "clips_done" in lc:   # the server's own line says it
         return ""
     if lc.get("available") is False:
         return f"3080 not available ({lc.get('reason') or 'no GPU found'})"
@@ -916,6 +924,77 @@ def index_plan(a: dict) -> str:
             f"{float(iv):g} s on contact sheets, then take close looks at the busiest seconds")
 
 
+def running_index_words(a: dict, counts: dict | None) -> str:
+    """The Index step while it runs, with the models and the counts as they are known
+    (verdict 16 punch 6): "Whisper large-v3 · 7 of 12 heard; Sonnet · 1 frame every 4 s,
+    320 px, 312 of 649 frames". A part with nothing known is left out."""
+    c = counts or {}
+    n = int(c.get("clips") or a.get("clips") or 0)
+    h = a.get("heard") or {}
+    lk = a.get("looked") or {}
+    heard = " · ".join(x for x in (
+        (f"Whisper {h['model']}" if h.get("model") and "whisper" not in str(h["model"]).lower()
+         else str(h.get("model") or "")),
+        f"{_n(c.get('listened') or 0)} of {_n(n)} heard" if n else "") if x)
+    iv = interval_words(lk.get("intervals"), lk.get("interval_s")).replace("a frame", "1 frame")
+    frames = ""
+    if lk.get("frames") is not None and lk.get("expected_frames"):
+        frames = f"{_n(lk['frames'])} of {_n(lk['expected_frames'])} frames"
+    elif lk.get("frames"):
+        frames = f"{_n(lk['frames'])} frames"
+    look = " · ".join(x for x in (
+        _model_name(lk.get("model")),
+        ", ".join(y for y in (iv, f"{_n(lk['width'])} px" if lk.get("width") else "", frames) if y)) if x)
+    return "; ".join(x for x in (heard, look) if x)
+
+
+def _short_embed(name) -> str:
+    """"timm/PE-Core-L-14-336" -> "PE-Core"."""
+    import re
+    base = str(name or "").rsplit("/", 1)[-1]
+    return re.split(r"-(?=[A-Z]-\d)", base)[0]
+
+
+def local_line(a: dict) -> str:
+    """The 3080's work on this bin, one line: what it checked and embedded and how finely,
+    and how many clips it is still on. "" when the bin has no local stage to speak of."""
+    lc = a.get("local")
+    if not isinstance(lc, dict) or not lc or a.get("mode") == "claude":
+        return ""
+    if lc.get("available") is False and not lc.get("checked") and not lc.get("embedded"):
+        return f"3080 not available ({lc.get('reason') or 'no GPU found'})"
+    names = ", ".join(x for x in (str(lc.get("model") or "").split(" ")[0],
+                                  _short_embed(lc.get("embed_model"))) if x)
+    head = f"3080 ({names}): " if names else "3080: "
+    fps = float(lc.get("fps") or 10)
+    efps = float(lc.get("embed_fps") or 2)
+    n, e = int(lc.get("checked") or 0), int(lc.get("embedded") or 0)
+    pend = int(lc.get("pending") or 0)
+    if not n and not e:
+        what = (f"will check the busiest windows at {fps:g} fps, levelled, and embed frames "
+                f"at {efps:g} fps for Find")
+    else:
+        what = (f"checked {_plural(n, 'window')} at {fps:g} fps, levelled; embedded {_n(e)} "
+                f"frames at {efps:g} fps for Find")
+    tail = f" · still running on {_plural(pend, 'clip')}" if pend else ""
+    return head + what + tail
+
+
+def claude_line(a: dict, live: bool = False) -> str:
+    """Claude's checks, one line: how many moments, on what, and what it said."""
+    v = a.get("verify")
+    if not isinstance(v, dict) or a.get("mode") == "local":
+        return ""
+    n = int(v.get("checked") or 0)
+    fps = float(v.get("fps") or 8)
+    if not n:
+        return ("Claude will check the moments the cut uses on levelled "
+                f"{fps:g} fps strips" if a.get("mode") else "")
+    return (f"Claude checked {_plural(n, 'moment')} on levelled {fps:g} fps strips: "
+            f"{_n(v.get('confirmed') or 0)} confirmed · {_n(v.get('rejected') or 0)} rejected · "
+            f"{_n(v.get('unsure') or 0)} unsure")
+
+
 def pass_account(a: dict, run: dict | None = None) -> dict:
     """The first pass in words, per step, for this bin and this state.
 
@@ -939,6 +1018,9 @@ def pass_account(a: dict, run: dict | None = None) -> dict:
         ix_state = "now"
         text = (f"hearing and looking at every clip — {counts.get('words') or 'starting'}. "
                 f"Doing: {index_plan(a)}.")
+        now_models = running_index_words(a, counts)
+        if now_models:
+            text += f" {now_models}."
     elif live or ended:
         ix_state = "done"
         ran = r.get("index_ran")
@@ -991,8 +1073,10 @@ def pass_account(a: dict, run: dict | None = None) -> dict:
         cur = next((s for s in steps if s["state"] == "now"), None)
         now = f"{cur['name']}: {cur['text']}" if cur else ""
     mode = a.get("mode")
+    lines = [{"key": k, "text": t} for k, t in
+             (("local", local_line(a)), ("claude", claude_line(a, live))) if t]
     out = {"steps": steps, "headline": headline, "now": now, "rerank_only": rerank,
-           "index": held, "granularity": index_plan(a)}
+           "index": held, "granularity": index_plan(a), "lines": lines}
     if mode in MODE_WORDS:
         out["mode"] = {"mode": mode, "label": MODE_WORDS[mode][0], "line": MODE_WORDS[mode][1]}
     return out

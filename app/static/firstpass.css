@@ -42,7 +42,19 @@ header #firstpass { flex: 0 0 auto; position: relative; display: flex;
                        background: #202023; border: 1px solid var(--line-hi, #46464c);
                        border-radius: 6px; box-shadow: 0 12px 32px rgba(0,0,0,.6);
                        padding: 10px 12px 12px; font-size: 12px; color: var(--text, #dcdcdf);
-                       cursor: default; }
+                       cursor: default;
+                       /* never taller than the room under it: the body scrolls, the foot stays */
+                       display: flex; flex-direction: column;
+                       max-height: calc(100vh - var(--fp-top, 48px) - 8px); box-sizing: border-box; }
+#firstpass .fp-head { flex: none; }
+#firstpass .fp-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
+                      margin: 0 -12px; padding: 0 12px; }
+#firstpass .fp-foot { flex: none; }
+#firstpass .fp-keeptoggle { margin-left: 4px; }
+#firstpass .fp-kept[hidden] { display: none; }
+#firstpass .fp-lines { list-style: none; margin: 0 0 8px; padding: 0; color: var(--text, #dcdcdf);
+                       line-height: 1.4; }
+#firstpass .fp-lines li { padding: 4px 0; border-bottom: 1px solid var(--line, #333337); }
 #firstpass .fp-panel[hidden] { display: none; }
 #firstpass .fp-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
 #firstpass .fp-head b { font-size: 13px; }
@@ -81,7 +93,7 @@ header #firstpass { flex: 0 0 auto; position: relative; display: flex;
                           color: var(--dim, #94949c); margin: 4px 0 2px; cursor: pointer; }
 #firstpass .fp-keepmine input { width: auto; margin: 0; accent-color: var(--accent, #4a9df8); }
 #firstpass .fp-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-                      margin-top: 10px; }
+                      margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line, #333337); }
 #firstpass .fp-run { padding: 4px 14px; font-weight: 600; }
 #firstpass .fp-stop { padding: 4px 12px; }
 #firstpass .fp-stop:hover { color: var(--bad, #e46a6a); }
