@@ -612,3 +612,18 @@ next judge runs, and the next judge rules it honest or lenient.
   pinned Name after wheel, far-end, mid-column, import and arrow-key scrolls at 1440 and 1920; the rightmost column may
   still be cut by the panel's right edge, as in Premiere). **The keeps lane under A2 is named** ("Keeps · N not in the cut",
   with a hover). No screens-budget change (measured exact).
+- 2026-11-09 (lead, after verdict 16; entries that should have been written before judge 16, which ruled their absence):
+  (1) **The gate's `understanding` check (wave 20, lane EVAL)** scores Karl's Killington test set
+  (`research/R12-understanding/eval`) OFFLINE from the sidecars in his 8766 preview's work copy, with a baseline of
+  4d5267e's sidecars and NO checker verdicts, and reads green when that directory is missing. Judge 16 ruled it lenient by
+  construction: it does not measure the frozen rev. Wave 21 lane EVALREV rebuilds it to score the rev's own pass on a
+  frozen read-only copy of the inputs with recorded checker verdicts; "skipped" becomes AMBER. Until then it is advisory,
+  not a pass criterion. (2) **WORKER's draw-rate change (`d31fb52`)**: `MAX_DRAW_FPS`'s cap applies only on Auto while
+  `grade.behind`; Full draws every frame (52.5-56.2 fps on the 59.94 fixture at load 2-4, the >= 55 bar met 3 of 6).
+  `test_playback_resolution`'s new 59.94 test skips its >= 55 judgement above load 6 and its Auto assertion is conditional
+  on `behind`: LOOSER than an unconditional bar, logged as such; the bar itself (>= 55 at load <= cores) is unchanged.
+  (3) **Wave 20 demotion in tests**: four UI tests that plant fabricated claims run with `verify.DEMOTE` off via conftest's
+  `claims_as_found` (ruled honest by judge 16). (4) The local model ids (Qwen3.5-4B, PE-Core-L-14-336, pyannote
+  community-1) live in `localgpu/` and the diarize tool, outside `roughcut/config.py`: section S's "one place for model
+  ids" was written for Claude ids; wave 21 moves the local ids into config.py's table (lane EVALREV is not it: lane
+  OTHERAIR owns localvlm and does it).

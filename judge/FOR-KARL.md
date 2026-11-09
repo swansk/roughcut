@@ -4,7 +4,7 @@ Only you can close K2 ("Premiere Pro quality"), K3 ("AI-first, easy to learn, fo
 (the Index panel; the old pass pages folded in). The judge says K3 and K4 are delivered as far as it can test.
 This page is the shortest way to look.
 
-**Judged rev:** `5138865` (verdict 15: 14 dimensions at 9, effects at 8, playback at 7, the judge's gate green;
+**Judged rev:** `b2cbc31` (verdict 16, FAIL: 13 of 16 dimensions at 8-9, the first pass at 5 because its Re-run button falls below a 1440×900 window after edits + new clips; playback 7, pro look 7). Previous: `5138865` (verdict 15: 14 dimensions at 9, effects at 8, playback at 7, the judge's gate green;
 playback still at 7 because cuts and dissolves out of a half-speed shot hitch). Wave 19 is fixing what is left
 (below) on the same branch.
 
@@ -15,6 +15,13 @@ Double-click **Roughcut redesign.cmd** in `Karl OS/tools/Launch` (it opens `loca
 never touched). **The preview needs a restart on the judged rev first** (today it is an older server under
 newer pages): the lead restarts it from a frozen copy of `5138865` once you say so, and builds its new 60 fps
 preview copies first (about 20 minutes), so it is ready when you open it.
+
+## New since verdict 15 (try these too)
+
+- **K5:** Run first pass on Killington and read its panel: what each step did, at what detail (Whisper large-v3 · 1 frame every 4 s · close looks …), and how sure each moment is (felt by telemetry · checked by the 3080 · checked by Claude …).
+- **K6:** the Index panel's Understanding select (Hybrid / Local only / Claude only), its Local (3080) and Speakers columns, and Find (it now also searches the 3080's frame embeddings).
+- **Effects:** Effects bin › Crop, Transform, Horizontal/Vertical Flip, Mirror, Black & White.
+- **Playback:** slow-motion shots into cuts and dissolves; Program › Playback Resolution › Full now draws 60 fps clips at ~54 fps.
 
 ## Try this, in order
 
