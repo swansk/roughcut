@@ -9,6 +9,9 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Changed
+- Tests: the seen-tab tests that plant telemetry-less claims use the shared `claims_as_found` fixture (demotion off; test_verify covers demotion); the Index panel test expects the `local` stage.
+
 ### Fixed
 - The Index panel's Understanding control sits in the foot bar instead of a row of its own (it took 145 px and left 4 rows of the list); the panel shows >= 10 rows with a clip's detail open again. Its description is in the hover.
 - Project Settings shows and saves the worker count of the new `gpu` pool (Local (3080)), so the form matches `/api/settings`.

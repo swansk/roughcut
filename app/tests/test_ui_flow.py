@@ -1204,6 +1204,7 @@ def test_the_versions_list_says_which_render_is_the_cut_on_the_board(page, proje
 
 # ------------------------------------------------------------------ what was seen
 
+@pytest.mark.usefixtures("claims_as_found")
 def test_what_the_visual_pass_saw_shows_in_the_inspector_and_in_the_library(page, project):
     """Karl: the analysis "missed some critical moments that would have required video
     analysis — like me falling into a river." Once a clip has been looked at, the fall has
@@ -1255,6 +1256,7 @@ def test_what_the_visual_pass_saw_shows_in_the_inspector_and_in_the_library(page
         sidecar.unlink(missing_ok=True)
 
 
+@pytest.mark.usefixtures("claims_as_found")
 def test_the_seen_tab_is_ordered_by_the_rank_not_by_the_kind(page, project):
     """Karl: *"the lack of a workflow / algorithm that applies sort / priority."*
 
@@ -1305,6 +1307,7 @@ def test_the_seen_tab_is_ordered_by_the_rank_not_by_the_kind(page, project):
         ranked.unlink(missing_ok=True)
 
 
+@pytest.mark.usefixtures("claims_as_found")
 def test_the_seen_tab_offers_the_audit_priced_and_marks_a_one_look_find(page, project):
     """HANDOFF roadmap item 1: the claims at the top of the seen tab are the ones nobody
     checked, so the tab carries one priced button that audits them. It is never clicked
