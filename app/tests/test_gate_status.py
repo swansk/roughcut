@@ -275,3 +275,98 @@ def test_a_record_without_the_retried_list_reads_the_line(tmp_path):
     log.write_text("  07 razor ✓ …\n" + said + "\n")
     green, line, amber = gate.journey_read(tmp_path / "no-such-dir", log, 0)
     assert green and amber, line
+
+
+# ------------------------------------------------- a suite that outruns its budget (verdict 16, wave 21)
+
+def _fake_gate(monkeypatch, tmp_path, *, suite_timeout=True, boom=None):
+    """gate.main() with every real check replaced: the suite times out (or not), nothing else runs for real."""
+    monkeypatch.setattr(gate, "OUT", tmp_path)
+    monkeypatch.setattr(gate, "browser_preflight", lambda *a, **k: (True, "chromium ok"))
+    monkeypatch.setattr(gate, "perf_run", lambda *a, **k: None)
+    monkeypatch.setattr(gate, "perf_after", lambda *a, **k: (None, 0.0))
+    monkeypatch.setattr(gate, "journey", lambda *a, **k: (True, "24 steps", False))
+    monkeypatch.setattr(gate, "boot_check", lambda *a, **k: (True, "boot ok"))
+    monkeypatch.setattr(gate, "understanding_check", lambda *a, **k: (True, "recall 0.89 · matches baseline", False))
+    if boom:
+        monkeypatch.setattr(gate, boom, lambda *a, **k: (_ for _ in ()).throw(RuntimeError("the box fell over")))
+    seen = []
+
+    def soft(cmd, cwd, log, env=None, timeout=3600):
+        log.write_text("budget  / 110·58\n")
+        is_suite = "--junitxml=" + str(log.parent / "suite.xml") in cmd
+        seen.append((is_suite, timeout))
+        return (-9, True) if (is_suite and suite_timeout) else (0, False)
+    monkeypatch.setattr(gate, "run_soft", soft)
+    monkeypatch.setattr(sys, "argv", ["gate.py", "HEAD"])
+    return seen
+
+
+def test_a_suite_that_times_out_is_a_red_line_and_the_other_checks_still_run(monkeypatch, tmp_path):
+    seen = _fake_gate(monkeypatch, tmp_path)
+    code = gate.guarded_main()
+    assert code == 1
+    summary = next(tmp_path.glob("gate-*/summary.md")).read_text()
+    assert " · RED · " in summary.splitlines()[0], summary
+    suite = next(ln for ln in summary.splitlines() if ln.startswith("- **suite**"))
+    assert "✗" in suite and "TIMED OUT" in suite and str(gate.SUITE_TIMEOUT_S) in suite, suite
+    for name in ("screens", "journey", "boot", "understanding", "hygiene"):
+        assert f"- **{name}**" in summary, (name, summary)
+    assert (True, gate.SUITE_TIMEOUT_S) in seen                                  # the suite got its own, larger budget
+    assert next(tmp_path.glob("gate-*/summary.json")).exists()
+
+
+def test_the_suite_budget_is_at_least_twice_what_verdict_16_measured():
+    assert gate.SUITE_TIMEOUT_S >= 7200 > 3723          # 3723 s beside a first pass outran the old 3600 s
+
+
+def test_a_check_that_raises_still_leaves_a_red_summary_of_what_ran(monkeypatch, tmp_path):
+    _fake_gate(monkeypatch, tmp_path, suite_timeout=False, boom="boot_check")
+    assert gate.guarded_main() == 1
+    summary = next(tmp_path.glob("gate-*/summary.md")).read_text()
+    assert " · RED · " in summary.splitlines()[0]
+    assert "CRASHED: RuntimeError: the box fell over" in summary
+    assert "- **journey**" in summary                    # what ran before it is kept
+
+
+def test_run_soft_kills_the_whole_group_on_a_timeout(tmp_path):
+    log = tmp_path / "x.log"
+    marker = tmp_path / "child-alive"
+    cmd = ["sh", "-c", f"(sleep 30; touch {marker}) & sleep 30"]
+    rc, timed_out = gate.run_soft(cmd, tmp_path, log, None, timeout=1)
+    assert timed_out and rc != 0
+    assert gate.run_soft(["true"], tmp_path, log, None, timeout=5) == (0, False)
+    import time
+    time.sleep(0.3)
+    assert not marker.exists()
+
+
+def test_understanding_is_amber_when_it_could_not_measure(monkeypatch, tmp_path):
+    monkeypatch.setattr(gate, "FROZEN_INPUTS", tmp_path / "nowhere")
+    green, line, amber = gate.understanding_check(tmp_path, tmp_path, {})
+    assert green and amber and "SKIPPED, not measured" in line
+    assert gate.run_status([("understanding", green, line)], {"understanding"}) == ("AMBER", 2)
+
+
+def _fake_eval(monkeypatch, tmp_path, rc, text):
+    (tmp_path / "telemetry" / "killington-neutral").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(gate, "FROZEN_INPUTS", tmp_path)
+
+    def soft(cmd, cwd, log, env=None, timeout=3600):
+        log.write_text(text)
+        return rc, False
+    monkeypatch.setattr(gate, "run_soft", soft)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(exist_ok=True)
+    return gate.understanding_check(tmp_path, run_dir, {})
+
+
+def test_understanding_exit_codes_map_to_red_amber_green(monkeypatch, tmp_path):
+    line = "understanding: recall 0.78 · REGRESSION vs baseline: checker_lost 0 -> 1\n"
+    assert _fake_eval(monkeypatch, tmp_path, 1, line) == (False, "recall 0.78 · REGRESSION vs baseline: checker_lost 0 -> 1", False)
+    g, l, a = _fake_eval(monkeypatch, tmp_path, 4, "understanding: recall 0.89 · STALE RECORDING\n")
+    assert g and a and "STALE" in l
+    g, l, a = _fake_eval(monkeypatch, tmp_path, 3, "understanding: skipped, no recorded checker verdicts at x\n")
+    assert g and a and l.startswith("SKIPPED, not measured")
+    assert _fake_eval(monkeypatch, tmp_path, 0, "understanding: recall 0.89 · matches baseline\n") == (
+        True, "recall 0.89 · matches baseline", False)
