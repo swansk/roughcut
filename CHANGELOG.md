@@ -9,6 +9,17 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Fixed
+
+- The Export dialog's size estimate no longer undershoots by ~36 % when the box is busy
+  (the gate's journey step 24, intermittently, at load 12+). Cause: NVENC refuses a session
+  past the box's handful (other lanes hold them), `nvenc_ok()` cached that refusal as "no
+  NVENC", and the 8-part size sample was cut with x264 (veryfast crf 20, ~36 % smaller than
+  NVENC cq 27) while the real export got NVENC. The probe now asks again for a few seconds
+  while the refusal is a busy one, a refused NVENC part waits and retries before the film
+  is re-cut, and the sample passes `--keep-encoder` (fail rather than sample with x264) and
+  narrows its parts (8, 4, 2, 1) instead.
+
 ### Added
 - Loop state: all of wave 21's first five lanes merged and on the 8766 preview.
 - Wiring for other riders' airs (wave 21, OTHERAIR): the `local` stage now scans each indexed clip for `who: other` airs after embed + check (same lock, `<stem>.otherair.json` resumable, failed clips retried once, never fails the stage); `verify.other_air_rows` reads `localvlm.other_airs` first and returns `source: local-scan` rows (routed to Claude at priority 1, unchecked until it confirms); `tools/eval_understanding.py` reads the frozen bin's `.otherair.json`. Killington offline eval with the sidecars: other riders' airs 0.00 -> 1.00, 1 of 19 negatives asserted (unchanged); one routed event (the CLIP_10 candidate) has no recorded verdict yet.

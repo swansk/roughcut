@@ -10114,13 +10114,24 @@ def _sample_job(preset: str, key: str, scope: procscope.Scope,
                "--jobs", str(max(1, len(segs)))]
         if (choice or {}).get("custom_frame"):
             cmd[-2:-2] = ["--size", "{}x{}".format(*choice["custom_frame"])]
+        # The sample must be cut by the encoder the export will use. On a busy box NVENC
+        # refuses sessions (the cap is a handful for the whole box); assemble then
+        # re-cuts with x264, whose files are ~36 % smaller, and the estimate undershoots
+        # by the same. `--keep-encoder` fails instead; try again with fewer sessions.
+        cmd += ["--keep-encoder"]
         t0 = time.time()
-        with procscope.active(scope):
-            r = subprocess.run(cmd, capture_output=True, text=True,
-                               timeout=EXPORT_SAMPLE_TIMEOUT_S)
-        if scope.cancelled:
-            rec.update(state="cancelled")
-            return
+        for width in dict.fromkeys([max(1, len(segs)), 4, 2, 1]):
+            if width > len(segs):
+                continue
+            cmd[cmd.index("--jobs") + 1] = str(width)
+            with procscope.active(scope):
+                r = subprocess.run(cmd, capture_output=True, text=True,
+                                   timeout=EXPORT_SAMPLE_TIMEOUT_S)
+            if scope.cancelled:
+                rec.update(state="cancelled")
+                return
+            if r.returncode == 0 or "--keep-encoder forbids" not in (r.stderr + r.stdout):
+                break
         if r.returncode != 0 or not out.exists():
             raise RuntimeError((r.stderr or r.stdout or "").strip()[-200:] or "no sample")
         keys, rest = _probe_frames(out)

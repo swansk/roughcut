@@ -148,6 +148,7 @@ def run(cmd: list[str]) -> subprocess.CompletedProcess:
 # every part of one film must come from one encoder (the join stream-copies them, and the
 # MP4 carries the first part's SPS). `ROUGHCUT_GPU=0` turns all of it off.
 NVENC_CODEC = "h264_nvenc"
+NVENC_PROBE_WAITS = (0, 0.5, 1.0, 2.0, 3.0, 4.0)   # seconds before each try while sessions are taken
 GPU_CODECS = {"h264", "hevc"}
 GPU_PIX = {"yuv420p", "yuvj420p", "nv12", "yuv420p10le", "p010le"}
 # full-range 8-bit → limited, as swscale's yuvj420p → yuv420p does (rounded), and the
@@ -163,16 +164,26 @@ def gpu_allowed() -> bool:
 
 @functools.lru_cache(maxsize=None)
 def nvenc_ok() -> bool:
-    """NVENC encodes here (probed once: a fifth of a second of black)."""
+    """NVENC encodes here (probed once: a fifth of a second of black). A busy box refuses
+    the probe's session (`OpenEncodeSessionEx failed`: the consumer cap is a handful of
+    sessions for the whole box, and other processes hold them), which is not "no NVENC":
+    it is asked again for a few seconds. Cached False, it made the Export size sample
+    (and any export) fall to x264 whose files are ~36 % smaller on the same film."""
     if not gpu_allowed():
         return False
-    try:
-        r = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i",
-                            "color=black:s=320x180:r=30:d=0.2", "-c:v", NVENC_CODEC,
-                            "-f", "null", "-"], capture_output=True, timeout=30)
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return r.returncode == 0
+    for wait in NVENC_PROBE_WAITS:
+        time.sleep(wait)
+        try:
+            r = subprocess.run(["ffmpeg", "-v", "error", "-nostdin", "-f", "lavfi", "-i",
+                                "color=black:s=320x180:r=30:d=0.2", "-c:v", NVENC_CODEC,
+                                "-f", "null", "-"], capture_output=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        if r.returncode == 0:
+            return True
+        if b"OpenEncodeSessionEx" not in r.stderr:
+            return False                 # no NVENC here, not a busy one
+    return False
 
 
 @functools.lru_cache(maxsize=None)
@@ -373,6 +384,9 @@ def render_jobs(asked: int | None = None) -> int:
     except ValueError:
         n = 0
     return max(1, n or (os.cpu_count() or 2) // 2)
+
+
+NVENC_RETRY_WAITS = (0.5, 1.5, 3.0, 5.0)    # seconds before each retry of a refused NVENC part
 
 
 class EncoderLost(RuntimeError):
@@ -2082,13 +2096,22 @@ def cut_part(video: dict, **kw) -> None:
         first = exc
     if video.get("encoder") != "nvenc" and not video.get("gpu_decode"):
         raise first
-    time.sleep(0.5)                 # an NVENC session another process held may be free now
-    try:
-        encode_part(video=video, gpu_decode=False, **kw)
-    except RuntimeError as exc:
-        if video.get("encoder") == "nvenc":
-            raise EncoderLost(str(exc)) from exc
-        raise
+    # An NVENC session another process (or this film's other parts) held may be free
+    # in a moment: the consumer cap is a handful of sessions for the whole box, so a
+    # busy box refuses a part's session for a second or two. Wait and retry before
+    # giving up the film's encoder (measured: with 8 other sessions open the Export
+    # size sample lost NVENC and fell to x264, which makes files 36 % smaller).
+    waits = NVENC_RETRY_WAITS if video.get("encoder") == "nvenc" else (0.5,)
+    for i, wait in enumerate(waits):
+        time.sleep(wait)
+        try:
+            encode_part(video=video, gpu_decode=False, **kw)
+            return
+        except RuntimeError as exc:
+            last = exc
+    if video.get("encoder") == "nvenc":
+        raise EncoderLost(str(last)) from last
+    raise last
 
 
 def cut(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path,
@@ -2696,6 +2719,9 @@ def main() -> int:
     ap.add_argument("--jobs", type=int, default=None,
                     help="parts encoded at once (default: ROUGHCUT_RENDER_JOBS, else half "
                          "the cores)")
+    ap.add_argument("--keep-encoder", action="store_true",
+                    help="if NVENC is lost, fail instead of re-cutting the film with x264 "
+                         "(the Export size sample: an x264 sample would mis-state the file)")
     ap.add_argument("--progress", action="store_true",
                     help="write ffmpeg -progress beside each part (part_NNN.progress) "
                          "so a caller can read encoded seconds")
@@ -2844,6 +2870,9 @@ def main() -> int:
             actuals = cut_all()
         except EncoderLost as exc:
             # one film, one encoder: every part again with x264
+            if args.keep_encoder:
+                raise SystemExit(f"encoder: {NVENC_CODEC} failed ({str(exc)[-160:]}) "
+                                 f"and --keep-encoder forbids x264")
             print(f"encoder: {NVENC_CODEC} failed ({str(exc)[-160:]}); "
                   f"the film is cut again with libx264")
             video = {**video, "encoder": "x264"}
