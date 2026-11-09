@@ -51,6 +51,16 @@ def no_local_gpu():
     mp.undo()
 
 
+@pytest.fixture
+def claims_as_found(monkeypatch):
+    """For tests that drive the visual pipeline / seen tab with fabricated jump / fall
+    claims and no telemetry. Wave 20's demotion pass (roughcut.verify.demote) would
+    (correctly) hold such claims back from the board, so these run with it off;
+    test_verify.py covers the demotion itself."""
+    from roughcut import verify
+    monkeypatch.setattr(verify, "DEMOTE", False)
+
+
 @pytest.fixture(scope="session", autouse=True)
 def ledger(tmp_path_factory):
     """Keep the suite out of the real inference ledger.

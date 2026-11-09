@@ -9,6 +9,14 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Changed
+- Tests: the seen-tab tests that plant telemetry-less claims use the shared `claims_as_found` fixture (demotion off; test_verify covers demotion); the Index panel test expects the `local` stage.
+
+### Fixed
+- The Index panel's Understanding control sits in the foot bar instead of a row of its own (it took 145 px and left 4 rows of the list); the panel shows >= 10 rows with a clip's detail open again. Its description is in the hover.
+- Project Settings shows and saves the worker count of the new `gpu` pool (Local (3080)), so the form matches `/api/settings`.
+- A pure read, `POST /api/certainty` (the board sends it on every timeline render), no longer counts as a write to the status snapshots, so the first pass's late "importing" answer and the new-clips offer after an import work again.
+
 ### Added
 - Loop state: the full gate on fb0a251 found 10 broken UI/perf tests after wave 20; judge 16 waits for their fix.
 - First pass certainty counts and per-shot chips now read VERIFY's per-event verdicts (the 3080's local checks, Claude's verdicts) by event id or kind family within 0.5 s, so a moment the 3080 settled counts as "checked by the 3080" (a ruled-out fall is not a felt event); cached on the verify store, sidecar reads only.

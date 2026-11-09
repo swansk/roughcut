@@ -263,11 +263,6 @@
     IX.mounted = true;
     sec.innerHTML = `
       <div class="ix-sum" data-testid="index-summary"></div>
-      <div class="ix-mode" data-testid="index-modebar" hidden>
-        <label for="ixMode">Understanding</label>
-        <select id="ixMode" class="ix-modesel" data-testid="index-mode" aria-label="who looks at the footage in this bin"></select>
-        <span class="ix-modeline" data-testid="index-modeline"></span>
-      </div>
       <div class="ix-list" tabindex="0"><table class="plist ixt">
         <colgroup></colgroup><thead><tr></tr></thead>
         <tbody></tbody></table></div>
@@ -277,6 +272,10 @@
         <select class="ix-what" data-testid="index-what" aria-label="what to run again" title="what to run again">${WHAT.map(([k, l, t]) => `<option value="${k}" title="${esc(t)}">${l}</option>`).join('')}</select>
         <select class="ix-iv" data-testid="index-interval" aria-label="look at one frame every" title="the look reads one frame every N seconds: finer sees more and costs more sheets"></select>
         <span class="ix-price" data-testid="index-price"></span>
+        <span class="ix-mode" data-testid="index-modebar" hidden>
+          <select id="ixMode" class="ix-modesel" data-testid="index-mode" aria-label="Understanding: who looks at the footage in this bin"></select>
+          <span class="ix-modeline" data-testid="index-modeline"></span>
+        </span>
         <span class="grow"></span>
         <button type="button" class="ix-run" data-testid="index-rerun">Run</button>
         <button type="button" class="ix-stop" data-testid="index-stop" hidden title="stop the index: what finished is kept">Stop</button>
@@ -550,6 +549,7 @@
     const t = [IX.modeErr || modeWords(IX.mode.mode)[1], gone ? `The 3080 is not available: ${gone}.` : '', effective].filter(Boolean).join(' ');
     line.textContent = t;
     line.title = Object.keys(MODES).map((m) => `${modeWords(m)[0]}: ${modeWords(m)[1]}`).join('\n');
+    sel.title = t;
     line.classList.toggle('bad', !!IX.modeErr);
   }
 

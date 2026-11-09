@@ -478,7 +478,7 @@ def test_project_settings_holds_the_cap_and_the_workers_and_says_the_servers_400
     try:
         s = _settings(pg)
         got = httpx.get(live + "/api/settings", timeout=30).json()
-        assert s["workers"] == got["workers"] and set(got["workers"]) == {"probe", "asr", "proxy", "sheet", "picks"}
+        assert s["workers"] == got["workers"] and set(got["workers"]) == {"probe", "asr", "proxy", "sheet", "picks", "gpu"}
         # no cap is the default: the radio, the field empty, the words
         assert got["budget_usd"] is None
         assert pg.locator("[data-testid=ps-cap-none]").is_checked()

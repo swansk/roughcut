@@ -162,7 +162,7 @@ def test_the_panel_shows_what_ran_retunes_a_clip_and_reruns_a_selection(page, li
     for clip in ("CLIP_A.MP4", "CLIP_B.MP4", "CLIP_C.MP4"):
         st = _states(pg, clip)
         assert st == {"asr": "done", "look": "done", "close": "done", "telemetry": "skipped",
-                      "proxy": "done"}, (clip, st)
+                      "local": "skipped", "proxy": "done"}, (clip, st)
         assert j.state(clip, "telemetry") == "skipped"
         # the look's interval is in its cell, when it ran in its hover
         assert _cell(pg, clip, "look").inner_text().strip() == "✓ 4 s"

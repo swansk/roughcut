@@ -37,14 +37,16 @@
 
   // The stages a worker count applies to, in the order the index runs them, and why each
   // default is what it is (the footage screen's words, design §3).
-  const STAGES = ['probe', 'asr', 'proxy', 'sheet', 'picks'];
-  const NAMES = { probe: 'Probe', asr: 'Hearing', proxy: 'Previews', sheet: 'Looks', picks: 'Picks' };
+  const STAGES = ['probe', 'asr', 'proxy', 'sheet', 'picks', 'gpu'];
+  const NAMES = { probe: 'Probe', asr: 'Hearing', proxy: 'Previews', sheet: 'Looks', picks: 'Picks',
+                  gpu: 'Local (3080)' };
   const WHY = {
     probe: 'two — ffprobe is quick; more just contend for the disk',
     asr: 'one — the model loads once per run and walks the folder',
     proxy: 'one — two 4K encodes share the same cores',
     sheet: 'two sheets in flight at once — more spends faster, not better',
     picks: 'one — a call per released clip; the sheet limit is the ceiling that matters',
+    gpu: 'one — the local models and speaker labels share one card; more only swap it in and out',
   };
   const MIN = 1, MAX = 8;
   const clamp = (v) => {

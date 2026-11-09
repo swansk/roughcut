@@ -18,15 +18,6 @@ from pathlib import Path
 import pytest
 
 
-@pytest.fixture
-def claims_as_found(monkeypatch):
-    """These tests drive the visual pipeline with fabricated jump / fall claims and no
-    telemetry. Wave 20's demotion pass would (correctly) hold such claims back from the
-    board, so they run with it off; test_verify.py covers the demotion itself."""
-    from roughcut import verify
-    monkeypatch.setattr(verify, "DEMOTE", False)
-
-
 def _duration(path: Path) -> float:
     r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
                         "-of", "csv=p=0", str(path)], capture_output=True, text=True)

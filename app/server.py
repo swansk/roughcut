@@ -4355,7 +4355,7 @@ IMPORT_SETTLE_S = 120.0
 SNAP_NOT_WRITES = ("/api/import", "/api/upload", "/api/playing", "/api/lut/",
                    "/api/proxies/toast", "/api/snap", "/api/find", "/api/edits/preview",
                    "/api/assist/preview", "/api/export/sample", "/api/deep/quote",
-                   "/api/index/price")
+                   "/api/index/price", "/api/certainty")
 SNAP_POOL: dict = {"pool": None, "lock": threading.Lock()}
 
 
