@@ -49,6 +49,14 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-09 ~03:40: **GATEFIX merged + deployed (`b2cbc31`).** Its 10 breaks vs 0fef473: 4 fixtures planted
+  unsupported claims (now `claims_as_found` from conftest; assertions unchanged), test_index_panel_ui's stage dict gains
+  `local`; 3 REAL regressions fixed in code — Project Settings lacked the `gpu` pool, POST /api/certainty counted as a
+  snapshot write (the new-clips offer waited for the 5 s poll), the Index panel's Understanding row dropped it to 4 rows at
+  1440 (the select now lives in the foot; description in hover — a judge may want it visible). Its own full gate ran under
+  `nice -n 19` and broke 4 timing / niceness tests (test_yield can't see a nicer child under nice 19): invalid. **Lead's
+  full gate on `9d44587` at normal priority: GREEN, 3465 s, 2044 passed, 1 flaky, 0 broken.** **Judge 16 launched on
+  `b2cbc31`** (docs-only over the gated rev).
 - 2026-11-09 ~01:20: **CERTFIX merged + deployed (`fb0a251`: "40 felt by telemetry · 34 checked by the 3080 · 6 checked by
   Claude …" on Karl's bin).** **FULL gate on `fb0a251`: RED, 3648 s** — suite 2036 passed, 9 failed, 0 flaky, **10 broken**
   (test_deep_ui look-deeper-from-a-seen-row, test_foldin_ui project-settings workers, test_import_status_ui, test_index_panel_ui
