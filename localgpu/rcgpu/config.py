@@ -4,9 +4,12 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-QWEN_DIR = "qwen35-4b-bnb4"          # Qwen3.5-4B, nf4 (double-quant, bf16 compute; vision tower + lm_head bf16)
-QWEN_REPO = "Qwen/Qwen3.5-4B"
-PE_REPO = "timm/PE-Core-L-14-336"
+from roughcut import config as _rc  # noqa: E402  (stdlib-only; the model table lives there)
+
+_QWEN = _rc.local_model(_rc.LOCAL_VLM)   # Qwen3.5-4B, nf4 (double-quant, bf16 compute; vision tower + lm_head bf16)
+QWEN_DIR = _QWEN["dir"]
+QWEN_REPO = _QWEN["repo"]
+PE_REPO = _rc.local_model(_rc.LOCAL_EMBED)["repo"]
 
 GRID_FPS = 10.0                       # CHECK frames
 EMBED_FPS = 2.0                       # Find embeddings
@@ -16,6 +19,9 @@ CHECK_HALF_S = 1.5                    # a window is +-1.5 s round a moment
 from .rules import FALL_THRESHOLD  # noqa: E402,F401  P(yes) for "falls" (bake-off AUROC); 0.2-0.9 is Claude's band
 SCAN_FROM_P = 0.15                    # run the coarse-to-fine timing scan above this
 LEVEL_MAX_DEG = 80
+OTHER_AIR_P = 0.6                     # a scanned window at or above this P(yes) becomes a `who: other` air candidate (Killington: CLIP_10 0.82; the 19 negatives, 45 windows, top 0.56)
+OTHER_AIR_SCAN_FROM_P = 0.3           # the 1 s timing scan runs only above this (it is most of the check's cost)
+OTHER_AIR_SPAN_S = 1.5                # the candidate's start..end round its peak
 
 
 def models_dir() -> Path:

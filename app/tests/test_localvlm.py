@@ -55,6 +55,20 @@ if cmd == "index":
                                     "gpu": {{"gpu_s": 1.5, "peak_vram_gb": 5.7}}, "model": "fake"}}))
         emit(event="clip_done", clip=c["stem"], checks=len(checks), gpu_s=1.5, peak_vram_gb=5.7)
     emit(event="done", clips=len(job["clips"]))
+elif cmd == "scan":
+    job = json.loads(Path(args[3]).read_text())
+    out = Path(job["out"]); out.mkdir(parents=True, exist_ok=True)
+    (out / "fake-scan-job.json").write_text(json.dumps(job))
+    for c in job["clips"]:
+        scanned = [{{"start": w["start"], "end": w["end"], "at": w["at"], "motion_z": w["z"],
+                    "p_yes": 0.8 if w["at"] > 10 else 0.1}} for w in c["windows"]]
+        cands = [{{"kind": "air", "who": "other", "source": "local-scan", "q": "other_air",
+                  "start": w["at"] - 0.75, "end": w["at"] + 0.75, "t": w["at"], "p_yes": w["p_yes"],
+                  "verdict": "advisory", "settles": False}} for w in scanned if w["p_yes"] >= job.get("p_min", 0.5)]
+        (out / (c["stem"] + ".otherair.json")).write_text(json.dumps({{"clip": c["stem"], "windows": len(scanned),
+                                                                     "scanned": scanned, "candidates": cands}}))
+        emit(event="clip_done", clip=c["stem"], candidates=len(cands), windows=len(scanned))
+    emit(event="done", clips=len(job["clips"]))
 elif cmd == "check":
     qs = args[args.index("--questions") + 1].split(",")
     print(json.dumps({{"ok": True, "p_yes": {{q: 0.31 for q in qs}}, "frames": {{"n": 31}}}}))
@@ -137,12 +151,86 @@ def test_the_api_runs_the_cli(fake_stack, tmp_path):
     assert localvlm.search("x", 3, ctx=ctx)[0]["clip"] == "CLIP_A"
 
 
+# ------------------------------------------------------------------ other riders' airs
+
+def _motion_bin(tmp_path, spikes):
+    """A bin whose clip A has a flat motion track with spikes at the given seconds (10 Hz)."""
+    ctx = localvlm.Context(tmp_path, tmp_path / "w", ROOT / "research" / "tools", "bin")
+    vis = ctx.work / "visual" / "bin"
+    vis.mkdir(parents=True)
+    m = [1.0 + 0.01 * (i % 7) for i in range(600)]
+    for t in spikes:
+        for k in range(-4, 5):
+            m[int(t * 10) + k] += 40.0 - 8 * abs(k)
+    (vis / "A.motion.json").write_text(json.dumps({"clip": "A.mp4", "hz": 10.0, "width": 160, "mafd": m}))
+    ctx.dir.mkdir(parents=True)
+    (ctx.dir / "A.candidates.json").write_text("[]")
+    return ctx
+
+
+def test_windows_are_motion_peaks_without_a_telemetry_air(tmp_path):
+    ctx = _motion_bin(tmp_path, [12.0, 30.0, 50.0])
+    w = localvlm.other_air_windows(ctx, "A.MP4")
+    assert sorted(round(x["at"]) for x in w) == [12, 30, 50]
+    assert all(x["end"] - x["start"] >= 3.9 for x in w)
+    (ctx.dir / "A.candidates.json").write_text(json.dumps(
+        [{"kind": "air", "start": 29.6, "end": 30.0, "t": 29.8}, {"kind": "impact", "start": 49.9, "end": 50.0, "t": 50.0}]))
+    w = localvlm.other_air_windows(ctx, "A.MP4", telemetry_airs=[{"kind": "air", "start": 29.6, "end": 30.0}])
+    assert sorted(round(x["at"]) for x in w) == [12, 50], "the wearer's own air is not another rider's"
+    assert len(localvlm.other_air_windows(ctx, "A.MP4", limit=1)) == 1
+    assert localvlm.other_air_windows(localvlm.Context(tmp_path, tmp_path / "none", ROOT, "bin"), "A.MP4") == []
+
+
+def test_the_scan_runs_the_cli_and_reads_candidates_back(fake_stack, tmp_path):
+    ctx = _motion_bin(tmp_path, [12.0, 5.0])
+    (ctx.dir / "A.sensors.npz").write_bytes(b"")
+    r = localvlm.scan_other_air(["A.MP4", "B.MP4"], ctx)          # B has no motion cache: nothing to ask
+    assert r["done"] == ["A"] and r["windows"] == 2 and not r["failed"]
+    job = json.loads((ctx.dir / "fake-scan-job.json").read_text())
+    assert [c["stem"] for c in job["clips"]] == ["A"] and job["clips"][0]["windows"][0]["start"] >= 0
+    c = localvlm.other_airs("A.MP4", ctx)
+    assert len(c) == 1 and c[0]["who"] == "other" and c[0]["kind"] == "air" and c[0]["settles"] is False
+    assert c[0]["verdict"] == "advisory" and c[0]["source"] == "local-scan"
+    assert localvlm.other_airs("A.MP4", ctx, p_min=0.95) == []
+    assert len(localvlm.other_air_scan("A.MP4", ctx)["scanned"]) == 2
+    assert localvlm.other_airs("B.MP4", ctx) == [] and localvlm.other_air_scan("B.MP4", ctx) is None
+
+
+def test_the_scan_degrades_without_the_stack(tmp_path, monkeypatch):
+    monkeypatch.setenv("ROUGHCUT_LOCALGPU", "0")
+    ctx = localvlm.Context(tmp_path, tmp_path / "w", ROOT / "research" / "tools", "bin")
+    with pytest.raises(localvlm.NotAvailable):
+        localvlm.scan_other_air(["A.MP4"], ctx)
+    assert localvlm.other_airs("A.MP4", ctx) == []
+
+
+def test_an_other_air_is_a_candidate_moment_never_an_event():
+    from roughcut import events
+    m = events.other_air_moments("A", [
+        {"kind": "air", "who": "other", "start": 24.5, "end": 26.0, "t": 25.2, "p_yes": 0.83},
+        {"kind": "air", "who": "wearer", "start": 1, "end": 2, "t": 1.5}, {"kind": "fall", "who": "other"}])
+    assert len(m) == 1 and m[0]["who"] == "other" and m[0]["status"] == "candidate"
+    assert m[0]["source"] == "local-scan" and m[0]["kind"] == "jump"
+
+
+def test_local_model_ids_live_in_config(monkeypatch):
+    from roughcut import config
+    from rcgpu import config as rc
+    assert config.local_model(config.LOCAL_VLM)["repo"] == rc.QWEN_REPO == "Qwen/Qwen3.5-4B"
+    assert config.local_model(config.LOCAL_EMBED)["repo"] == rc.PE_REPO
+    monkeypatch.setenv("ROUGHCUT_LOCAL_VLM_DIR", "other-dir")
+    assert config.local_model("vlm")["dir"] == "other-dir"
+    with pytest.raises(ValueError):
+        config.local_model("nope")
+
+
 # ------------------------------------------------------------------ the rules
 
 def test_an_air_is_never_settled_locally_and_a_fall_cut_is_point_two():
     assert rules.verdict("fall", 0.19) == "unlikely"
     assert rules.verdict("fall", 0.2) == "likely"
     assert rules.verdict("air", 0.99) == "advisory", "an air is never settled locally"
+    assert rules.verdict("other_air", 0.99) == "advisory", "another rider's air is never settled locally either"
     assert rules.verdict("fall", None) == "unchecked"
     assert rules.questions_for({"kind": "air"}) == ["air"]
     assert rules.questions_for({"kind": "impact"}) == ["fall"]

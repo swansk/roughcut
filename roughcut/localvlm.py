@@ -25,6 +25,28 @@ A check (one entry of a sidecar's "checks"):
 `p_yes >= 0.2` on a fall question is "likely" (the bake-off cut; the 0.2-0.9 band is for Claude
 to settle); an air question is only ever "advisory" — **an air is never settled locally**.
 
+Other riders' airs (wave 21, lane OTHERAIR). Telemetry only feels the camera wearer, so a
+levelled frame scan asks "is anyone else in frame airborne?" over the high-motion windows of a
+clip that have NO telemetry air near them, and returns CANDIDATES — never a verdict:
+
+    other_airs(clip)   -> the clip's candidates (`<stem>.otherair.json` "candidates"), [] when none
+    other_air_scan(clip) -> that whole file ({"scanned": every window with its P, "candidates", "gpu"}) or None
+    scan_other_air(clips, ...)  runs the scan (one subprocess, the model loads once; ~1 GPU-s per window)
+
+An other-air candidate (the shape lane CHECKER routes — every one goes to Claude, none is
+settled locally, none is shown to Karl as an event until Claude confirms it):
+    {"kind": "air", "who": "other", "source": "local-scan", "q": "other_air",
+     "start", "end", "t",             # seconds in the clip; t = the scan's peak (or the window centre)
+     "p_yes",                         # P(yes) of the whole 3 s window (a ranking number, not a probability of truth)
+     "scan_peak_t", "scan_peak_p",    # the 1 s / 0.5 s timing scan's best sub-window, when p_yes was above the scan floor
+     "motion_z",                      # the window's motion-track z (why it was looked at)
+     "verdict": "advisory", "settles": False,
+     "frames": {t0, t1, n, fps, levelled, sharp_of}, "gpu_s"}
+A window is a motion-track peak (events.py's excitement track) with no telemetry air within 1 s;
+at most `OTHER_AIR_WINDOWS` per clip; a window becomes a candidate at P(yes) >= 0.6 (rcgpu OTHER_AIR_P; `scanned` keeps every window's P so the cut can move). It carries the same keys a `checks` entry has (so a reader of checks reads it unchanged) plus
+`who` and `motion_z`. `events.py` turns a Claude-confirmed one into an `air` event with
+`who: "other"`; an unconfirmed one is never an event.
+
 Context: the server binds the bin (`bind(footage, work, tools)`); every path below hangs off
 `<work>/local/<bin>/`. `ROUGHCUT_LOCALGPU=0` turns the whole thing off (the test suite does).
 """
@@ -42,6 +64,8 @@ from pathlib import Path
 from typing import Callable
 
 import numpy as np
+
+from . import config
 
 REPO = Path(__file__).resolve().parent.parent
 LOCALGPU_DIR = REPO / "localgpu"
@@ -112,9 +136,9 @@ def _probe(deep: bool) -> dict:
         return {"ok": False, "why": "the local stack is not installed (scripts/install-local-models.sh)",
                 "gpu": gpu}
     miss = []
-    if not (models_dir() / "qwen35-4b-bnb4").is_dir():
+    if not (models_dir() / config.local_model(config.LOCAL_VLM)["dir"]).is_dir():
         miss.append("Qwen3.5-4B")
-    hub = models_dir() / "hf" / "hub" / "models--timm--PE-Core-L-14-336" / "snapshots"
+    hub = models_dir() / "hf" / "hub" / ("models--" + config.local_model(config.LOCAL_EMBED)["repo"].replace("/", "--")) / "snapshots"
     if not (hub.is_dir() and any(hub.iterdir())):
         miss.append("PE-Core")
     if miss:
@@ -318,6 +342,131 @@ def prepare(ctx: Context, clip: str) -> dict:
     tmp.write_text(json.dumps(cands), encoding="utf-8")
     os.replace(tmp, cj)
     return {"candidates": cands, "sensors": str(npz), "telemetry": True}
+
+
+# ------------------------------------------------------------------ other riders' airs
+
+OTHER_AIR_WINDOWS = 3          # motion windows scanned per clip (the budget: a Killington bin stays within +5 GPU-min)
+OTHER_AIR_FLOOR_Z = 3.0        # a motion peak below this robust z is not worth a look
+OTHER_AIR_HALF_S = 2.0         # a window is +-2 s round the peak (the air is ~1 s BEFORE the motion peak: CLIP_10)
+OTHER_AIR_SEP_S = 4.0
+OTHER_AIR_CLEAR_S = 1.0        # a window within this of a telemetry air is the wearer's, not another rider's
+
+
+def other_air_windows(ctx: Context, clip: str, *, limit: int = OTHER_AIR_WINDOWS,
+                      floor_z: float = OTHER_AIR_FLOOR_Z, telemetry_airs: list | None = None) -> list[dict]:
+    """The high-motion windows of a clip with no telemetry air near them: [{start, end, at, z}].
+    Motion comes from the bin's cached `visual/<bin>/<stem>.motion.json` (or a scan of the proxy
+    when it is not there yet); the windows are events.candidate_windows' peaks."""
+    from . import events
+    stem = Path(clip).stem
+    motion = events.motion_cache(ctx.work / "visual" / ctx.bin, stem)
+    if not motion:
+        proxy = ctx.work / "proxies" / ctx.bin / f"{stem}.mp4"
+        if not proxy.exists():
+            return []
+        motion = events.motion_track(proxy)
+    track = events.excitement(motion, [])
+    dur = len(motion) / events.MOTION_HZ
+    if telemetry_airs is None:
+        telemetry_airs = [c for c in prepare(ctx, clip)["candidates"] if c.get("kind") == "air"]
+    out = []
+    for w in events.candidate_windows(track, hz=events.MOTION_HZ, half_width_s=OTHER_AIR_HALF_S,
+                                      min_separation_s=OTHER_AIR_SEP_S, limit=limit + len(telemetry_airs),
+                                      duration=dur, floor_z=floor_z):
+        if any(a["start"] - OTHER_AIR_CLEAR_S <= w["at"] + 1.0 and a["end"] + OTHER_AIR_CLEAR_S >= w["at"] - 1.0
+               for a in telemetry_airs):
+            continue
+        out.append(w)
+    out.sort(key=lambda w: -w["z"])
+    return sorted(out[:limit], key=lambda w: w["at"])
+
+
+def other_air_path(clip: str, ctx: Context | None = None) -> Path | None:
+    c = _ctx(ctx)
+    return None if c is None else c.dir / f"{Path(clip).stem}.otherair.json"
+
+
+def other_air_scan(clip: str, ctx: Context | None = None) -> dict | None:
+    p = other_air_path(clip, ctx)
+    if p is None or not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def other_airs(clip: str, ctx: Context | None = None, p_min: float | None = None) -> list[dict]:
+    """The clip's `who: other` air candidates (see the module docstring for the shape). With
+    `p_min`, re-cut from the scanned windows at that P(yes) instead of the scan's own cut."""
+    d = other_air_scan(clip, ctx) or {}
+    c = d.get("candidates") or []
+    return [x for x in c if x.get("p_yes", 0) >= p_min] if p_min is not None else c
+
+
+def scan_other_air(clips: list[str], ctx: Context | None = None, *, force: bool = False, p_min: float | None = None,
+                   limit: int = OTHER_AIR_WINDOWS, on_event: Callable[[dict], None] | None = None) -> dict:
+    """Scan these clips for other riders' airs in ONE subprocess. Clips with no motion windows
+    are skipped (nothing high-motion to ask about). -> {"done", "failed", "windows", "events",
+    "returncode"}; raises NotAvailable when the stack is."""
+    ctx = _ctx(ctx)
+    a = available()
+    if not a["ok"] or ctx is None:
+        raise NotAvailable(a["why"] if not a["ok"] else "no bin is open")
+    ctx.dir.mkdir(parents=True, exist_ok=True)
+    job = {"out": str(ctx.dir), "force": force, "clips": []}
+    if p_min is not None:
+        job["p_min"] = p_min
+    n_win = 0
+    for clip in clips:
+        pre = prepare(ctx, clip)
+        win = other_air_windows(ctx, clip, limit=limit,
+                                telemetry_airs=[c for c in pre["candidates"] if c.get("kind") == "air"])
+        if not win:
+            continue
+        n_win += len(win)
+        job["clips"].append({"stem": Path(clip).stem, "video": str(ctx.video(clip)),
+                             "sensors": pre["sensors"], "windows": win})
+    r = _run_stream("scan", job, ctx, on_event)
+    r["windows"] = n_win
+    return r
+
+
+def _run_stream(cmd: str, job: dict, ctx: Context, on_event) -> dict:
+    """One CLI command fed a job file that prints JSON lines (index/scan share this)."""
+    jf = ctx.dir / f".job-{cmd}-{os.getpid()}-{threading.get_ident()}.json"
+    jf.write_text(json.dumps(job), encoding="utf-8")
+    events: list[dict] = []
+    done: list[str] = []
+    failed: dict[str, str] = {}
+    p = subprocess.Popen(_cmd(cmd, str(jf)), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=_env())
+    err: list[str] = []
+    t = threading.Thread(target=lambda: err.extend(p.stderr.read().splitlines()[-20:]), daemon=True)
+    t.start()
+    try:
+        for line in p.stdout:
+            try:
+                ev = json.loads(line)
+            except ValueError:
+                continue
+            events.append(ev)
+            if ev.get("event") in ("clip_done", "clip_skipped"):
+                done.append(ev["clip"])
+            elif ev.get("event") == "clip_failed":
+                failed[ev["clip"]] = str(ev.get("error"))
+            if on_event:
+                on_event(ev)
+        rc = p.wait()
+    finally:
+        if p.poll() is None:
+            p.kill()
+        jf.unlink(missing_ok=True)
+    t.join(timeout=2)
+    if rc != 0 and not done and not failed:
+        tail = [x for x in err if x.strip()]
+        raise RuntimeError(tail[-1][:200] if tail else f"rcgpu {cmd} exited {rc}")
+    return {"done": done, "failed": failed, "events": events, "returncode": rc}
 
 
 # ------------------------------------------------------------------ running the CLI

@@ -400,6 +400,22 @@ def telemetry_moments(clip: str, felt: list[dict] | None = None) -> list[dict]:
     return out
 
 
+def other_air_moments(clip: str, cands: list[dict]) -> list[dict]:
+    """The local scan's `who: other` air candidates (localvlm.other_airs) as candidate moments
+    for the checker: `kind: jump`, `source: "local-scan"`, `status: "candidate"`, `who: "other"`.
+    Telemetry cannot see another rider, so these never come from `telemetry_moments`; and none
+    is an event until Claude has looked (the local model never settles an air)."""
+    out = []
+    for c in cands:
+        if c.get("who") != "other" or c.get("kind") != "air":
+            continue
+        out.append({"clip": clip, "start": c["start"], "end": max(c["end"], c["start"] + 0.1),
+                    "kind": "jump", "what": "another rider may be airborne (3080 scan, p=%.2f)" % c.get("p_yes", 0),
+                    "notable": True, "source": "local-scan", "status": "candidate", "who": "other",
+                    "frames": [], "confidence": "", "demoted": "", "felt": c})
+    return out
+
+
 def rank_clip(clip: str, coarse: dict, fine: dict | None = None,
               track: list[float] | None = None, hz: float = MOTION_HZ,
               deep: dict | None = None, felt: list[dict] | None = None) -> list[dict]:

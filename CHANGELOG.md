@@ -9,6 +9,14 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Added
+- Other riders' airs (wave 21, OTHERAIR): `rcgpu scan` + `localvlm.scan_other_air / other_airs / other_air_scan / other_air_windows` ask the 3080 "is a person other than the wearer airborne" over the top-3 motion windows per clip that have no telemetry air, on levelled 10 fps frames, and write `<stem>.otherair.json` with `who: other` candidates (advisory, never settled locally; `events.other_air_moments` shapes them for the checker). Killington: CLIP_10's 25 s air is found (P 0.82, timing peak 25.37), 1 candidate on the whole 12-clip bin, 0 on the 19 negatives (45 windows, 2.75 min, top P 0.56); 187 GPU-s for the bin plus a 23 s model load.
+### Changed
+- The local models' ids (Qwen3.5-4B repo + folder, PE-Core repo) moved from `localgpu/rcgpu/config.py` and `roughcut/localvlm.py` literals into `roughcut/config.py`'s `local_model()` table (env override `ROUGHCUT_LOCAL_<KEY>_REPO/_DIR`); both read it. pyannote's id stays in `research/tools/diarize.py` (a standalone uv script that cannot import the package). Verdict 16 section S (OTHERAIR).
+
+### Added
+- `roughcut/localvlm.py` docstring: the shape of an other-rider air candidate (`who: other`, `source: local-scan`, advisory, never settled locally) so the checker can route it before the scan lands (wave 21, OTHERAIR).
+
 ### Changed
 - Rubric log: the understanding check measures the rev (EVALREV).
 
