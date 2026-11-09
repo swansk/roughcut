@@ -776,7 +776,10 @@ def certainty(m: dict) -> dict:
             else "contradicted" if status == "contradicted"
             else "felt" if status == "felt" else "unchecked")
     level, how = base, ""
-    if said in _REJECT:
+    if said in _REJECT and by == "local":
+        # the 3080 looked and ruled it out: it is checked by the 3080, and not a felt event
+        level, how = "local", "ruled out by the 3080, not asserted"
+    elif said in _REJECT:
         level, how = "contradicted", f"rejected by {'Claude' if by == 'claude' else 'the 3080'}" \
             if by else "rejected on a check"
     elif said in _CONFIRM and by in ("claude", "local"):

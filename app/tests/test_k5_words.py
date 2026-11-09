@@ -147,6 +147,45 @@ def test_a_shot_rests_on_the_best_scored_overlapping_moment():
     assert flow.shot_moment([{"oops": 1}], 0, 1) is None
 
 
+# ------------------------------------------- VERIFY's per-event certainty reaches the counts
+
+def _ev(kind, start, certainty, asserted=True, **kw):
+    return {"event_id": f"C:{kind}:{start:.2f}", "clip": "C.MP4", "kind": kind,
+            "start": start, "end": start + 1.0, "certainty": certainty,
+            "asserted": asserted, **kw}
+
+
+def test_verify_events_set_the_certainty_of_the_moments_they_match():
+    from roughcut import verify
+    tele = dict(source="telemetry", status="felt")
+    moments = [_m(kind="fall", start=10.0, end=11.0, **tele),      # the 3080 ruled it out
+               _m(kind="jump", start=20.2, end=21.0, **tele),      # Claude confirmed (0.2 s off)
+               _m(kind="crash", start=30.0, end=31.0, **tele),     # Claude rejected
+               _m(kind="fall", start=40.0, end=41.0, **tele),      # nobody checked
+               _m(kind="jump", start=50.0, end=51.0, **tele),      # a fall event is not an air
+               _m(kind="fall", start=60.0, end=61.0, **tele)]      # the 3080 confirmed
+    rows = [_ev("impact", 10.0, "local", False),
+            _ev("air", 20.0, "claude", verdict={"verdict": "confirm"}),
+            _ev("impact", 30.0, "rejected", False, verdict={"verdict": "reject"}),
+            _ev("impact", 40.0, "telemetry"), _ev("impact", 50.0, "local", False),
+            _ev("speed_drop", 60.0, "local")]
+    got = verify.certify_moments(moments, rows)
+    assert [flow.certainty(m)["level"] for m in got] == [
+        "local", "claude", "contradicted", "felt", "felt", "local"]
+    assert "ruled out by the 3080" in flow.certainty(got[0])["title"]
+    c = flow.certainty_counts(got)
+    assert c["local"] == 2 and c["felt"] == 2 and c["claude"] == 1 and c["contradicted"] == 1
+    assert "2 checked by the 3080" in flow.certainty_words(c)
+    assert verify.certify_moments(moments, []) == moments        # no events: unchanged
+
+
+def test_a_moment_matches_by_event_id_before_by_time():
+    from roughcut import verify
+    m = _m(kind="jump", start=5.0, end=6.0, event_id="C:air:99.00")
+    rows = [_ev("air", 5.0, "telemetry"), _ev("air", 99.0, "claude")]
+    assert verify.certify_moments([m], rows)[0]["certainty"] == "claude"
+
+
 # ---------------------------------------------------------------- the endpoints
 
 def test_account_endpoint_on_the_suites_bin(client):

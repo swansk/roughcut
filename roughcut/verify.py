@@ -889,6 +889,61 @@ def annotate_event(e: dict, state: dict, *, mode: str, local_ok: bool) -> dict:
     return row
 
 
+MOMENT_MATCH_S = 0.5
+
+
+def match_event(m: dict, rows: Sequence[dict]) -> dict | None:
+    """The verify row a coverage moment stands for: the same `event_id`, else the same kind
+    family with the two spans within 0.5 s of each other (nearest wins)."""
+    eid = m.get("event_id")
+    if eid:
+        for r in rows:
+            if r.get("event_id") == eid:
+                return r
+    fam = CLAIM_FAMILY.get(str(m.get("kind")))
+    if fam is None:
+        return None
+    try:
+        a0, a1 = float(m["start"]), float(m.get("end", m["start"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    best, gap = None, MOMENT_MATCH_S + 1e-9
+    for r in rows:
+        if CLAIM_FAMILY.get(str(r.get("kind"))) != fam:
+            continue
+        try:
+            b0, b1 = float(r["start"]), float(r.get("end", r["start"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+        d = max(0.0, max(a0, b0) - min(a1, b1))
+        if d < gap:
+            best, gap = r, d
+    return best
+
+
+def certify_moments(moments: Sequence[dict], rows: Sequence[dict]) -> list[dict]:
+    """Coverage moments carrying VERIFY's verdict where an annotated event row exists for
+    that moment: `certainty` (claude | local | telemetry | unsure | rejected | unchecked),
+    `verdict` {verdict, by}, `asserted`. A moment the 3080 settled as not-a-fall reads as
+    rejected by the 3080. Pure; moments with no event row come back unchanged."""
+    out = []
+    for m in moments:
+        r = match_event(m, rows) if rows else None
+        if r is None or not r.get("certainty"):
+            out.append(m)
+            continue
+        c = r["certainty"]
+        n = {**m, "certainty": c, "asserted": r.get("asserted")}
+        v = r.get("verdict")
+        if v:
+            n["verdict"] = {"verdict": v.get("verdict"), "by": "claude"}
+        elif c == "local":
+            n["verdict"] = {"verdict": "confirm" if r.get("asserted") else "reject",
+                            "by": "local"}
+        out.append(n)
+    return out
+
+
 def _overlaps(a0: float, a1: float, b0: float, b1: float, slack: float) -> bool:
     return a0 - slack <= b1 and b0 - slack <= a1
 

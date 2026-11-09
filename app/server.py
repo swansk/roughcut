@@ -5179,6 +5179,38 @@ def _cut_shots(job: str | None) -> tuple[list[dict], str]:
     return fpmod._segments(read_edl()), "cut"
 
 
+_CERT: dict = {"key": None, "by": {}}
+
+
+def bin_certified() -> dict[str, list[dict]]:
+    """{clip: coverage moments} carrying VERIFY's per-event certainty (the 3080's checks,
+    Claude's verdicts). Sidecar reads only; cached while the coverage list and the verify
+    store are unchanged."""
+    covs = bin_coverage()
+    try:
+        st = verify_path().stat()
+        sig = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        sig = None
+    key = (id(covs), sig)
+    if _CERT["key"] == key:
+        return _CERT["by"]
+    state = verify_state()
+    ok = verifymod.local_available()
+    by: dict[str, list[dict]] = {}
+    for c in covs:
+        ms = c.get("moments") or []
+        try:
+            rows = [verifymod.annotate_event(e, state, mode=state["mode"], local_ok=ok)
+                    for e in verifymod.telemetry_events_for([c["clip"]])]
+            ms = verifymod.certify_moments(ms, rows)
+        except Exception:  # noqa: BLE001 — the counts are words; a read error keeps coverage's
+            pass
+        by[c["clip"]] = ms
+    _CERT.update(key=key, by=by)
+    return by
+
+
 @app.get("/api/firstpass/account")
 def api_firstpass_account(job: str | None = None) -> JSONResponse:
     covs = bin_coverage()
@@ -5195,7 +5227,7 @@ def api_firstpass_account(job: str | None = None) -> JSONResponse:
            "picks": produced.get("picks"), "shots": (produced.get("cut") or {}).get("shots"),
            "cut_detail": cut.get("detail")}
     out = flowmod.pass_account(a, run)
-    moments = {c["clip"]: c.get("moments") or [] for c in covs}
+    moments = bin_certified()
     every = [m for ms in moments.values() for m in ms]
     shots, src = _cut_shots(job or (prop.get("job") if prop.get("pending") else None))
     rows = [flowmod.shot_moment(moments.get(s.get("clip"), []), float(s["in"]), float(s["out"]))
@@ -5215,7 +5247,7 @@ def api_firstpass_account(job: str | None = None) -> JSONResponse:
 @app.post("/api/certainty")
 async def api_certainty(request: Request) -> JSONResponse:
     body = await request.json()
-    covs = {c["clip"]: c.get("moments") or [] for c in bin_coverage()}
+    covs = bin_certified()
     out = []
     for s in (body.get("shots") or [])[:400]:
         try:
