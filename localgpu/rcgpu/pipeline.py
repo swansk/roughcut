@@ -183,3 +183,127 @@ def run_index(job: dict) -> int:
         lock.release()
     emit(event="done", clips=len(todo), peak_vram_gb=round(peak, 2))
     return 0
+
+
+# ------------------------------------------------------------------ other riders' airs (wave 21)
+
+def scan_other(src: media.Source, chk, meter: GpuMeter, sensors, windows: list[dict],
+               p_min: float = config.OTHER_AIR_P) -> tuple[list[dict], list[dict]]:
+    """Ask 'is anyone else airborne' over each motion window, in 3 s pieces (stride 1.5 s), the
+    highest piece wins. -> (scanned: every window with its P, candidates: those at or above
+    `p_min`, in the shape localvlm's docstring documents). Never settles anything."""
+    half = config.CHECK_HALF_S
+    have: dict[int, object] = {}
+    scanned, cands = [], []
+    for w in windows:
+        s0, e0 = float(w["start"]), float(w["end"])
+        pieces, s = [], s0
+        while True:
+            pieces.append((s, s + 2 * half))
+            if s + 2 * half >= e0:
+                break
+            s += half
+        best = None
+        t_w = time.time()
+        n_all = 0
+        for (a, b) in pieces:
+            with meter.span("frames"):
+                centres = media.grid_centres(src, a, b)
+                missing = [c for c in centres if c not in have]
+                if missing:
+                    have.update(media.grab(src, missing, sensors))
+            grid = [(src.t_of(c), have[c]) for c in centres if c in have]
+            n_all += len(grid)
+            with meter.span("check"):
+                r = chk.check(grid, "other_air", scan_from=config.OTHER_AIR_SCAN_FROM_P)
+            if r.get("p_yes") is not None and (best is None or r["p_yes"] > best[0]["p_yes"]):
+                best = (r, grid)
+        if len(have) > 400:                        # a few windows' frames only; the rest go back
+            have.clear()
+        if best is None:
+            continue
+        r, grid = best
+        t = r.get("scan_peak_t", round((grid[0][0] + grid[-1][0]) / 2, 2))
+        row = {"start": round(s0, 2), "end": round(e0, 2), "at": w.get("at"), "motion_z": w.get("z"),
+               "p_yes": r["p_yes"], "scan_peak_t": r.get("scan_peak_t"), "scan_peak_p": r.get("scan_peak_p")}
+        scanned.append(row)
+        if r["p_yes"] >= p_min:
+            span = config.OTHER_AIR_SPAN_S / 2
+            cands.append({"kind": "air", "who": "other", "source": "local-scan", "q": "other_air",
+                          "start": round(max(0.0, t - span), 2), "end": round(t + span, 2), "t": round(t, 2),
+                          "p_yes": r["p_yes"], "scan_peak_t": r.get("scan_peak_t"),
+                          "scan_peak_p": r.get("scan_peak_p"), "motion_z": w.get("z"),
+                          "verdict": "advisory", "settles": False,
+                          "frames": {"t0": round(grid[0][0], 2), "t1": round(grid[-1][0], 2), "n": n_all,
+                                     "fps": config.GRID_FPS, "levelled": sensors is not None, "sharp_of": 5},
+                          "gpu_s": round(time.time() - t_w, 3)})
+    return scanned, cands
+
+
+def run_scan(job: dict) -> int:
+    """job: {"out": dir, "p_min"?, "force"?, "clips": [{"stem", "video", "sensors", "windows": [{start, end, at, z}]}]}
+    -> `<stem>.otherair.json` per clip, written whole when the clip is done."""
+    import gc
+
+    import torch
+
+    from roughcut import gpulock
+
+    from .check import Checker
+
+    out_dir = Path(job["out"])
+    out_dir.mkdir(parents=True, exist_ok=True)
+    todo = []
+    for c in job["clips"]:
+        if (out_dir / f"{c['stem']}.otherair.json").exists() and not job.get("force"):
+            emit(event="clip_skipped", clip=c["stem"], why="already scanned")
+        else:
+            todo.append(c)
+    if not todo:
+        emit(event="done", clips=0)
+        return 0
+    lock = gpulock.Lock("local")
+    emit(event="waiting", why="gpu lock")
+    lock.acquire()
+    try:
+        t_load = time.time()
+        chk = Checker()
+        emit(event="loaded", seconds=round(time.time() - t_load, 1))
+        peak = 0.0
+        for n, c in enumerate(todo):
+            stem = c["stem"]
+            if n and gpulock.waiting():
+                torch.cuda.empty_cache()
+                if lock.yield_to_waiters():
+                    emit(event="yielded", clip=stem)
+            torch.cuda.reset_peak_memory_stats()
+            t_clip = time.time()
+            meter = GpuMeter(torch)
+            try:
+                src = media.Source(c["video"])
+                sensors = media.Sensors.load(c.get("sensors"))
+                scanned, cands = scan_other(src, chk, meter, sensors, c.get("windows") or [],
+                                            float(job.get("p_min", config.OTHER_AIR_P)))
+            except Exception as exc:  # noqa: BLE001
+                emit(event="clip_failed", clip=stem, error=f"{type(exc).__name__}: {exc}"[:300])
+                torch.cuda.empty_cache()
+                continue
+            peak = max(peak, torch.cuda.max_memory_allocated() / 1e9)
+            del src
+            rec = {"version": VERSION, "clip": stem, "q": "other_air", "model": "Qwen3.5-4B nf4",
+                   "p_min": float(job.get("p_min", config.OTHER_AIR_P)), "levelled": sensors is not None,
+                   "windows": len(c.get("windows") or []), "scanned": scanned, "candidates": cands,
+                   "gpu": {"seconds": {k: round(v, 2) for k, v in meter.t.items()},
+                           "gpu_s": round(sum(meter.t.values()), 2), "wall_s": round(time.time() - t_clip, 2),
+                           "peak_vram_gb": round(torch.cuda.max_memory_allocated() / 1e9, 2)},
+                   "done_at": time.time()}
+            atomic_json(out_dir / f"{stem}.otherair.json", rec)
+            gc.collect()
+            torch.cuda.empty_cache()
+            emit(event="clip_done", clip=stem, candidates=len(cands), windows=len(scanned),
+                 gpu_s=rec["gpu"]["gpu_s"], wall_s=rec["gpu"]["wall_s"],
+                 peak_vram_gb=rec["gpu"]["peak_vram_gb"], i=n + 1, of=len(todo))
+    finally:
+        lock.release()
+    emit(event="done", clips=len(todo), peak_vram_gb=round(peak, 2))
+    return 0

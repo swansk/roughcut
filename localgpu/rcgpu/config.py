@@ -19,7 +19,7 @@ CHECK_HALF_S = 1.5                    # a window is +-1.5 s round a moment
 from .rules import FALL_THRESHOLD  # noqa: E402,F401  P(yes) for "falls" (bake-off AUROC); 0.2-0.9 is Claude's band
 SCAN_FROM_P = 0.15                    # run the coarse-to-fine timing scan above this
 LEVEL_MAX_DEG = 80
-OTHER_AIR_P = 0.5                     # a scanned window at or above this P(yes) becomes a `who: other` air candidate
+OTHER_AIR_P = 0.6                     # a scanned window at or above this P(yes) becomes a `who: other` air candidate (Killington: CLIP_10 0.82; the 19 negatives, 45 windows, top 0.56)
 OTHER_AIR_SCAN_FROM_P = 0.3           # the 1 s timing scan runs only above this (it is most of the check's cost)
 OTHER_AIR_SPAN_S = 1.5                # the candidate's start..end round its peak
 

@@ -123,6 +123,13 @@ def cmd_index(a) -> int:
     return pipeline.run_index(job)
 
 
+def cmd_scan(a) -> int:
+    """Other riders' airs: the levelled 'is anyone else airborne' question over each clip's motion windows."""
+    from . import pipeline
+    job = json.loads(Path(a.job).read_text(encoding="utf-8"))
+    return pipeline.run_scan(job)
+
+
 def cmd_search(a) -> int:
     import numpy as np
 
@@ -178,6 +185,9 @@ def main(argv=None) -> int:
         p = sub.add_parser(name)
         p.add_argument("job", help="job JSON: {out, clips:[{stem, video, candidates, sensors}], force}")
         p.set_defaults(fn=fn)
+    p = sub.add_parser("scan")
+    p.add_argument("job", help="job JSON: {out, p_min?, force?, clips:[{stem, video, sensors, windows:[{start, end, at, z}]}]}")
+    p.set_defaults(fn=cmd_scan)
     p = sub.add_parser("search")
     p.add_argument("--dir", required=True); p.add_argument("--text", action="append", required=True)
     p.add_argument("--k", type=int, default=3); p.add_argument("--clips", action="append")

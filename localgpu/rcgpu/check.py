@@ -13,6 +13,9 @@ QUESTIONS = {
     # validated in the bake-off (AUROC on the labelled windows 0.86-0.94 for fall; air is a coin flip)
     "fall": "Does the camera wearer fall or crash into the snow in these frames?",
     "air": "Is the camera wearer airborne (skis off the snow, in the air) in these frames?",
+    # wave 21 OTHERAIR: another rider, from any camera (measured on CLIP_10 vs the 19 negatives: research/R12-understanding)
+    "other_air": ("Is a person other than the camera wearer airborne in these frames, for example "
+                  "a skier or snowboarder jumping or flying through the air?"),
     # not scored in the bake-off: advisory only
     "handling": "Is the camera wearer holding, touching or throwing the camera in these frames?",
     "impact": "Does the camera wearer land hard, fall, or crash in these frames?",
@@ -66,7 +69,7 @@ class Checker:
             n = torch.logsumexp(lg[self.no_ids], 0)
             return float(torch.sigmoid(y - n))
 
-    def check(self, grid, q: str, scan: bool = True) -> dict:
+    def check(self, grid, q: str, scan: bool = True, scan_from: float = config.SCAN_FROM_P) -> dict:
         """grid: [(t, BGR)] at 10 fps (one window). -> {p_yes, n_frames, [scan_peak_t, scan_peak_p]}.
         The timing scan (1.0 s sub-windows by 0.5 s, then 0.5 s by 0.1 s round the peak) runs only
         when the whole window is not a clear no."""
@@ -76,7 +79,7 @@ class Checker:
             return {"p_yes": None, "n_frames": len(grid), "why": "fewer than 6 frames"}
         p_all = self.pyes([im for _, im in grid], question, fps)
         res = {"p_yes": round(p_all, 4), "n_frames": len(grid)}
-        if scan and p_all >= config.SCAN_FROM_P:
+        if scan and p_all >= scan_from:
             def sub(a, b):
                 return [im for tt, im in grid if a <= tt < b]
             coarse = []
