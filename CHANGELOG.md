@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- Loop state: PLAY10's quiet-box playback A/B pooled (dissolves out of a slowed shot nearly clean on screen; worker clock not yet).
 - Loop state: WORKER's draw-rate piece merged and on the 8766 preview.
 - Loop state: WORKER's read-back path measured and not merged (it regressed half-speed playback); its draw-rate piece is being split out.
 - **Playback Resolution decides the draw rate (redesign wave 19, lane WORKER; verdict 15 punch 5).** The canvas drew a 59.94 proxy every other frame at every Playback Resolution (`tooSoon`, MAX_DRAW_FPS 30.5). Now Full, 1/2 and 1/4 draw every frame, and Auto keeps the cap only while the canvas is falling behind (`G.behind`: set from page load and whenever the frame lag's average passes AUTO_SLOW_MS, cleared after 30 frames averaging under 21 ms); `grade.behind` and `grade.autoEma` say so. test_playback_resolution: a third, 59.94 shot and a draw-rate test (Full's real fps printed; judged only at load <= 6).

@@ -49,6 +49,14 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-08 ~20:40: **PLAY10's quiet-box A/B (lead pooled `~/roughcut-loop/lane-play10/out` with absum.py; the lane agent
+  stalled and was stopped; no code change).** Load 1.5-3.4, base 2600864 vs h3 (= PLAY10 merged, now in the tip):
+  dissolve out of a 0.5x shot, 18 plays each: 0.4 s frame-clock held 0/18 (base 18/18), worker clock 8/18 (base 18/18);
+  1.0 s frame 1/18 (base 18/18), worker 8/18. Cuts, 5 plays per size: cut5 frame 0/5 at both sizes (base 5/5), worker 2/5 and
+  1/5; cut4 1440 0/5 both clocks (base 2/5); cut4 1920 frame 3/5 (base 1/5: a regression at 1920 to watch), worker 0/5.
+  kB on h4 (= d31fb52) is partly at load up to 15: not used. lB rounds errored (server never showed a cut): invalid. Verdict
+  15's bars (0 holds on either clock) are not met on the worker clock; the frame clock is nearly clean for dissolves.
+  Next: the full gate + judge 16 once the box is quiet (other projects had it at load ~9 at 20:30).
 - 2026-11-08 ~19:00: **WORKER's cap piece merged (`d31fb52`, branch redesign-w19-worker-cap 65a9035)** after its own A/B vs
   the tip: Full 52.5-56.2 fps on the 59.94 fixture (tip 28-29; the >= 55 bar met 3 of 6 at load 2-4), Auto unchanged for
   the first 700 ms then draws every frame once `behind` clears; half-speed identical (59/60 plays 0 holds both); graded
