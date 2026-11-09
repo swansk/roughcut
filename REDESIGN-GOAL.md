@@ -144,6 +144,13 @@ tools. The bar is a Premiere editor who has never seen Roughcut and never reads 
 
 ## K. Karl's notes (verbatim, newest first; only Karl adds here, the builder may only mark one resolved with evidence)
 
+- **K7 (2026-11-09, relayed verbatim from his Next voice reply):** "I want to make sure you're not over-indexing on
+  certain things and going to build the wrong videos. GoPro, only some of the footage coming here is going to be GoPro.
+  Most of it will probably be GoPro, but I don't only want GoPro ski, jump, acceleration event, that sort of thing to be
+  part of the video. There's also the fun B-roll I want to include too, like where people are sitting on a chairlift and
+  they say pocket pizza or something like that. I don't think you're gonna do this, but make sure you're not
+  over-indexing only on finding those super acceleration events, because while those likely do represent things I want
+  in the video, there's also other things too. So be careful of the heuristic."
 - **K6 (2026-11-07, after the footage-understanding review):** "We should enable this to use both 3080 approach and the
   claude approach in the app. And then I need you to pull latest VLM research to see what the best approach is for us to
   build this here. Go with the best approach and deploy it. I agree that the 3080 is free, so it is ok to spend some time

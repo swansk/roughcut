@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Added
+- REDESIGN-GOAL.md section K: Karl's K7 note (2026-11-09), B-roll and chairlift talk belong in the cut as well as telemetry events; don't over-index on acceleration events.
 - Loop state: all of wave 21's first five lanes merged and on the 8766 preview.
 - Wiring for other riders' airs (wave 21, OTHERAIR): the `local` stage now scans each indexed clip for `who: other` airs after embed + check (same lock, `<stem>.otherair.json` resumable, failed clips retried once, never fails the stage); `verify.other_air_rows` reads `localvlm.other_airs` first and returns `source: local-scan` rows (routed to Claude at priority 1, unchecked until it confirms); `tools/eval_understanding.py` reads the frozen bin's `.otherair.json`. Killington offline eval with the sidecars: other riders' airs 0.00 -> 1.00, 1 of 19 negatives asserted (unchanged); one routed event (the CLIP_10 candidate) has no recorded verdict yet.
 ### Added
