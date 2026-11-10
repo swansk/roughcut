@@ -6,7 +6,7 @@
   "recall_karl": 0.6,
   "recall_air": 0.8,
   "recall_fall": 1.0,
-  "negatives_asserted": 3,
+  "negatives_asserted": 1,
   "negatives_total": 19,
   "fa_per_neg_min": 1.17,
   "find_overlap": 0.632,

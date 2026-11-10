@@ -501,6 +501,29 @@ def test_demote_holds_a_telemetry_row_the_local_model_settled_as_no():
     assert len(ok) == 1 and ok[0]['asserted']                           # Claude overrules the local no
 
 
+def test_demote_holds_a_telemetry_row_claude_rejected_even_with_a_stop_beside_it():
+    """The board and the eval share this: Claude threw the speed drop out, a `stopped` period
+    overlapping it must not keep it stated as a fall (two Killington rows did)."""
+    drop = {"kind": "speed_drop", "who": "wearer", "start": 229.0, "end": 232.0, "t": 232.0,
+            "source": "telemetry", "status": "felt", "check": True, "text": "speed drop",
+            "clip": "CLIP_A.MP4"}
+    drop["event_id"] = verify.event_id(drop)
+    stop = {"kind": "stopped", "who": "wearer", "start": 231.0, "end": 260.0, "t": 245.0,
+            "source": "telemetry", "status": "felt", "check": False, "text": "stopped",
+            "clip": "CLIP_A.MP4"}
+    stop["event_id"] = verify.event_id(stop)
+    row = {"clip": "CLIP_A.MP4", "start": 229.0, "end": 232.0, "kind": "fall", "source": "telemetry",
+           "status": "felt", "felt": drop}
+    verify.set_providers(telemetry=lambda c: [dict(drop), dict(stop)], local=lambda c: [])
+    try:
+        a0, h0 = verify.demote_ranked([row], {"verdicts": {}})
+        a1, h1 = verify.demote_ranked([row], {"verdicts": {drop["event_id"]: _reject()}})
+    finally:
+        verify.set_providers()
+    assert len(a0) == 1 and "telemetry:stopped" in a0[0]["supported_by"]      # unchecked: the stop backs it
+    assert a1 == [] and h1[0]["certainty"] == "rejected" and h1[0]["claim_status"] == "rejected"
+
+
 def test_local_available_reads_the_dict(monkeypatch):
     from roughcut import localvlm
     monkeypatch.setattr(localvlm, "available", lambda *a, **k: {"ok": False, "why": "x"})
