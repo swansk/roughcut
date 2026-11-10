@@ -49,6 +49,11 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-09 ~23:20: **Full gate on `f33974e`: RED, 3804 s** — suite 2103 passed, 5 broken (test_gate_status x2 = EVALREV's
+  new pins, test_journey_tool chromium-crash [bus], test_ui_flow seen-tab audit = likely stale after CLAIMSUI, test_perf_latency
+  before the suite at load 8.9); journey / screens / boot / understanding / hygiene GREEN. Lane GATEFIX2 classifying + fixing.
+  **Karl agreed (2026-11-09): judge 17 is HELD** until his K2-K6 look at 8766 or a second, non-GoPro test bin (the test set is
+  Killington only: tuning risks fitting one video). The tick cron no longer launches judges.
 - 2026-11-09 ~22:50: **EVALFIX's loop holds were load** (its 3 interleaved gates GREEN; the lead's tie-break: tip `f33974e`
   GREEN 2/2 at 44 / 94 ms vs 1332d1e 1/2); **8766 deployed on `f33974e`**. **Karl: "Yes, check them" → the 28 older claims
   checked on his bin** (job 2481c9bb: 3 confirmed, 24 rejected, 1 retimed; plan, not billed). His bin now scores recall 1.00

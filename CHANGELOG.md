@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- Loop state: the full gate on f33974e found 5 broken tests (GATEFIX2); judge 17 held for Karl's look or a second test bin.
 - Loop state: the 28 older claims checked on Karl's bin; EVALFIX on the preview; full gate next.
 - Loop state: GRADE measured the late frames (the worker thread blocks on the canvas commit), not fixed; EVALFIX held from the preview for its loop holds.
 - Loop state: the Claude checker ran on Karl's preview bin; ESTIMATE merged and deployed; EVALFIX and GRADE running.
