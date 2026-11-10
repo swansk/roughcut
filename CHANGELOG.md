@@ -11,6 +11,7 @@ same commit. Releases move entries into a dated version section.
 
 ### Fixed
 - Loop state: the full gate on f33974e found 5 broken tests (GATEFIX2); judge 17 held for Karl's look or a second test bin.
+- Gate: five tests broken in the wave-21 full gate were stale or environment-bound, not product breaks. The two gate-status `main()` tests ran `git rev-parse`/`git archive` in the gate's own `git archive` snapshot (no `.git`) and now use a throwaway repo; the journey "bus" crash test pinned Chromium's FATAL source file:line (`dbus/bus.cc:1245`, `components/dbus/thread_linux/dbus_thread_linux.cc:72` in 158) and now pins the stable message; the seen-tab test expected the retired "Audit N claims" button and now checks "Check N claims" priced from `claims_check` and its off state.
 - Loop state: the 28 older claims checked on Karl's bin; EVALFIX on the preview; full gate next.
 - Loop state: GRADE measured the late frames (the worker thread blocks on the canvas commit), not fixed; EVALFIX held from the preview for its loop holds.
 - Loop state: the Claude checker ran on Karl's preview bin; ESTIMATE merged and deployed; EVALFIX and GRADE running.

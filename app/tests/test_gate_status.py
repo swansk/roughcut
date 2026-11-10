@@ -18,6 +18,7 @@ burners and the gate decides from its records:
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 
@@ -282,6 +283,14 @@ def test_a_record_without_the_retried_list_reads_the_line(tmp_path):
 def _fake_gate(monkeypatch, tmp_path, *, suite_timeout=True, boom=None):
     """gate.main() with every real check replaced: the suite times out (or not), nothing else runs for real."""
     monkeypatch.setattr(gate, "OUT", tmp_path)
+    # The gate runs its suite from a `git archive` snapshot, which has no .git: main() resolves
+    # its ref and archives it with git, so give it a throwaway repo instead of the real ROOT.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "f.txt").write_text("x\n")
+    for g in (["init", "-q"], ["add", "f.txt"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"]):
+        subprocess.run(["git", *g], cwd=repo, check=True, capture_output=True)
+    monkeypatch.setattr(gate, "ROOT", repo)
     monkeypatch.setattr(gate, "browser_preflight", lambda *a, **k: (True, "chromium ok"))
     monkeypatch.setattr(gate, "perf_run", lambda *a, **k: None)
     monkeypatch.setattr(gate, "perf_after", lambda *a, **k: (None, 0.0))
