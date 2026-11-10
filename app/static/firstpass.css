@@ -136,6 +136,7 @@ header #firstpass { flex: 0 0 auto; position: relative; display: flex;
 .cert.c-felt { border-color: #4a7fb5; color: #8cbbea; }
 .cert.c-local { border-color: #7a63b5; color: #b7a5ea; }
 .cert.c-claude { border-color: #4f9d6a; color: #8ed3a6; }
+.cert.c-heard { border-color: #8a7ab5; color: #b9aae6; }
 .cert.c-once { border-color: #6a6a74; }
 .cert.c-unchecked { border-style: dashed; }
 .cert.c-unsupported, .cert.c-contradicted { border-color: #b5694a; color: #e2a187; }

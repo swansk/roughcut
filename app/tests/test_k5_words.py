@@ -137,6 +137,20 @@ def test_counts_and_words_in_order_without_zeros():
     assert flow.certainty_words({}) == "" and flow.certainty_counts([])["total"] == 0
 
 
+def test_a_talk_row_is_heard_not_unchecked():
+    talk = _m(kind="talk", source="transcript", status="unseen", what="people talking: \u201cpocket pizza\u201d")
+    c = flow.certainty(talk)
+    assert c["level"] == "heard" and c["chip"] == "heard"
+    assert c["title"].endswith("the transcript · found from the words; no look has checked the picture")
+    # a verdict still settles it, and the other sources are unchanged
+    assert flow.certainty({**talk, "verdict": {"verdict": "confirm", "by": "claude"}})["level"] == "claude"
+    assert flow.certainty(_m(source="telemetry", status="felt"))["level"] == "felt"
+    assert flow.certainty(_m(status="unseen"))["level"] == "unchecked"
+    c = flow.certainty_counts([talk] * 12 + [_m(status="unseen")])
+    assert c == {"heard": 12, "unchecked": 1, "total": 13}
+    assert "12 heard in the words" in flow.certainty_words(c)
+
+
 def test_a_shot_rests_on_the_best_scored_overlapping_moment():
     ms = [_m(start=0, end=2, score=1, status="unseen"),
           _m(start=3, end=5, score=9, status="confirmed"),
