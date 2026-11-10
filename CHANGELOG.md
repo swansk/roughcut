@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- Wave 22 planned (judge/WAVE22.md): the K7 B-roll lane, a GPU-browser read of the playback stall, the try-list for the live board, and the backup and tidy; the second test set waits for Karl's footage.
 - The loop's state log records the 2026-11-10 park: the redesign branch is ready to fast-forward main (Karl's step; 8765's work backed up first), and the WORKER read-back stays unmerged for its measured half-speed regression.
 - Loop state: GATEFIX2's stale-test fixes merged; the gate's remaining red is the known playback stall under load.
 - Loop state: the full gate on f33974e found 5 broken tests (GATEFIX2); judge 17 held for Karl's look or a second test bin.
