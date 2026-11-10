@@ -251,3 +251,90 @@ def test_the_scan_tool_writes_the_claim_window_first(project, tmp_path):
     assert "claim: fall" in r.stdout
     lo, hi = json.loads(out.read_text(encoding="utf-8"))["CLIP_A"][0]
     assert lo <= 1.0 and hi >= 2.0
+
+
+# ---------------------------------------------------------------- K7: telemetry is a witness, not a winner
+
+def _drop(**kw):
+    return {"kind": "speed_drop", "who": "wearer", "start": 30.0, "end": 33.0, "t": 30.0, "source": "telemetry",
+            "status": "felt", "check": True, "stopped": True, "text": "speed 8 to 1 m/s at 30-33", **kw}
+
+
+def _air(**kw):
+    return {"kind": "air", "who": "wearer", "start": 50.0, "end": 50.4, "t": 50.2, "source": "telemetry",
+            "status": "felt", "check": True, "text": "air 0.4 s", **kw}
+
+
+def test_a_speed_drop_without_an_impact_is_a_stop_and_an_air_stays_a_jump():
+    (soft,) = events.telemetry_moments("A.MP4", [_drop(peak_g=1.5)])
+    (hard,) = events.telemetry_moments("A.MP4", [_drop(peak_g=4.2)])
+    (air,) = events.telemetry_moments("A.MP4", [_air()])
+    assert (soft["kind"], hard["kind"], air["kind"]) == ("stop", "fall", "jump")
+    ranked = events.rank_clip("A.MP4", {}, None, None, felt=[_drop(peak_g=1.5), _air()])
+    kinds = {r["kind"] for r in ranked}
+    assert kinds == {"stop", "jump"}
+    assert events.FELT == 1.0        # a sensor number is as good as one unaudited look, not better
+    # a stop is worth less than a person the frames saw
+    stop = next(r for r in ranked if r["kind"] == "stop")
+    assert stop["score"] < events.score_moment({"kind": "reaction", "notable": True, "start": 0, "end": 2},
+                                               status="confirmed")["score"]
+
+
+def test_the_frames_agreeing_makes_a_slowdown_a_fall():
+    coarse = {"moments": [{"start": 29.0, "end": 34.0, "kind": "fall", "notable": True, "what": "down in snow"}]}
+    fine = {"windows_read": [[26.0, 38.0]], "moments": [{"start": 30.0, "end": 33.0, "kind": "fall",
+                                                         "notable": True, "what": "down in snow"}]}
+    ranked = events.rank_clip("A.MP4", coarse, fine, None, felt=[_drop(peak_g=1.5)])
+    tel = next(r for r in ranked if r["source"] == "telemetry")
+    assert tel["kind"] == "fall" and tel.get("seen_by_frames")
+
+
+def test_a_claude_rejected_speed_drop_falls_below_a_confirmed_reaction():
+    reaction = {"rank": 1, "clip": "A.MP4", "start": 5.0, "end": 8.0, "kind": "reaction", "score": 0.9,
+                "source": "sheet", "why_ranked": {"confirmation": "confirmed"}}
+    (m,) = events.telemetry_moments("A.MP4", [_drop(peak_g=4.2)])
+    row = {**m, **events.score_moment(m, status="felt"), "certainty": "telemetry"}
+    felt_score = row["score"]
+    assert felt_score > reaction["score"] * 0.9         # unchecked, it sits among the real moments
+    rejected = {**row, "certainty": "rejected"}
+    out = events.reweigh([rejected, reaction])
+    assert [r["kind"] for r in out] == ["reaction", "fall"]
+    assert out[1]["why_ranked"]["confirmation"] == "unsupported"
+    assert out[1]["score"] == round(felt_score * events.UNSUPPORTED / events.FELT, 3)
+
+
+def test_a_claude_confirmed_slowdown_goes_up_and_a_confirmed_stop_that_was_a_fall_is_one():
+    (m,) = events.telemetry_moments("A.MP4", [_drop(peak_g=1.5)])
+    row = {**m, **events.score_moment(m, status="felt"), "certainty": "claude",
+           "verdict": {"verdict": "confirm", "kind": "fall"}}
+    (out,) = events.reweigh([row])
+    assert out["kind"] == "fall" and out["why_ranked"]["confirmation"] == "confirmed"
+    assert out["score"] > row["score"] * events.CONFIRMED / events.FELT * 0.99
+    # an air is never touched by the rejection rule here (CHECKER keeps its `unsure` rule)
+    (a,) = events.telemetry_moments("A.MP4", [_air()])
+    air = {**a, **events.score_moment(a, status="felt"), "certainty": "unsure"}
+    assert events.reweigh([air])[0]["score"] == air["score"]
+
+
+# ---------------------------------------------------------------- K7: talk moments from the transcript
+
+def test_a_phrase_that_comes_back_ranks_a_line_with_no_telemetry_at_all():
+    from roughcut import talk
+    tr = {"IMG_1.MOV": [{"start": 4.0, "end": 5.5, "text": "You got the pocket pizza?"},
+                        {"start": 5.6, "end": 6.4, "text": "Pocket pizza!"},
+                        {"start": 30.0, "end": 31.0, "text": "The snow is fine."}]}
+    out = talk.moments(tr)
+    (row,) = out["IMG_1.MOV"]
+    assert row["kind"] == "talk" and "pocket pizza" in row["what"].lower()
+    assert row["talk"]["terms"]["recurs"] > 0 and row["talk"]["terms"]["question"] > 0
+    assert (row["start"], row["end"]) == (4.0, 6.4)
+
+
+def test_a_second_voice_laughter_and_a_copied_clip():
+    from roughcut import talk
+    talking = [{"start": 1.0, "end": 2.0, "text": "Did you see that", "speaker": "S1"},
+               {"start": 2.5, "end": 3.5, "text": "haha oh no", "speaker": "S2"}]
+    out = talk.moments({"A.MP4": talking, "COPY.MP4": list(talking)})
+    assert list(out) == ["A.MP4"], "an identical transcript under another name is not a second moment"
+    t = out["A.MP4"][0]["talk"]["terms"]
+    assert t["answered"] > 0 and t["laugh"] > 0

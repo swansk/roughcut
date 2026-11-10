@@ -373,10 +373,11 @@
   /* How sure the moments are: counts by certainty, for the cut and for the bin. A level
    * with none is not listed; a missing account draws nothing. */
   const CERT_NAMES = { felt: 'felt by telemetry', local: 'checked by the 3080',
-    claude: 'checked by Claude', once: 'seen once', unchecked: 'unchecked',
+    claude: 'checked by Claude', heard: 'heard in the words', once: 'seen once', unchecked: 'unchecked',
     unsupported: 'unsupported', contradicted: 'contradicted' };
   const CERT_HELP = { felt: 'a sensor measured it; no look has checked it',
     local: 'the local GPU looked at its frames and agreed', claude: 'Claude looked at its frames and agreed',
+    heard: 'found from the words; no look has checked the picture',
     once: 'one close look saw it and nothing else did', unchecked: 'only the contact sheets claim it',
     unsupported: 'a closer look found nothing there', contradicted: 'a closer look found something else' };
   function certRow(kind, counts, words, lead) {

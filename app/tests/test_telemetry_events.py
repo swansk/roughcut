@@ -216,9 +216,10 @@ def test_telemetry_airs_are_moments_with_source_telemetry_status_felt():
     assert (m["source"], m["status"], m["who"], m["kind"]) == ("telemetry", "felt", "wearer", "jump")
     ranked = events.rank_clip("CLIP_12.MP4", {}, {}, None, felt=felt_events())
     assert ranked[0]["source"] == "telemetry" and ranked[0]["why_ranked"]["confirmation"] == "felt"
-    assert ranked[0]["score"] > events.rank_clip(
+    # K7 (wave 22): a sensor number is as good as one unaudited look, not better (FELT 1.0)
+    assert ranked[0]["score"] >= events.rank_clip(
         "CLIP_12.MP4", {"moments": [{"start": 46.5, "end": 47.5, "kind": "jump", "what": "x",
-                                      "notable": True}]}, {})[0]["score"], "felt outranks unaudited"
+                                      "notable": True}]}, {})[0]["score"], "felt is not worse than unaudited"
 
 
 def test_a_sheet_claim_on_the_same_air_is_folded_into_the_telemetry_row():

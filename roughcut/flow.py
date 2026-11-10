@@ -675,12 +675,12 @@ MODE_WORDS = {
                "Costs the most Claude calls."),
 }
 
-CERT_ORDER = ("felt", "local", "claude", "once", "unchecked", "unsupported", "contradicted")
+CERT_ORDER = ("felt", "local", "claude", "heard", "once", "unchecked", "unsupported", "contradicted")
 CERT_NAMES = {"felt": "felt by telemetry", "local": "checked by the 3080",
-              "claude": "checked by Claude", "once": "seen once",
-              "unchecked": "unchecked", "unsupported": "unsupported",
+              "claude": "checked by Claude", "heard": "heard in the words",
+              "once": "seen once", "unchecked": "unchecked", "unsupported": "unsupported",
               "contradicted": "contradicted"}
-CERT_CHIP = {"felt": "felt", "local": "3080", "claude": "Claude", "once": "seen once",
+CERT_CHIP = {"felt": "felt", "local": "3080", "claude": "Claude", "heard": "heard", "once": "seen once",
              "unchecked": "unchecked", "unsupported": "unsupported",
              "contradicted": "contradicted"}
 _REJECT = ("reject", "rejected", "deny", "denied", "refute", "refuted", "no", "false")
@@ -752,6 +752,8 @@ def certainty(m: dict) -> dict:
     level (CERT_ORDER): `felt` — a sensor measured it (source "telemetry", status "felt")
     and nothing has looked since; `local` / `claude` — a check by the 3080 / by Claude
     agreed (lane VERIFY's `verdict`, else a close or deep look's agreement is Claude's);
+    `heard` — a talk / hang-out moment found from the transcript (source "transcript"); no
+    picture was looked at and none needs to be, unless a verdict or a closer look settles it;
     `once` — one close look and nothing else; `unchecked` — never looked at again;
     `unsupported` / `contradicted` — a closer look found nothing there / something else."""
     status = str(m.get("status") or "").lower()
@@ -769,7 +771,9 @@ def certainty(m: dict) -> dict:
     if str(m.get("claim_status") or "").lower() == "unsupported" and status in ("", "unseen"):
         status = "unsupported"
     tele = source == "telemetry"
-    base = ("felt" if tele and status in ("", "felt", "unseen", "unchecked")
+    words = source == "transcript" and status in ("", "unseen", "heard")
+    base = ("heard" if words
+            else "felt" if tele and status in ("", "felt", "unseen", "unchecked")
             else "claude" if status in ("confirmed", "deep")
             else "once" if status == "fine-only"
             else "unsupported" if status == "unsupported"
@@ -792,11 +796,12 @@ def certainty(m: dict) -> dict:
     if not how:
         how = {"felt": "measured by the sensor, no look has checked it",
                "claude": "a closer look agreed" if status == "confirmed" else "a deep look agreed",
+               "heard": "found from the words; no look has checked the picture",
                "once": "one close look, nothing else saw it",
                "unchecked": "not checked yet",
                "unsupported": "a closer look found nothing there",
                "contradicted": "a closer look disagreed"}[level]
-    origin = ("telemetry" if tele else "the contact sheets" if source in ("", "sheet")
+    origin = ("telemetry" if tele else "the transcript" if source == "transcript" else "the contact sheets" if source in ("", "sheet")
               else source)
     title = " · ".join(x for x in (_numbers(m) or str(m.get("what") or ""), origin, how) if x)
     if level in ("contradicted", "unsupported") and m.get("what"):

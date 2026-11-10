@@ -293,3 +293,26 @@ def test_asserted_layer_is_the_boards_demote_ranked_with_a_claude_reject_on_a_te
                                                                "kind": "none", "confidence": "high"}})
     assert after == []
     assert any(r["start"] == 229.0 and r["certainty"] == "rejected" for r in data["held"])
+
+
+# ------------------------------------------------------------------ the B-roll line (wave 22, K7)
+
+def test_broll_line_counts_the_non_event_labels_the_list_and_the_cut_reach(tmp_path):
+    moments = [
+        {"id": "lift-1", "clip": "C3", "start": 0.0, "end": 40.0, "kind": "lift", "confidence": "high", "polarity": "positive"},
+        {"id": "talk-1", "clip": "C3", "start": 18.3, "end": 21.0, "kind": "talk-key-line", "confidence": "medium",
+         "polarity": "positive"},
+        {"id": "talk-low", "clip": "C3", "start": 30.0, "end": 31.0, "kind": "talk-key-line", "confidence": "low",
+         "polarity": "positive"},
+        {"id": "air-1", "clip": "C1", "start": 5.0, "end": 6.0, "kind": "air", "confidence": "high", "polarity": "positive"},
+        {"id": "neg", "clip": "C2", "start": 5.0, "end": 6.0, "kind": "other", "confidence": "high", "polarity": "negative"}]
+    assert [m["id"] for m in ev.broll_labels(moments)] == ["lift-1", "talk-1"]      # no events, no lows, no negatives
+    rows = [{"clip": "C3.MP4", "start": 17.0, "end": 22.0}, {"clip": "C1.MP4", "start": 5.0, "end": 6.0}]
+    edl = tmp_path / "cut.edl.json"
+    edl.write_text(json.dumps({"segments": [{"clip": "C3.MP4", "in": 100.0, "out": 104.0}]}))
+    r = ev.score_broll(moments, rows, ev.cut_shots(edl))
+    assert r["hit"] == ["lift-1", "talk-1"] and r["recall"] == [1.0, 2]
+    assert r["cut_hit"] == [] and r["cut_recall"] == [0.0, 2]
+    low = ev.score_broll(moments, [{"clip": "C1.MP4", "start": 5.0, "end": 6.0}])
+    assert low["recall"] == [0.0, 2] and ev.broll_low({"broll": low}) and not ev.broll_low({"broll": r})
+    assert ev.broll_low({}) is False

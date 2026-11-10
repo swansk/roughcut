@@ -45,6 +45,15 @@ inputs or no recording (AMBER, "not measured"). The headline adds `checker_lost`
 high-confidence events the sensor found that the checker threw out (baseline 0), and prints the
 other riders' air row. A prompt change cannot show here (the answers are the old prompt's): re-record.
 
+B-ROLL (wave 22 BROLL, REDESIGN-GOAL K7: the fun B-roll counts too, not only the acceleration
+events). `broll` scores the labelled positives that are NOT events (lift ride, chairlift and ski-patrol
+talk, cheers, the trail-map stop, the selfie, the scenic view, the retelling; high and medium
+confidence, 12 on Killington) against what the cut-planning prompt is told to read first: the 16
+rows `revise.listed_events` lists (two blocks, Action and People and B-roll) out of the asserted
+ranked events. Recall = labels with a listed row on them (+-0.5 s). `--cut EDL` adds the same recall
+for a cut's shots (`segments`, or the first proposal's shots in `provenance.bases[0]`). Offline, no
+call. Below BROLL_BAR the gate is AMBER, never RED (exit 4): nobody has watched a cut made with it.
+
 Scoring rules are the bake-off's (`eval/README.md`, `bench/score.py`): camera-toss is a
 negative for fall / crash (a thrown camera is not a fall).
 
@@ -78,6 +87,7 @@ EVENT_KINDS = ("air", "fall", "crash", "camera-into-snow", "camera-toss", "water
 INDEX_KIND = {"jump": "air", "air": "air", "fall": "fall", "crash": "crash"}   # index kind -> eval kind
 TELEMETRY_KIND = {"air": "air", "impact": "crash", "speed_drop": "fall"}
 LAYERS = ("index_raw", "asserted", "felt", "confirmed")
+BROLL_BAR = 0.5       # of the labelled B-roll, the share the listed rows must reach (6 of 12); below is AMBER
 
 # A regression beyond these fails the gate. `higher` metrics may not fall by more than tol;
 # `lower` metrics may not rise by more than tol. One labelled air is 0.14 of the 7 high-confidence
@@ -304,6 +314,40 @@ def _verdict_kind(row: dict) -> str | None:
     return None
 
 
+def broll_labels(moments: list[dict]) -> list[dict]:
+    """The labelled positives that are not events: high and medium confidence, kind not in EVENT_KINDS."""
+    return [m for m in moments if m["polarity"] == "positive" and m["confidence"] != "low"
+            and m["kind"] not in EVENT_KINDS]
+
+
+def score_broll(moments: list[dict], rows: list[dict], cut: list[dict] | None = None) -> dict:
+    """Recall of the labelled B-roll by the listed rows (`rows`: clip, start, end) and, when given, by a
+    cut's shots (`cut`: clip, start, end)."""
+    labels = broll_labels(moments)
+
+    def reach(spans: list[dict]) -> list[str]:
+        return [m["id"] for m in labels
+                if any(stem(r["clip"]) == stem(m["clip"]) and overlaps(float(r["start"]), float(r["end"]),
+                                                                      m["start"], m["end"], PAD) for r in spans)]
+    out = {"labels": len(labels), "listed": len(rows), "hit": reach(rows)}
+    out["recall"] = [round(len(out["hit"]) / len(labels), 3) if labels else None, len(labels)]
+    out["missed"] = [m["id"] for m in labels if m["id"] not in out["hit"]]
+    if cut is not None:
+        out["cut_hit"] = reach(cut)
+        out["cut_recall"] = [round(len(out["cut_hit"]) / len(labels), 3) if labels else None, len(labels)]
+    return out
+
+
+def cut_shots(path: Path) -> list[dict]:
+    """A cut's shots as (clip, start, end): the EDL's `segments`, else its first proposal's shots."""
+    edl = json.loads(path.read_text(encoding="utf-8"))
+    segs = edl.get("segments") or []
+    if not segs:
+        bases = (edl.get("provenance") or {}).get("bases") or []
+        segs = [bases[0]["shots"][i] for i in bases[0]["order"]] if bases else []
+    return [{"clip": s["clip"], "start": float(s["in"]), "end": float(s["out"])} for s in segs if s.get("clip")]
+
+
 def preds_from_ranked(rows: list[dict]) -> list[dict]:
     """Ranked / asserted event rows (events.py shape) as eval predictions."""
     out = []
@@ -342,7 +386,7 @@ def collect(work: Path, bin_name: str, record: dict | None = None, replay_dir: P
     `<work>/index/<bin>.verify.json`: the rev's own router picks the events to check and the
     rev's own checker code (prompt, `validate`, `settle`) takes the recorded answers from a
     scripted backend (`replay_state`), so a change in routing / settling / demotion shows."""
-    from roughcut import events, find, telemetry_events as te, verify
+    from roughcut import events, find, revise, telemetry_events as te, verify
 
     vis, aud, tel = work / "visual" / bin_name, work / "audio" / bin_name, work / "telemetry" / bin_name
     state = (verify.load_state(verify.state_path(work, bin_name)) if record is None
@@ -407,7 +451,8 @@ def collect(work: Path, bin_name: str, record: dict | None = None, replay_dir: P
                 "confirmed": (preds_from_felt([e for e in confirmed if e.get("source") == "telemetry"])
                               + preds_from_ranked([e for e in confirmed if e.get("source") != "telemetry"])),
                 "search": search, "clips": clips, "state": state, "held": held, "annotated": annotated,
-                "ranked_raw": ranked_raw, "asserted_rows": asserted, "replay": replay}
+                "ranked_raw": ranked_raw, "asserted_rows": asserted, "replay": replay,
+                "listed": [r for block in revise.listed_events(asserted) for r in block]}
     finally:
         verify.set_providers()
         te.use_telemetry_dir(prev_dir)
@@ -614,7 +659,7 @@ def union_find(data: dict, queries: list[dict], local_dir: Path, eval_dir: Path)
 
 def evaluate(work: Path, bin_name: str, eval_dir: Path, local_dir: Path | None = None,
              rerank: bool = False, rerank_cache: Path | None = None, record: dict | None = None,
-             replay_dir: Path | None = None) -> dict:
+             replay_dir: Path | None = None, cut: Path | None = None) -> dict:
     moments, queries = load_set(eval_dir)
     data = collect(work, bin_name, record, replay_dir)
     layers = {k: score_events(moments, data[k]) for k in LAYERS}
@@ -623,18 +668,22 @@ def evaluate(work: Path, bin_name: str, eval_dir: Path, local_dir: Path | None =
     find_union = score_find(queries, usearch) if usearch else {"skipped": why}
     if usearch and rerank:
         find_union["rerank"] = score_rerank(queries, usearch, work, bin_name, rerank_cache)
+    broll = score_broll(moments, data["listed"], cut_shots(cut) if cut else None)
     return {"bin": bin_name, "work": str(work), "layers": layers, "find": find, "find_union": find_union,
+            "broll": broll,
             "certainty": certainty_counts(data), "replay": data.get("replay"),
             "checker_lost": sorted(set(layers["felt"]["found_high"]) - set(layers["asserted"]["found_high"])),
             "set": {"positives": sum(1 for m in moments if m["polarity"] == "positive"),
                     "negatives": len(negatives(moments)), "queries": len(queries)},
             "headline": headline(layers["asserted"], find, find_union,
-                                 len(sorted(set(layers["felt"]["found_high"]) - set(layers["asserted"]["found_high"]))))}
+                                 len(sorted(set(layers["felt"]["found_high"]) - set(layers["asserted"]["found_high"]))),
+                                 broll)}
 
 
 # ------------------------------------------------------------------ headline, baseline, gate
 
-def headline(asserted: dict, find: dict, find_union: dict | None = None, checker_lost: int = 0) -> dict:
+def headline(asserted: dict, find: dict, find_union: dict | None = None, checker_lost: int = 0,
+             broll: dict | None = None) -> dict:
     fu = find_union if find_union and "skipped" not in find_union else None
     r = asserted["recall"]
     pick = lambda k: (r.get(k) or [None, 0])[0]                      # noqa: E731
@@ -642,6 +691,7 @@ def headline(asserted: dict, find: dict, find_union: dict | None = None, checker
             "recall_air": pick("kind:air"), "recall_fall": pick("kind:fall"),
             "recall_other_air": pick("air_who:other"),
             "checker_lost": checker_lost,
+            "broll_recall": (broll or {}).get("recall", [None])[0],
             "negatives_asserted": asserted["negatives_asserted"][0],
             "negatives_total": asserted["negatives_asserted"][1],
             "fa_per_neg_min": asserted["fa_per_neg_min"],
@@ -671,6 +721,12 @@ def _f(x) -> str:
     return "-" if x is None else f"{x:.2f}"
 
 
+def broll_low(res: dict) -> bool:
+    """The B-roll line is under the bar. AMBER, never RED: the bar is provisional (REDESIGN-GOAL K7)."""
+    r = (res.get("broll") or {}).get("recall") or [None]
+    return r[0] is not None and r[0] < BROLL_BAR - 1e-9
+
+
 def gate_line(res: dict, base: dict | None) -> tuple[bool, str]:
     h = res["headline"]
     line = (f"recall {_f(h['recall_high'])} (karl-confirmed {_f(h['recall_karl'])}; air {_f(h['recall_air'])}, "
@@ -681,6 +737,12 @@ def gate_line(res: dict, base: dict | None) -> tuple[bool, str]:
                if h.get("find_union_overlap") is not None else "skipped: " + str((res.get("find_union") or {}).get("skipped", "no local stack here")).removeprefix("skipped: ")))
     oa = h.get("recall_other_air")
     line += f" · other riders' airs {'-' if oa is None else f'{oa:.2f}'}"
+    br = res.get("broll")
+    if br:
+        line += (f" · B-roll: the 16 listed rows reach {len(br['hit'])} of {br['labels']} labelled non-event moments"
+                 + (f", the cut {len(br['cut_hit'])} of {br['labels']}" if "cut_hit" in br else "")
+                 + (f" (BELOW THE BAR of {BROLL_BAR:.0%}: AMBER until Karl has watched a cut made with it)"
+                    if broll_low(res) else ""))
     rp = res.get("replay")
     if rp:
         line += (f" · the rev's own router + checker over {rp['recorded']} recorded Claude verdicts"
@@ -730,6 +792,12 @@ def markdown(res: dict) -> str:
             rr = fu["rerank"]
             out += ["", f"Find + 3080 + Claude rerank ({rr['calls']} calls, ${rr['usd']}): overlap {rr['hit3_overlap'][0]}, "
                     f"IoU>=0.3 {rr['hit3_iou03'][0]}. Misses: {', '.join(rr['misses']) or 'none'}."]
+    br = res.get("broll")
+    if br:
+        out += ["", f"B-roll: the {br['listed']} rows the prompt lists first reach {len(br['hit'])} of {br['labels']} labelled "
+                f"non-event moments ({', '.join(br['hit']) or 'none'}); missed: {', '.join(br['missed']) or 'none'}."
+                + (f" The cut reaches {len(br['cut_hit'])} of {br['labels']} ({', '.join(br['cut_hit']) or 'none'})."
+                   if "cut_hit" in br else "")]
     rp = res.get("replay")
     if rp:
         out += ["", f"Recorded checker ({rp['rev'] or '?'}): {rp['recorded']} recorded verdicts, {rp['passes']} pass(es), "
@@ -769,6 +837,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--freeze-from", type=Path, default=None, metavar="WORK",
                     help="copy WORK's visual / audio / telemetry / local sidecars of --bin to --freeze-to, read-only")
     ap.add_argument("--freeze-to", type=Path, default=None)
+    ap.add_argument("--cut", type=Path, default=None, metavar="EDL",
+                    help="also score this cut's shots against the labelled B-roll (the B-roll line)")
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--write-baseline", action="store_true")
     a = ap.parse_args(argv)
@@ -795,7 +865,7 @@ def main(argv: list[str] | None = None) -> int:
     if a.refresh_vectors:
         print(refresh_vectors(a.eval, load_set(a.eval)[1]))
     res = evaluate(a.work, a.bin, a.eval, a.local, rerank=a.rerank, rerank_cache=a.rerank_cache,
-                   record=record, replay_dir=(a.out / "replay") if a.out else None)
+                   record=record, replay_dir=(a.out / "replay") if a.out else None, cut=a.cut)
     if a.out:
         a.out.mkdir(parents=True, exist_ok=True)
         (a.out / "understanding.json").write_text(json.dumps(res, indent=1))
@@ -813,7 +883,7 @@ def main(argv: list[str] | None = None) -> int:
     print("understanding:", line)
     if a.check and not ok:
         return 1
-    if a.check and (res.get("replay") or {}).get("unrecorded"):
+    if a.check and (broll_low(res) or (res.get("replay") or {}).get("unrecorded")):
         return 4          # not a regression, but the recording no longer covers what the rev routes
     return 0
 

@@ -168,8 +168,8 @@ def seen_witnesses(clip: str, events: Iterable[dict]) -> list[dict]:
     """The ranked events as witnesses, each carrying the state its confirmation earned."""
     out = []
     for e in events:
-        if e.get("clip") != clip:
-            continue
+        if e.get("clip") != clip or e.get("source") == "transcript":
+            continue            # talk / hangout rows are re-scored words: the "heard" witness already has them
         why = e.get("why_ranked") or {}
         status = why.get("confirmation", "unseen")
         state = STATE_BY_CONFIRMATION.get(status, "claimed")
