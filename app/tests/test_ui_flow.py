@@ -1308,11 +1308,20 @@ def test_the_seen_tab_is_ordered_by_the_rank_not_by_the_kind(page, project):
 
 
 @pytest.mark.usefixtures("claims_as_found")
-def test_the_seen_tab_offers_the_audit_priced_and_marks_a_one_look_find(page, project):
-    """HANDOFF roadmap item 1: the claims at the top of the seen tab are the ones nobody
-    checked, so the tab carries one priced button that audits them. It is never clicked
-    here — the real close look spends model calls."""
+def test_the_seen_tab_offers_the_audit_priced_and_marks_a_one_look_find(page, project, monkeypatch):
+    """HANDOFF roadmap item 1: the claims nothing backs are the ones nobody checked, so the
+    tab carries one priced button that checks them. It is never clicked here — the real
+    check spends model calls.
+
+    Wave 21 CLAIMSUI replaced the "Audit N claims" button (it counted `unaudited` rows of
+    events.json) with "Check N claims" (it counts the visual claims the demotion pass holds
+    back, GET /api/verify `claims_check`). One such claim is held here by hand: the fixture
+    turns demotion off, and the demotion itself is test_verify's."""
     import server
+    held = [{"clip": "CLIP_C.MP4", "kind": "fall", "start": 1.5, "end": 3.5, "what": "rider goes down",
+             "who": "wearer", "source": "index", "event_id": "CLIP_C:claim:fall:1.5",
+             "claim_kind": "fall"}]
+    monkeypatch.setattr(server, "verify_claims_held", lambda: list(held))
 
     vdir = Path(server.STATE["visual"])
     vdir.mkdir(parents=True, exist_ok=True)
@@ -1340,14 +1349,17 @@ def test_the_seen_tab_offers_the_audit_priced_and_marks_a_one_look_find(page, pr
         page.locator("#libTabs .tab", has_text="seen").click()
         button = page.locator("#auditClaims")
         assert button.is_visible() and button.is_enabled()
+        priced = page.evaluate("fetch('/api/verify').then(r => r.json())")["claims_check"]
+        assert priced["n"] == 1 and priced["usd"] > 0, priced
         assert button.inner_text() == \
-            f"Audit 1 claim · {cost_tag(server.FINE_USD_PER_WINDOW, server.config.charges_money())}"
+            f"Check 1 claim · {cost_tag(priced['usd'], server.config.charges_money())}"
         if not server.config.charges_money():     # the estimate is labelled as the API's
             assert "estimated cost if using the API" in button.get_attribute("title")
         rows = page.locator("#library .cand")
         assert "one look" in rows.nth(1).inner_text().lower()
 
-        # nothing left unaudited: the button stays on the tab, off, and says why
+        # nothing left to check: the button stays on the tab, off, and says why
+        held.clear()
         ranked.write_text(json.dumps({"built": 0, "clips": 1, "events": [one_look]}),
                           encoding="utf-8")
         page.reload()
@@ -1355,7 +1367,8 @@ def test_the_seen_tab_offers_the_audit_priced_and_marks_a_one_look_find(page, pr
         page.evaluate("document.querySelector('#more').hidden && document.querySelector('#moreFound').click()")      # under more found (M16)
         page.locator("#libTabs .tab", has_text="seen").click()
         assert page.locator("#auditClaims").is_disabled()
-        assert "close look" in page.locator("#auditInfo").inner_text()
+        assert page.locator("#auditClaims").inner_text() == "Check the claims"
+        assert "every claim has been checked" in page.locator("#auditInfo").inner_text()
     finally:
         sidecar.unlink(missing_ok=True)
         ranked.unlink(missing_ok=True)

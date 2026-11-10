@@ -312,8 +312,9 @@ def test_the_journeys_browser_has_no_d_bus():
 
 CRASHED = {
     # the gate's death itself: the browser's session bus goes away under it
-    "bus": ("Chromium crashed (browser process SIGTRAP · FATAL:dbus/bus.cc:1245 "
-            "D-Bus connection was disconnected. Aborting.)"),
+    # (the FATAL source file:line moves between Chromium builds: dbus/bus.cc:1245 in the 2026-10
+    # build, components/dbus/thread_linux/dbus_thread_linux.cc:72 in 158; the message does not)
+    "bus": "Chromium crashed (browser process SIGTRAP · FATAL:",
     # the renderer: chrome://crash
     "renderer": "the page's renderer crashed (the browser still up",
 }
@@ -332,6 +333,8 @@ def test_a_chromium_crash_under_a_step_is_named_and_the_step_retried_once(how, u
     step = rec["steps"][1]
     assert step["name"] == "firstpass" and step["ok"], step
     assert step["why"].startswith(CRASHED[how]) and step["why"].endswith("; retried: ✓"), step["why"]
+    if how == "bus":
+        assert "D-Bus connection was disconnected. Aborting.)" in step["why"], step["why"]
     assert step["retried"]["first_why"], step["retried"]
     # and the gate's line carries it: a retry is never silent
     assert f" · step 2 firstpass retried once after {CRASHED[how]}" in line, line
