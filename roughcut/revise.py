@@ -211,7 +211,10 @@ Timestamps are seconds within the named clip."""
 # K7 (wave 22): what the prompt lists, and how many of each. Two blocks so a sensor cannot
 # fill the list (the audit measured 14 of 14 rows from telemetry and 0 of 12 labelled B-roll
 # moments reached); at most two rows per clip so one eventful clip cannot either; and at
-# most six rows from the sensor in all. Provisional numbers, argued not fitted.
+# most six rows from the sensor in all. The caps are NOT purely argued: LIST_WORDS and the one-row-
+# of-words-plus-one-of-pictures-per-clip rule were tuned against Killington's 12 labelled non-event
+# moments until the eval's B-roll line reached 6 of 12 (a margin of one row), on one bin; unproven on
+# other footage. Do not re-tune until a second labelled bin exists.
 ACTION_KINDS = ("fall", "crash", "jump", "action")
 LIST_BLOCK = 8
 LIST_PER_CLIP = 2

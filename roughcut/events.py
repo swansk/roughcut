@@ -532,6 +532,8 @@ def rank_clip(clip: str, coarse: dict, fine: dict | None = None,
 
 
 PEOPLE_LOOKS = ("faces", "reaction", "people")
+# Tuned on Killington's 12 labelled B-roll moments with the rules in revise.py (one bin, margin of one
+# row; unproven elsewhere): do not re-tune until a second labelled bin exists.
 TALK_WITH_PICTURE = 1.3
 TALK_GAIN = 0.1          # per point of re-score, up to four: a stronger exchange ranks above a weaker one
 

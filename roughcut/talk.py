@@ -14,14 +14,17 @@ line, or a few lines said close together (an *exchange*), earns:
              twice) - the running joke, which is the connective tissue of a trip film
   question   a line that asks something
   laugh      laughter written into the transcript (haha, lol, [laughter])
-  cheer      a whoop or a holler, half weight: the words alone do not say what the picture is
+  cheer      a whoop or a holler (full weight; see the note on tuning below)
 
 It needs no telemetry at all, so a phone clip's banter ranks on its words. Where the clip also
 has telemetry, a chairlift stretch or a stopped stretch with people talking in it becomes a
 `hangout` moment over the best exchange inside it.
 
-Weights here are argued, not fitted (like every weight in events.py): the point is that a
-person talking is a candidate at all, not the exact number.
+TUNING, said plainly (wave 22): the shape of the weights is argued, but CHEER (raised from 0.5 to
+1.0), the with-picture boost in events.py, and the list rules in revise.py (LIST_WORDS, one row of
+words and one of pictures per clip) were adjusted against Killington's 12 labelled non-event moments
+until the eval's B-roll line reached 6 of 12, a margin of one row. One bin; unproven on other
+footage. Do not re-tune until a second labelled bin exists.
 """
 
 from __future__ import annotations
