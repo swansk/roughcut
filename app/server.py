@@ -1575,7 +1575,9 @@ def project_payload() -> dict:
         # question is "what are the biggest things in this footage" and that is not a
         # per-clip question. Capped: the board shows 40 and the Ask reads 14, so a
         # 400-event bin does not put 400 rows through every poll.
-        "events": asserted_events[:60],
+        # K7: 120, not 60. The prompt's "People and B-roll" block is the best of what is in this
+        # list; on a bin with many sensor rows the first talk and face rows sit past rank 50.
+        "events": asserted_events[:120],
         "events_unsupported": held_events[:60],
         "proxies_ready": STATE.get("proxies_ready", False),
         "edl_path": str(STATE["edl"]),

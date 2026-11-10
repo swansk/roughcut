@@ -114,12 +114,19 @@ FIRST_SYSTEM = (
 #
 # Neither is inferable from a single clip, which is why they are stated rather than
 # left to be rediscovered per call.
+# K7 (wave 22): the third bullet is the counterweight to the first. "Roughly a third" is
+# PROVISIONAL (done*, REDESIGN-GOAL K7): a number argued from the audit's cut mix, not one Karl
+# has watched a cut made with. Do not tune it until he has.
 FIRST_GUIDANCE = """\
 Things that are true of this kind of footage, and easy to get wrong from transcripts:
 
 * **Quiet does not mean boring.** The camera is usually on the person doing the
   thing, so the most active footage is often the least spoken over, while standing
   around talking transcribes densely. Do not rank shots by how much is said in them.
+* **Loud does not mean the only thing worth keeping, either.** The film is the people as
+  much as the riding: a line on the chairlift, a running joke, the group standing at a
+  sign. A cut that is only jumps and falls is a highlight reel, not a trip. Aim for
+  roughly a third of the cut on moments like that.
 * **Look for a through-line across clips** — a running joke, a phrase that recurs, a
   dare and its payoff, a person who keeps appearing. Something that shows up in
   several transcripts is usually the spine of the film, and it is worth more than any
@@ -168,14 +175,23 @@ VISUAL_GUIDANCE = """
 # believing.
 EVENTS_HEADER = """## Events, ranked
 
-The biggest things anyone has seen in this footage, in priority order. The score
-combines what kind of event it is, whether the reader marked it notable, whether a
-motion or audio peak corroborates it, and whether a second, closer look agreed.
+Two short lists, each in priority order: **Action** (jumps, falls, crashes) and **People and
+B-roll** (people talking, a running joke, the chairlift, a group standing at a sign, a
+reaction, a scenic hold). Both are the film: a cut that is only the first list is a
+highlight reel, not a trip. The score combines what kind of moment it is, whether the
+reader marked it notable, whether a motion or audio peak corroborates it, and whether a
+second, closer look agreed.
 
 Read the evidence word, not just the kind:
 
 * `confirmed` — two independent looks at those seconds agreed. This is the only strong
   evidence available; prefer these.
+* `felt` — a sensor number (a speed drop, an air time) that nobody has looked at yet. It
+  says something happened at those seconds, not what; a slowdown with no hard impact is
+  listed as a `stop`, not a fall.
+* `heard` — people talking, found from the words alone (a second voice answering, a phrase
+  that comes back, a question, a laugh). The words are the evidence; the picture is
+  whatever the clip shows.
 * `unaudited` — nobody has looked closely yet. The kind is one reader's guess from
   frames four seconds apart, and on this footage that guess is often wrong.
 * `deep` — a deep look (individual frames at the seconds the editor chose, read in
@@ -192,24 +208,97 @@ Read the evidence word, not just the kind:
 
 Timestamps are seconds within the named clip."""
 
+# K7 (wave 22): what the prompt lists, and how many of each. Two blocks so a sensor cannot
+# fill the list (the audit measured 14 of 14 rows from telemetry and 0 of 12 labelled B-roll
+# moments reached); at most two rows per clip so one eventful clip cannot either; and at
+# most six rows from the sensor in all. Provisional numbers, argued not fitted.
+ACTION_KINDS = ("fall", "crash", "jump", "action")
+LIST_BLOCK = 8
+LIST_PER_CLIP = 2
+LIST_TELEMETRY = 6
+LIST_WORDS = 5
 
-def events_section(events: list[dict], top: int = 14) -> str:
-    """The ranked events as prompt text, or "" when nobody has looked at the bin."""
-    if not events:
-        return ""
-    lines = []
-    for e in events[:top]:
-        why = e.get("why_ranked") or {}
-        status = why.get("confirmation", "unseen")
-        status = "unaudited" if status == "unseen" else status
-        corroborated = ""
-        if why.get("corroboration_z", 0) >= 2.0:
-            corroborated = f", peak at {why.get('peak_at')}s"
-        lines.append(
-            f"{e.get('rank', 0):3d}. {e['clip']} {e['start']:.1f}-{e['end']:.1f}  "
+
+def listed_events(events: list[dict], top: int = 2 * LIST_BLOCK) -> tuple[list[dict], list[dict]]:
+    """The rows the prompt shows: (action, people and B-roll), best first, at most `top` // 2
+    of each, two per clip, six from telemetry in all. `events` are the asserted ranked rows
+    (the checker's verdicts re-weigh the telemetry ones first).
+
+    People and B-roll takes at most one row of words (re-scored talk, a hang-out) and one of
+    pictures (what the sheets saw: faces, reactions, a scenic hold) per clip, never the same
+    seconds twice, and at most LIST_WORDS rows of words, so one chatty clip, or the words
+    alone, cannot fill it."""
+    from . import events as ev
+    per_block = max(1, top // 2)
+    ranked, seen = [], set()
+    for e in ev.reweigh(list(events)):
+        key = (e.get("start"), e.get("end"), e.get("kind"), e.get("what"))
+        if key in seen:
+            continue            # the same words and seconds under another clip name: an imported copy
+        seen.add(key)
+        ranked.append(e)
+    action: list[dict] = []
+    per_clip: dict[str, int] = {}
+    telemetry = 0
+    for e in ranked:
+        clip = str(e.get("clip", ""))
+        if str(e.get("kind", "")).lower() not in ACTION_KINDS or len(action) >= per_block \
+                or per_clip.get(clip, 0) >= LIST_PER_CLIP:
+            continue
+        if e.get("source") == "telemetry":
+            if telemetry >= LIST_TELEMETRY:
+                continue
+            telemetry += 1
+        per_clip[clip] = per_clip.get(clip, 0) + 1
+        action.append(e)
+    people: list[dict] = []
+    words = 0
+    for e in ranked:
+        clip, kind = str(e.get("clip", "")), str(e.get("kind", "")).lower()
+        if kind in ACTION_KINDS or len(people) >= per_block:
+            continue
+        said = e.get("source") == "transcript"
+        mine = [p for p in people if p.get("clip") == clip]
+        # at most two per clip, one of words and one of pictures, and never the same seconds twice
+        if len(mine) >= LIST_PER_CLIP or any((p.get("source") == "transcript") == said for p in mine) \
+                or any(float(p["start"]) < float(e["end"]) and float(e["start"]) < float(p["end"]) for p in mine):
+            continue
+        if said:
+            if words >= LIST_WORDS:
+                continue
+            words += 1
+        elif e.get("source") == "telemetry":
+            if telemetry >= LIST_TELEMETRY:
+                continue
+            telemetry += 1
+        people.append(e)
+    people.sort(key=lambda e: (-float(e.get("score") or 0.0), str(e.get("clip", "")), float(e.get("start") or 0.0)))
+    return action, people
+
+
+def _event_line(e: dict) -> str:
+    why = e.get("why_ranked") or {}
+    status = why.get("confirmation", "unseen")
+    status = "unaudited" if status == "unseen" else status
+    corroborated = ""
+    if why.get("corroboration_z", 0) >= 2.0:
+        corroborated = f", peak at {why.get('peak_at')}s"
+    return (f"{e.get('rank', 0):3d}. {e['clip']} {e['start']:.1f}-{e['end']:.1f}  "
             f"[{e.get('kind', '')}] score {e.get('score', 0):.2f}, {status}"
             f"{corroborated} — {e.get('what', '')}")
-    return f"{EVENTS_HEADER}\n\n" + "\n".join(lines)
+
+
+def events_section(events: list[dict], top: int = 16) -> str:
+    """The ranked events as prompt text, or "" when nobody has looked at the bin: an "Action"
+    block and a "People and B-roll" block (see `listed_events`)."""
+    if not events:
+        return ""
+    action, people = listed_events(events, top)
+    parts = [EVENTS_HEADER]
+    for title, rows in (("Action", action), ("People and B-roll", people)):
+        if rows:
+            parts.append(f"### {title}\n\n" + "\n".join(_event_line(e) for e in rows))
+    return "\n\n".join(parts) if len(parts) > 1 else ""
 
 
 # The bin, ahead of the events and the inventory. The design (docs/design/
