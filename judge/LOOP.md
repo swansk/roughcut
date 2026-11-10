@@ -49,6 +49,13 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-09 ~21:00: **Karl: "Yes, now" to the Claude checker on his bin.** POST /api/verify/events on 8766 (job e87c9f71):
+  40 calls, ~1.5 min, 20 confirmed · 17 rejected · 3 retimed (plan, not billed); the 28 old claims NOT checked (needs his
+  word: up to 28 more calls). GRADE and ESTIMATE had died on an expired OAuth token ~06:00 (GRADE nothing committed).
+  ESTIMATE's fix merged (`1332d1e`: NVENC refusals cached as "no NVENC" sent the size sample through x264, -36 %); quick gate
+  GREEN; **8766 deployed on `1332d1e`**. Free 3080 local re-run on his bin (job 898996f3) to add the other-rider scan.
+  Found: the eval's `--work` asserted layer ignores verdicts on telemetry-sourced rows (still "4 of 19 negatives" after 17
+  rejects) → lane EVALFIX (eval or board — whichever is wrong). GRADE relaunched (load < 1).
 - 2026-11-09 ~05:50: **Wave 21 lanes all merged (CLAIMSUI a076167, EVALREV dd4c6b5, CHECKER 0b48995, OTHERAIR d36695a +
   wiring 6abec01, FPPANEL 9f62472); quick gates on `9f62472` GREEN 2/2 at load 3.9-4.8; 8766 deployed on `9f62472`.**
   Understanding (replay of the rev's router + checker on frozen inputs): recall 0.89, air 0.80, 1 of 19 negatives,

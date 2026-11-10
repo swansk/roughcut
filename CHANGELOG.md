@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- Loop state: the Claude checker ran on Karl's preview bin; ESTIMATE merged and deployed; EVALFIX and GRADE running.
 
 - The Export dialog's size estimate no longer undershoots by ~36 % when the box is busy
   (the gate's journey step 24, intermittently, at load 12+). Cause: NVENC refuses a session
