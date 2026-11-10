@@ -49,6 +49,30 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-10 ~12:00: **Wave 22 done (Karl: "do all, in order except 3, I have more footage it can use here").**
+  (1) **BROLL merged (`749a72f`), quick gate GREEN (121 s), 8766 deployed on it.** Offline: the listed rows reach 6 of 12
+  labelled B-roll moments (was 1), event scores unchanged. Three live Hybrid first cuts on a work copy
+  (`/mnt/roughcut/space/roughcut-loop/k7-work`, 62 calls on the plan): B-roll 3, 4, 6 of 12, "pocket pizza" in 3 of 3,
+  telemetry share 11-13 %, 2:56-2:59. The middle cut is rendered for Karl:
+  `Karl OS/Builds/Roughcut/killington-new-first-cut-2026-11-10.mp4`. K7 stays open until he has watched it; no re-tuning
+  of the list rules before a second labelled bin (they were tuned on Killington's 12 labels).
+  (2) **GPUPLAY measured (rubric log, same date): the sharpen / blur red is the software GL (GPU 15 of 15); a real GPU
+  shows a different fault (half-speed pacer a display frame late, 28 of 45 against software's 57 of 59); the 59.94
+  test's Auto assertion reads a start-of-play transient, and Full's short rate is the page missing frame callbacks, not
+  the canvas.** Nothing changed in the product or the bars. Next wave's playback lane, in this order: the board reports
+  its own draw log from Karl's browser (the only arm that is his laptop); the half-speed pacer on a GPU; the
+  start-of-play re-draws and burst; what holds the page's rendering turn during Full. GPU launch for any lane:
+  `PYTHONPATH=~/roughcut-loop/gpuplay GPUPLAY=gpu pytest -p gpu_launch ...` (see `gpu_launch.py`, `ab.sh`).
+  (3) Second test set NOT built: Karl has more footage for it; ask where (on disk already, Aug 2020, GoPro 2.7K with
+  telemetry plus phone clips: `/mnt/roughcut/space/backup-1-2-2021/{chapel,rogers,rogers/toedit}`, unconfirmed as the
+  footage he means).
+  (4) `judge/FOR-KARL.md` rewritten for the live board: six asks (K7's video first, then K5, K6, K4, K3, K2).
+  (5) **Backed up and tidied:** this branch pushed to origin (was `389df7e` from Oct 21); 98 worktrees and 147 local
+  branches removed (left: main, this one, `agent/audit-free`, `closed-loop`, `agent/m16-live`, `redesign-w19-worker` =
+  the unmerged read-back); 131 finished lane / judge scratch dirs moved to `/mnt/roughcut/space/roughcut-loop/` with a
+  symlink at each old path (`MOVE.log` there); root disk 91 % → 55 %. `~/roughcut-loop/understand` (31 GB) stays on
+  root. **Still Karl's:** fast-forward main to this tip and restart `roughcut-board` (8765 is on `1d21f45`, without
+  BROLL), push main, his K2-K7 look. Loop PARKED again; judge 17 held.
 - 2026-11-10 ~08:30: **Karl: "merge everything for now so we can pick up again later. I trust the gates are probably ok since
   I was running other things on the box."** The loop is PARKED. Nothing on lane branches is left to merge into this branch:
   `agent/audit-free` was cherry-picked long ago; `agent/m16-live` is old main-era UI work the redesign replaced; WORKER's

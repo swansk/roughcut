@@ -669,3 +669,26 @@ next judge runs, and the next judge rules it honest or lenient.
   1-6), every cut 2:56-2:59. The earlier seven were judges' cuts on older revs and freshly indexed bins, so the
   comparison is indicative, not controlled. "Roughly a third" in the guidance stays provisional and K7 stays open until
   Karl has watched a cut; no re-tuning of the list rules until a second labelled bin exists.
+- 2026-11-10 (wave 22, GPUPLAY, lead; a measurement, **no bar and no product file changed**): **the playback-timing
+  tests on a real GPU.** Same snapshot (`b94a800`), same tests, Chromium launched three ways and interleaved per round:
+  the gate's own (headless shell, SwiftShader), the full binary in new headless still on SwiftShader (control), and the
+  full binary with ANGLE on the NVIDIA EGL driver (WebGL on the RTX 3080, page and worker both;
+  `--enable-gpu --ignore-gpu-blocklist --use-gl=angle --use-angle=gl-egl`). 10 rounds gate vs GPU at load 4-13 (other
+  sessions had the box), then 5 rounds of all three at load 3-7 on the two tests that differed. Passes:
+  **sharpen / blur with no hold: GPU 15 of 15, software 12 of 19** (the gate's "blur 83 ms" red is the software GL's
+  commit, as GRADE measured); **half-speed 4K proxy plays evenly: GPU 28 of 45, software 57 of 59** (control build
+  14 of 15, so it is the GPU, not the binary: one frame up a display frame late on the worker's clock, 83 ms against
+  67, once or twice a play in a third of plays; one round had 8); latency under load 10 of 10 vs 9 of 10; the graded
+  dissolve 8 of 10 both. **The 59.94 test: 0 of 10 on the GPU and 0 of 4 judged in software, for two reasons that are
+  not the canvas's steady state.** (a) Auto's cap holds exactly once a play is going (the draw log: 33.4 ms of film a
+  draw, every other frame); the test's 700 ms window from the play's first draw also counts the start (the parked
+  frame drawn 2-4 more times, and on some plays a burst of up to 7 frames 4-6 ms apart catching up), so it reads
+  34-40 fps; on the GPU the start is quick enough to land in the window every time. (b) On Full the canvas draws what
+  the video's frame callback hands it (within 1 a second in 20 plays): the callbacks come 47-59 a second while the
+  video decodes 59-61 and presents 57-60, so the short rate is the page missing rendering turns, not the grade.
+  Full reached 55 in 7 of 10 plays on the GPU (mean 56.5) and 3 of 10 in software (mean 52.1), at load 3-5.
+  **What it settles:** the sharpen / blur red is the rig. **What it opens:** a real-GPU fault the software gate cannot
+  see (the half-speed pacer), a start-of-play transient, and frame callbacks lost on the page during Full. None of
+  the three arms is Karl's laptop (its browser does not share foxtrot's CPU), so the bar on dimension 6 is unchanged
+  and the next measure worth having is the board reporting its own draw log from his browser. Runs and probes:
+  `~/roughcut-loop/gpuplay/` (`out/`, `out-control/`, `absum.py`, `probe59-*.json`, `probefull-*.json`).
