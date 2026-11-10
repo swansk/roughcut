@@ -9,6 +9,17 @@ same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
 
+### Fixed
+
+- The Export dialog's size estimate no longer undershoots by ~36 % when the box is busy
+  (the gate's journey step 24, intermittently, at load 12+). Cause: NVENC refuses a session
+  past the box's handful (other lanes hold them), `nvenc_ok()` cached that refusal as "no
+  NVENC", and the 8-part size sample was cut with x264 (veryfast crf 20, ~36 % smaller than
+  NVENC cq 27) while the real export got NVENC. The probe now asks again for a few seconds
+  while the refusal is a busy one, a refused NVENC part waits and retries before the film
+  is re-cut, and the sample passes `--keep-encoder` (fail rather than sample with x264) and
+  narrows its parts (8, 4, 2, 1) instead.
+
 ### Added
 - judge/K7-AUDIT.md (Karl's K7): first cuts on Killington are 5-14 % telemetry seconds and 27-44 % speech, but the ranked list the cut reads first is 14 of 14 telemetry (first other row at rank 60), the pocket-pizza line ranks 221 of 312 speech candidates and reached 1 of 7 first cuts, and the eval scores events only; proposes wave-22 lane BROLL (balanced list, talk / hang-out candidates, a B-roll eval line, tests for a speech-only chairlift clip and a phone clip). `research/R12-understanding/eval/k7_cut_mix.py` measures a cut's telemetry / speech / other share and the labelled moments it reaches (read-only).
 - REDESIGN-GOAL.md section K: Karl's K7 note (2026-11-09), B-roll and chairlift talk belong in the cut as well as telemetry events; don't over-index on acceleration events.
