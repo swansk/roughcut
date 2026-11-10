@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- REDESIGN-GOAL rubric log: wave 22 BROLL (K7) recorded before any judge: what changed in the ranking and the prompt list, the gate's new B-roll line, the one loosened test, that the list rules were tuned on the same 12 labels, and three live first cuts' numbers.
 - judge/FOR-KARL.md rewritten for the live board (8765 serves the redesign since 2026-11-10): five things only Karl can answer, one per open note K2-K6, with what the board itself says a first pass will do on his project.
 - The K7 comments say what was tuned: CHEER, the with-picture boost, LIST_WORDS and the one-words-one-picture-per-clip rule were adjusted against Killington's 12 labelled moments (one bin, margin of one row, unproven elsewhere), not just argued; no behaviour change.
 - A talk or hang-out moment's certainty is `heard` (chip "heard", "found from the words; no look has checked the picture"), not `unchecked`: the first pass's counts say "12 heard in the words" instead of inflating the unchecked count with moments nobody needs to check.
