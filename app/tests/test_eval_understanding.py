@@ -266,3 +266,30 @@ def test_capture_record_keeps_the_answer_before_settle(tmp_path):
     got = json.loads(out.read_text())
     assert got["rev"] == "abc" and got["verdicts"]["CLIP_A:air:10.00"]["verdict"] == "reject"
     assert "at" not in got["verdicts"]["CLIP_A:air:10.00"]
+
+
+def test_asserted_layer_is_the_boards_demote_ranked_with_a_claude_reject_on_a_telemetry_row(tmp_path):
+    """EVALFIX: the eval's `asserted` rows are exactly `verify.demote_ranked(ranked, state)` (what the
+    board's /api/project `events` is), and a telemetry row Claude rejected is held even with a
+    `stopped` period beside it."""
+    from roughcut import verify
+    work = _bin(tmp_path, {})
+    felt = work / "telemetry" / "tiny" / "CLIP_A.felt.json"
+    d = json.loads(felt.read_text())
+    d["events"] += [
+        {"kind": "speed_drop", "who": "wearer", "start": 229.0, "end": 232.0, "t": 232.0, "from_ms": 16.0,
+         "to_ms": 3.0, "peak_g": 4.0, "stopped": False, "source": "telemetry", "status": "felt", "check": True,
+         "text": "speed drop"},
+        {"kind": "stopped", "who": "wearer", "start": 231.0, "end": 260.0, "t": 245.0, "source": "telemetry",
+         "status": "felt", "check": False, "text": "stopped"}]
+    felt.write_text(json.dumps(d))
+    def asserted_falls(verdicts):
+        (work / "index" / "tiny.verify.json").write_text(json.dumps({"version": 1, "mode": "hybrid", "verdicts": verdicts}))
+        data = ev.collect(work, "tiny")
+        return data, [r for r in data["asserted_rows"] if r.get("kind") == "fall" and r["start"] == 229.0]
+    _, before = asserted_falls({})
+    assert len(before) == 1
+    data, after = asserted_falls({"CLIP_A:speed_drop:229.00": {"verdict": "reject", "raw_verdict": "reject",
+                                                               "kind": "none", "confidence": "high"}})
+    assert after == []
+    assert any(r["start"] == 229.0 and r["certainty"] == "rejected" for r in data["held"])

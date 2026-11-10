@@ -1228,6 +1228,14 @@ def demote(moments: Sequence[dict], clip: str, state: dict,
                          and abs(float(t["start"]) - float(f["start"])) < 0.06), None)
             if same is not None:
                 f = same
+            own = state.get("verdicts", {}).get(f.get("event_id") or event_id({**f, "clip": clip}))
+            if own is not None and own["verdict"] == "reject" and not overruled({**f, "clip": clip}, own):
+                # Claude looked at THIS sensor event and rejected it: a neighbouring stop or
+                # impact must not hold it up (two Killington speed drops stayed stated as falls
+                # on a `stopped` period after Claude threw them out)
+                held.append({**m, "claim_status": "rejected", "supported_by": [], "certainty": "rejected",
+                             "asserted": False, "verdict": own})
+                continue
             if f.get("kind") != "air" and local_settles(f) is False \
                     and not _checker_confirmed(state, clip, f):
                 held.append({**m, "claim_status": "settled-local", "supported_by": [],
