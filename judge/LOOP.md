@@ -49,6 +49,14 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-09 ~22:10: **GRADE: measured, NOT fixed, nothing committed.** Late frame messages = the grade WORKER's own thread
+  blocked 25-110 ms (2 ms heartbeat; 19/19 late deliveries overlap a heartbeat gap), ~40 % starting at a draw's end (the
+  OffscreenCanvas commit waiting on software GL), the rest CPU scheduling; 4-10 stalls per 100 draws; sharpen is not the
+  cause (bypassed shots hold as often). desynchronized:true worse; gl.finish() moves the wait. Options left are
+  architectural (feed the commit cost into Auto's step-down; or move the commit off the worker = the unmerged read-back).
+  Note for the judge: headless software compositing. **EVALFIX merged (`e25ffe0`) but NOT deployed:** a real board bug fixed
+  (a Claude-rejected telemetry row beside a stop stayed asserted), yet quick gates RED 3/3 on loop holds up to 1288 ms vs
+  1332d1e GREEN 2/2 → sent back to make demote cheap. 8766 stays on `1332d1e`. Pending Karl: the 28 older claims (≤ 28 calls).
 - 2026-11-09 ~21:00: **Karl: "Yes, now" to the Claude checker on his bin.** POST /api/verify/events on 8766 (job e87c9f71):
   40 calls, ~1.5 min, 20 confirmed · 17 rejected · 3 retimed (plan, not billed); the 28 old claims NOT checked (needs his
   word: up to 28 more calls). GRADE and ESTIMATE had died on an expired OAuth token ~06:00 (GRADE nothing committed).

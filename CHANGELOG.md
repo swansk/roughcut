@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- Loop state: GRADE measured the late frames (the worker thread blocks on the canvas commit), not fixed; EVALFIX held from the preview for its loop holds.
 - Loop state: the Claude checker ran on Karl's preview bin; ESTIMATE merged and deployed; EVALFIX and GRADE running.
 
 - The Export dialog's size estimate no longer undershoots by ~36 % when the box is busy
