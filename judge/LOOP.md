@@ -49,6 +49,14 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-10 ~00:40: **GATEFIX2 merged (tests only, d65f532)**: test_gate_status x2 (the gate's snapshot has no .git: the
+  fake gate now builds a temp repo), test_journey_tool [bus] (Chromium 158 words the D-Bus FATAL differently), test_ui_flow's
+  seen-tab audit (rewritten for CLAIMSUI's "Check N claims" button) — all stale, no product change. Its full gate on
+  d65f532 (normal priority): RED, 3531 s, suite 2106 passed / 3 failed — all three playback timing (perf after the suite
+  graded canvas 74 ms at load 8.2; Full 59.94 at 47 fps; blur 83 ms at 1440), the GRADE worker-commit stall, failing about
+  half the runs at load 6-10 on f33974e AND on 9d44587 (whose green gate was a quiet box). Not fixed; a gate-policy question
+  for the judge/Karl: hold timing tests until load < 4 (which would make the bar conditional) vs fix the stall
+  (architectural). 8766 stays on `f33974e` (no product change since). Judge 17 held for Karl.
 - 2026-11-09 ~23:20: **Full gate on `f33974e`: RED, 3804 s** — suite 2103 passed, 5 broken (test_gate_status x2 = EVALREV's
   new pins, test_journey_tool chromium-crash [bus], test_ui_flow seen-tab audit = likely stale after CLAIMSUI, test_perf_latency
   before the suite at load 8.9); journey / screens / boot / understanding / hygiene GREEN. Lane GATEFIX2 classifying + fixing.
