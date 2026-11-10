@@ -49,6 +49,13 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-09 ~22:50: **EVALFIX's loop holds were load** (its 3 interleaved gates GREEN; the lead's tie-break: tip `f33974e`
+  GREEN 2/2 at 44 / 94 ms vs 1332d1e 1/2); **8766 deployed on `f33974e`**. **Karl: "Yes, check them" → the 28 older claims
+  checked on his bin** (job 2481c9bb: 3 confirmed, 24 rejected, 1 retimed; plan, not billed). His bin now scores recall 1.00
+  (karl-confirmed 0.80; air 1.00, fall 1.00), other riders' airs 1.00 (the scan's CLIP_10 candidate confirmed), BUT 6 of 19
+  negatives asserted (was 4): Claude CONFIRMED two R10-refuted claims (neg-04-22 "fall" = a reaction; neg-07-14 "launch" =
+  leaving a lift station); Find dipped (union 0.79 → 0.74, IoU 0.47 → 0.42). The stop-backed negatives (06-208, 11-256,
+  12-1) and the camera toss are still asserted. Next: the full gate (normal priority) on `f33974e`, then judge 17.
 - 2026-11-09 ~22:10: **GRADE: measured, NOT fixed, nothing committed.** Late frame messages = the grade WORKER's own thread
   blocked 25-110 ms (2 ms heartbeat; 19/19 late deliveries overlap a heartbeat gap), ~40 % starting at a draw's end (the
   OffscreenCanvas commit waiting on software GL), the rest CPU scheduling; 4-10 stalls per 100 draws; sharpen is not the
