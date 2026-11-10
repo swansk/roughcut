@@ -49,6 +49,21 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-10 ~18:00: **Copper editor trial (Karl: "use /mnt/roughcut/footage/copper-02-2026 to start a project from
+  scratch… pain points as a 'human' editor… orchestrated opus 5.5 subagents").** Six Opus editors (cold start, Premiere
+  hands, words only, footage finder, finishing, clumsy) each drove their own board on `e9a3116` through screenshots and
+  real pointer / key events, code unread: 131 findings, 39 delights, 181 model calls on the plan. The lead checked the
+  serious ones (code, data, two live re-runs, five probes). **The record and the ranked areas: `judge/COPPER-EDITORS.md`**;
+  raw findings in `judge/copper-editors/`; the kit in `research/editor-trial/`; scratch (boards' work dirs, 370 MB of
+  screenshots, six films) under `/mnt/roughcut/space/roughcut-loop/copper/`. Nothing in the product changed. The lead's
+  order for the next waves: (1) proposals that cannot be lost + undo that survives a reload + a Stop on every AI job,
+  (2) a monitor that tells the truth (context-loss recovery, stale frames, rotation from the gravity vector),
+  (3) the prompt-box AI's memory, eyes and attribution, (4) titles checked against the frame and editable by hand,
+  (5) New film from a folder + length asked before the first pass, (6) a neutral look prompt, a readable transcript,
+  Find that names the clip and can say "nothing", (7) a limiter on export, music import, 9:16, (8) one focus rule for
+  keys, copy / paste, typed timecode. **Also learned: the GPU test browser leaks and dies after ~2 minutes (rubric log
+  caveat on GPUPLAY).** The six boards on 9300-9305 are stopped. Waiting on Karl for which areas to build; K2-K7 still
+  need his look; judge 17 held.
 - 2026-11-10 ~12:00: **Wave 22 done (Karl: "do all, in order except 3, I have more footage it can use here").**
   (1) **BROLL merged (`749a72f`), quick gate GREEN (121 s), 8766 deployed on it.** Offline: the listed rows reach 6 of 12
   labelled B-roll moments (was 1), event scores unchanged. Three live Hybrid first cuts on a work copy

@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- Copper editor trial recorded: six simulated editors started a project from scratch and logged 131 pain points; the lead's checks and ranked areas are in judge/COPPER-EDITORS.md, the findings in judge/copper-editors/, the kit in research/editor-trial/. Docs and research tooling only; no product change. The rubric log gains a caveat on the GPU playback measurement (the GPU test browser leaks and dies after about two minutes).
 - Wave 22 closed out in the notes: the playback-timing tests measured on the RTX 3080 against the gate's software drawing (rubric log; no bar or product change), the loop State, and Karl's try-list now six asks with a rendered first cut to watch for K7.
 - REDESIGN-GOAL rubric log: wave 22 BROLL (K7) recorded before any judge: what changed in the ranking and the prompt list, the gate's new B-roll line, the one loosened test, that the list rules were tuned on the same 12 labels, and three live first cuts' numbers.
 - judge/FOR-KARL.md rewritten for the live board (8765 serves the redesign since 2026-11-10): five things only Karl can answer, one per open note K2-K6, with what the board itself says a first pass will do on his project.

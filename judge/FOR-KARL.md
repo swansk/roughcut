@@ -47,10 +47,13 @@ a three-minute video; the other five are on the board.
 
 ## Known, so you do not have to report it
 
-- With the box busy, playback now and then holds one frame. Measured on the 3080 on 2026-11-10: the hold on sharpened
-  and blurred shots was the test browser drawing in software (gone on the GPU, 15 plays of 15), but a half-speed shot
-  can show one frame a sixtieth late on a real GPU (a third of plays). Neither is your laptop. If you see a stutter,
-  say which shot and what speed; the board reporting its own playback from your browser is next.
+- With the box busy, playback now and then holds one frame in the tests. Measured on the 3080 on 2026-11-10: the hold
+  on sharpened and blurred shots does not happen there, but the GPU test browser turned out to leak graphics memory
+  and die after two minutes, so its other readings (a half-speed shot a sixtieth late) are unproven. Neither browser
+  is your laptop. If you see a stutter, or the Program monitor goes black while the Source monitor still shows
+  picture, say which shot; reload brings a black monitor back.
+- Six simulated editors started a Copper project from nothing on 2026-11-10 and logged 131 pain points; the ranked
+  areas are in `judge/COPPER-EDITORS.md`. Three of their films are in `Karl OS/Builds/Roughcut/`.
 - The cut is 3:09; the target was 2 to 3 minutes.
 - Everything is tuned on Killington alone. A second test set waits for the extra footage you mentioned: tell me
   which folder it is.

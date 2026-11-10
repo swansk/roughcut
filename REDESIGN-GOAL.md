@@ -692,3 +692,11 @@ next judge runs, and the next judge rules it honest or lenient.
   the three arms is Karl's laptop (its browser does not share foxtrot's CPU), so the bar on dimension 6 is unchanged
   and the next measure worth having is the board reporting its own draw log from his browser. Runs and probes:
   `~/roughcut-loop/gpuplay/` (`out/`, `out-control/`, `absum.py`, `probe59-*.json`, `probefull-*.json`).
+- 2026-11-10 (after the Copper editor trial, lead; **a caveat on the GPUPLAY entry above, no bar changed**): the GPU arm's
+  browser (headless Chromium, ANGLE on the NVIDIA EGL driver) leaks GPU memory whenever video frames go into WebGL,
+  about 40 MB a second, and loses its GPU process after roughly two minutes. Measured on a page that is not the board
+  (`~/roughcut-loop/copper/verify/control_blank.sh`), and on the board on both bins (`judge/COPPER-EDITORS.md`). The
+  GPUPLAY tests each ran under a minute, so none hit the loss, but they ran in that leaking browser: "the half-speed
+  pacer is a display frame late on a real GPU" (28 of 45) is therefore unproven, and "sharpen / blur holds are the
+  software GL" (15 of 15) stands only as "they do not happen there". What the trial did show for dimension 6: the
+  graded canvas has no recovery from a lost graphics context and reports its draws as good while black.
