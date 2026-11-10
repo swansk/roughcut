@@ -1,59 +1,50 @@
-# Karl: try the redesign (10 minutes)
+# Karl: five things only you can answer (about 15 minutes)
 
-Only you can close K2 ("Premiere Pro quality"), K3 ("AI-first, easy to learn, footage in obviously") and K4
-(the Index panel; the old pass pages folded in). The judge says K3 and K4 are delivered as far as it can test.
-This page is the shortest way to look.
-
-**Judged rev:** `b2cbc31` (verdict 16, FAIL: 13 of 16 dimensions at 8-9, the first pass at 5 because its Re-run button falls below a 1440×900 window after edits + new clips; playback 7, pro look 7). Previous: `5138865` (verdict 15: 14 dimensions at 9, effects at 8, playback at 7, the judge's gate green;
-playback still at 7 because cuts and dissolves out of a half-speed shot hitch). Wave 19 is fixing what is left
-(below) on the same branch.
+The redesign is on your real board since 2026-11-10 08:25 (main `1d21f45`, `roughcut-board` restarted, 60 fps previews
+rebuilt). Five of your notes (K2-K6) stay open until you have looked; no judge can close them for you. K7 (the B-roll)
+is being built now and gets its own line here when there is a cut to watch.
 
 ## Open it
 
-Double-click **Roughcut redesign.cmd** in `Karl OS/tools/Launch` (it opens `localhost:18766`, the
-`roughcut-redesign` service on foxtrot, with its own copy of the Killington project, so your live board is
-never touched). **The preview needs a restart on the judged rev first** (today it is an older server under
-newer pages): the lead restarts it from a frozen copy of `5138865` once you say so, and builds its new 60 fps
-preview copies first (about 20 minutes), so it is ready when you open it.
+- **Your real project:** `Roughcut.cmd` in `Karl OS/tools/Launch` → `localhost:18765` (on foxtrot itself: `localhost:8765`).
+  Your Killington cut is there as you left it: 19 shots, 3:09, 16 of them marked as yours. The project as it was before
+  the redesign is backed up at `/mnt/roughcut/work/app.backup-pre-redesign-20261110`.
+- **The preview:** `Roughcut redesign.cmd` → `localhost:18766`. Same code, its own copy of Killington. It already has a
+  finished first pass with the 3080's and Claude's checks on it, so you can read those without waiting. New work lands
+  here first from now on.
 
-## New since verdict 15 (try these too)
+## The five, in order
 
-- **K5:** Run first pass on Killington and read its panel: what each step did, at what detail (Whisper large-v3 · 1 frame every 4 s · close looks …), and how sure each moment is (felt by telemetry · checked by the 3080 · checked by Claude …).
-- **K6:** the Index panel's Understanding select (Hybrid / Local only / Claude only), its Local (3080) and Speakers columns, and Find (it now also searches the 3080's frame embeddings).
-- **Effects:** Effects bin › Crop, Transform, Horizontal/Vertical Flip, Mirror, Black & White.
-- **Playback:** slow-motion shots into cuts and dissolves; Program › Playback Resolution › Full now draws 60 fps clips at ~54 fps.
+1. **Run the first pass on your real project (K5).** Header › Run first pass. Before you press Run, read the panel: it
+   says the index is already done (12 clips heard and looked at), that the 3080 will check the busiest windows and Claude
+   will check the moments the cut uses, and that it keeps 16 of your shots exactly and may replace the other 3. Free on
+   your plan; nothing changes until you accept.
+   **Tell me:** before, during and after, does it say what it is doing and at what detail, in words you believe?
+2. **Read what it found (K6).** Window › Index, on the preview (it has results already). Each clip shows what ran: heard,
+   looked at, close looks, Local (3080), Speakers. The foot has Understanding: Hybrid / Local only / Claude only. Then try
+   Find with something you remember ("falling into the river", "pocket pizza").
+   **Tell me:** is Hybrid the right default, and did Find land on the moment?
+3. **The Index panel and the old pages (K4).** Same panel: pick one clip, set Look to every 2 s, read the price, Run if you
+   like. File no longer has "Footage and index…" or "Review the pass…"; their parts are Selects (✓ / ✗), File › Project
+   Settings… and Window › Events.
+   **Tell me:** does this answer "what indexing ran, and how do I re-run or tune it"? Anything from the old pages you miss?
+4. **Drive it by words (K3).** Ctrl+I to import (or drag files onto the Project panel). Ctrl+J and ask for two edits in
+   your own words, e.g. *"warm up shot 3 and put a half-second dissolve before shot 4"*. ✓ / ✗ each edit, Accept, one
+   Ctrl+Z takes it back. Help › Learn Roughcut… replays the six-step walk-through.
+   **Tell me:** was anything a guess? Is this how you want to run the AI? Do the footage and the pass's picks look right
+   in the Project panel and Selects now?
+5. **Cut for five minutes like you would in Premiere (K2).** Trim an edge, razor (C), ripple delete, move a shot, J/K/L,
+   colour on one shot (Effect Controls › Lumetri), then File › Export… (Ctrl+M) at 720p.
+   **Tell me:** would you choose to cut in this? What looked like a toy first?
 
-## Try this, in order
+## Known, so you do not have to report it
 
-1. **Your K4 (a): the Index panel.** Window › Index (or the Project group's Index tab). Each clip shows what
-   ran: heard, looked at (and how often), close looks, telemetry, preview, with when and the cost ("free on
-   your plan"). Pick a clip, set Look to every 2 s, and Run: the price shows before anything runs. The
-   walk-through's step 2, AI › Look again / re-tune the index…, and the first-pass panel all point to it.
-2. **Your K4 (b): the old pages are gone.** File has no "Footage and index…" or "Review the pass…" any
-   more; `/open` and `/floor` open the editor. Their parts live in it: Selects ✓ / ✗ and right-click (the
-   pass page's verdicts, now on Ctrl+Z), File › Project Settings…, Window › Events.
-3. **First run.** A six-step walk-through starts on its own. Follow it or Skip; Help › Learn Roughcut…
-   brings it back.
-4. **Bring footage in.** File › Import… (Ctrl+I), or drag files onto the Project panel. New clips get
-   posters at once; the free index runs on its own, the paid look waits for you.
-5. **Run the AI.** "Run first pass" in the header (or AI › Run first pass). Review its cut on the timeline:
-   ✓ / ✗ each ghost shot, then Accept. "Re-run first pass…" keeps your hand edits.
-6. **Ask for edits in words.** Ctrl+J, e.g. *"warm up shot 3 and put a half-second dissolve before shot
-   4"*. Each edit previews; ✓ / ✗ each, Accept; one Ctrl+Z takes it back.
-7. **Playback.** Plain cuts land on the right frame (the outgoing shot's last, then the incoming's first); a
-   frame you stop on is the frame the export has, and on the 60 fps GoPro clips every one-frame step shows a
-   new picture; half-speed shots play evenly.
-8. **Export.** File › Export… (Ctrl+M). Try 720p.
+- With the box busy, playback now and then holds one frame. Every measurement of that so far was in a browser drawing
+  in software; it is being re-measured on the 3080 (wave 22), which decides whether it is a real fault or a test fault.
+- The cut is 3:09; the target was 2 to 3 minutes.
+- Everything is tuned on Killington alone. A second test set waits for the extra footage you mentioned.
 
-## What the judge still sees (wave 19 is on these)
+## How to answer
 
-- A cut or a dissolve out of a half-speed shot hitches (a freeze of about an eighth of a second).
-- 60 fps clips preview at 30 frames a second while playing (every frame when stopped or stepped).
-- Under heavy load the picture now and then holds one frame (a known delay handing frames to the grade).
-- Crop and Transform are not yet complete as effects (keyframes, export match, AI ops).
-
-## Tell me
-
-In your own words: does it meet "Premiere Pro quality" (K2)? Is the AI the way you want to run it, and was
-it easy to learn (K3)? Does the Index panel answer K4? What did you dislike first? Your words go into
-REDESIGN-GOAL.md section K verbatim, and the next wave starts from them.
+In your own words, in any order, here or by voice. Your words go into `REDESIGN-GOAL.md` section K verbatim and the next
+wave starts from them. Judge 17 stays held until you have looked.

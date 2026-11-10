@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- judge/FOR-KARL.md rewritten for the live board (8765 serves the redesign since 2026-11-10): five things only Karl can answer, one per open note K2-K6, with what the board itself says a first pass will do on his project.
 - Wave 22 planned (judge/WAVE22.md): the K7 B-roll lane, a GPU-browser read of the playback stall, the try-list for the live board, and the backup and tidy; the second test set waits for Karl's footage.
 - The loop's state log records the 2026-11-10 park: the redesign branch is ready to fast-forward main (Karl's step; 8765's work backed up first), and the WORKER read-back stays unmerged for its measured half-speed regression.
 - Loop state: GATEFIX2's stale-test fixes merged; the gate's remaining red is the known playback stall under load.
