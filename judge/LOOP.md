@@ -49,6 +49,15 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-10 ~08:30: **Karl: "merge everything for now so we can pick up again later. I trust the gates are probably ok since
+  I was running other things on the box."** The loop is PARKED. Nothing on lane branches is left to merge into this branch:
+  `agent/audit-free` was cherry-picked long ago; `agent/m16-live` is old main-era UI work the redesign replaced; WORKER's
+  read-back (`redesign-w19-worker`) stays out (its half-speed regression was measured on a quiet box, load ~2.5, so it is
+  not load noise). "Everything" = this branch into main. Backed up 8765's work to
+  `/mnt/roughcut/work/app.backup-pre-redesign-20261110` (5.3 GB). Auto mode refused the main fast-forward + `roughcut-board`
+  restart (production deploy), so these are Karl's two commands: `git -C ~/Documents/Projects/roughcut merge --ff-only
+  redesign/2026-10-14` then `systemctl --user restart roughcut-board`. Old main = `35cb147`. Nothing pushed. Resume: K2-K6
+  from Karl, the stall choice (fix vs quiet-box timing), or a second test bin; judge 17 stays held.
 - 2026-11-10 ~00:40: **GATEFIX2 merged (tests only, d65f532)**: test_gate_status x2 (the gate's snapshot has no .git: the
   fake gate now builds a temp repo), test_journey_tool [bus] (Chromium 158 words the D-Bus FATAL differently), test_ui_flow's
   seen-tab audit (rewritten for CLAIMSUI's "Check N claims" button) — all stale, no product change. Its full gate on
