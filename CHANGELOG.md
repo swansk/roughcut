@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- K7 (wave 22): the ranked events stop treating the GoPro as the only witness. A sensor number now scores like one unaudited look (FELT 1.2 to 1.0); a speed drop with no 3.5 g impact and no frame agreement is a `stop`, not a fall; a row Claude rejected drops to UNSUPPORTED and one Claude confirmed goes to CONFIRMED (`events.reweigh`); and people moments are candidates: `roughcut/talk.py` re-scores the existing transcript (a second voice answering, a phrase that comes back, a question, laughter, a holler) into `talk` moments, and a chairlift ride or a stop with people talking into `hangout` moments, with no telemetry needed.
 - Wave 22 planned (judge/WAVE22.md): the K7 B-roll lane, a GPU-browser read of the playback stall, the try-list for the live board, and the backup and tidy; the second test set waits for Karl's footage.
 - The loop's state log records the 2026-11-10 park: the redesign branch is ready to fast-forward main (Karl's step; 8765's work backed up first), and the WORKER read-back stays unmerged for its measured half-speed regression.
 - Loop state: GATEFIX2's stale-test fixes merged; the gate's remaining red is the known playback stall under load.

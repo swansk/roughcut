@@ -48,6 +48,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from . import talk as _talk
 from . import telemetry_events as _tel
 from .telemetry_events import telemetry_events      # noqa: F401 — the one door VERIFY / LOCALGPU use
 
@@ -215,6 +216,13 @@ def scan_clip(proxy: Path, onset: list[float] | None = None, *,
 KIND_WEIGHT = {
     "fall": 1.0, "crash": 1.0, "jump": 0.9,
     "reaction": 0.6, "faces": 0.5,
+    # K7 (wave 22, BROLL): the people moments the transcript carries. `talk` is an exchange
+    # worth hearing (a second voice answering, a phrase that comes back, a question, a
+    # laugh); `hangout` is the lift ride or a stop with people talking. About a reaction,
+    # because that is what they are: a person doing something funny, not a trick.
+    # `stop` is a sensor slowdown nobody has seen fall (no hard impact): a standing
+    # group is a scene, not a crash. Provisional like every weight here.
+    "talk": 0.6, "hangout": 0.6, "stop": 0.3,
     "action": 0.3, "scenery": 0.1,
     # Not a low score: a floor. A camera artefact is not a weak moment, it is a
     # moment that must never be offered, and R10 measured that on this footage
@@ -346,10 +354,14 @@ def deep_verdict(moment: dict, deep: dict | None) -> str | None:
 # because the bake-off (R12) found the telemetry rules at 0.78 recall for the wearer's
 # events where the sampled-frame claims reached 0.33, and a number is a witness that does
 # not hallucinate; below CONFIRMED, because a lone accelerometer dip is a candidate until
-# the checker (roughcut/verify.py) has seen it.
-FELT = 1.2
+# the checker (roughcut/verify.py) has seen it. K7 (wave 22): 1.0, not 1.2. A sensor number is
+# as good as one unaudited look, not better: at 1.2 an unchecked slowdown outranked every
+# person or model-seen moment that was not an air or a fall.
+FELT = 1.0
 
-CONFIRMATION_WEIGHT = {"felt": FELT, "confirmed": CONFIRMED, "unseen": UNSEEN,
+# `heard`: a talk moment re-scored from the transcript (roughcut.talk). Nobody has looked, and
+# nobody needs to: the words are the evidence, so it is neither bonus nor penalty.
+CONFIRMATION_WEIGHT = {"felt": FELT, "confirmed": CONFIRMED, "unseen": UNSEEN, "heard": UNSEEN,
                        "deep": DEEP, "fine-only": FINE_ONLY,
                        "unsupported": UNSUPPORTED, "contradicted": CONTRADICTED}
 
@@ -381,6 +393,7 @@ def score_moment(moment: dict, *, track: list[float] | None = None,
 
 # What a telemetry event is scored as: the family of claim it is a candidate for.
 FELT_KIND = {"air": "jump", "speed_drop": "fall", "impact": "crash"}
+IMPACT_G = 3.5          # the telemetry module's own bar for a jolt (telemetry_events `check`)
 
 
 def telemetry_moments(clip: str, felt: list[dict] | None = None) -> list[dict]:
@@ -393,6 +406,8 @@ def telemetry_moments(clip: str, felt: list[dict] | None = None) -> list[dict]:
         if not e.get("check") or e.get("after_air") or e["kind"] not in FELT_KIND:
             continue
         kind = FELT_KIND[e["kind"]]
+        if e["kind"] == "speed_drop" and float(e.get("peak_g") or 0.0) < IMPACT_G:
+            kind = "stop"       # a slowdown with no hard impact is a stop until frames or Claude say fall
         out.append({"clip": clip, "start": e["start"], "end": max(e["end"], e["start"] + 0.1),
                     "kind": kind, "what": e.get("text", ""), "notable": e["kind"] != "impact",
                     "source": "telemetry", "status": "felt", "who": e.get("who", "wearer"),
@@ -418,7 +433,8 @@ def other_air_moments(clip: str, cands: list[dict]) -> list[dict]:
 
 def rank_clip(clip: str, coarse: dict, fine: dict | None = None,
               track: list[float] | None = None, hz: float = MOTION_HZ,
-              deep: dict | None = None, felt: list[dict] | None = None) -> list[dict]:
+              deep: dict | None = None, felt: list[dict] | None = None,
+              talk: list[dict] | None = None) -> list[dict]:
     """One clip's moments, coarse, fine and deep together, each with a score and its reason.
 
     A fine moment supersedes the coarse moment it audits rather than joining it: they
@@ -499,8 +515,67 @@ def rank_clip(clip: str, coarse: dict, fine: dict | None = None,
         if twins:
             m["what"] = f"{m['what']} · frames: {twins[0].get('what', '')}"
             m["seen_by_frames"] = True
+            if m["kind"] == "stop":
+                m["kind"] = "fall"      # the frames agree something fell here
         out.append({**m, **score_moment(m, track=track, hz=hz, unusable=unusable, status="felt")})
+    seen_people = [o for o in out if o.get("kind") in PEOPLE_LOOKS and o["source"] in ("sheet", "close look")]
+    for m in talk or []:
+        row = talk_row(m)
+        # Words and a picture agreeing: the same two-looks-agree rule the rest of the rank
+        # runs on. A line said while the sheet reads people on camera is worth more than the
+        # same line over a view of snow.
+        if any(overlap((m["start"] - 1.0, m["end"] + 1.0), (o["start"], o["end"])) > 0 for o in seen_people):
+            row["score"] = round(row["score"] * TALK_WITH_PICTURE, 3)
+            row["why_ranked"]["with_picture"] = True
+        out.append(row)
     return [e for e in out if e["score"] > 0.0]
+
+
+PEOPLE_LOOKS = ("faces", "reaction", "people")
+TALK_WITH_PICTURE = 1.3
+TALK_GAIN = 0.1          # per point of re-score, up to four: a stronger exchange ranks above a weaker one
+
+
+def talk_row(m: dict) -> dict:
+    """A talk / hangout moment (roughcut.talk) as a ranked row: kind x notable x its re-score."""
+    sc = score_moment(m, status="heard")
+    r = float((m.get("talk") or {}).get("rescore") or 0.0)
+    sc["score"] = round(sc["score"] * (1.0 + TALK_GAIN * min(4.0, r)), 3)
+    sc["why_ranked"]["talk"] = m.get("talk") or {}
+    return {**m, **sc}
+
+
+def reweigh(rows: list[dict]) -> list[dict]:
+    """Telemetry rows re-scored by what the checker said about them (K7, wave 22): Claude
+    confirmed it -> CONFIRMED, and a speed drop it confirmed as a fall is a fall, not a stop;
+    Claude rejected it -> UNSUPPORTED. A sensor number is a witness, not a winner: what a
+    reader decided counts for more than the number it was reading. Airs keep the checker's
+    own `unsure` rule (no change here). Rows are copied, re-sorted and re-ranked in place of
+    their old order; a row with no verdict is returned as it was."""
+    out = []
+    for r in rows:
+        if r.get("source") != "telemetry":
+            out.append(r)
+            continue
+        why = dict(r.get("why_ranked") or {})
+        old = why.get("confirmation", "felt")
+        new = {"claude": "confirmed", "rejected": "unsupported"}.get(str(r.get("certainty") or ""))
+        if new is None or old == new:
+            out.append(r)
+            continue
+        kind = str(r.get("kind", ""))
+        v = r.get("verdict") if isinstance(r.get("verdict"), dict) else {}
+        if new == "confirmed" and kind == "stop" and v.get("kind") in ("fall", "crash"):
+            kind = "fall" if v["kind"] == "fall" else "crash"
+        score = float(r.get("score") or 0.0)
+        score *= (KIND_WEIGHT.get(kind, UNKNOWN_KIND) / KIND_WEIGHT.get(str(r.get("kind", "")), UNKNOWN_KIND)
+                  * CONFIRMATION_WEIGHT[new] / CONFIRMATION_WEIGHT.get(old, UNSEEN))
+        why["confirmation"] = new
+        out.append({**r, "kind": kind, "score": round(score, 3), "why_ranked": why})
+    out.sort(key=lambda e: (-e["score"], e["clip"], e["start"]))
+    for i, e in enumerate(out, 1):
+        e["rank"] = i
+    return out
 
 
 def rank_bin(per_clip: dict[str, dict]) -> list[dict]:
@@ -513,7 +588,7 @@ def rank_bin(per_clip: dict[str, dict]) -> list[dict]:
     out: list[dict] = []
     for clip, d in per_clip.items():
         out += rank_clip(clip, d.get("coarse", {}), d.get("fine"), d.get("track"),
-                         d.get("hz", MOTION_HZ), d.get("deep"), d.get("felt"))
+                         d.get("hz", MOTION_HZ), d.get("deep"), d.get("felt"), d.get("talk"))
     out.sort(key=lambda e: (-e["score"], e["clip"], e["start"]))
     for i, e in enumerate(out, 1):
         e["rank"] = i
@@ -766,6 +841,22 @@ def gather(visual_dir: Path, audio_dir: Path) -> dict[str, dict]:
             continue
         per_clip.setdefault(found or clip, {"coarse": {}, "fine": {}, "deep": {}, "track": None,
                                             "hz": MOTION_HZ})["felt"] = felt
+    # People moments (K7, wave 22): talk, laughter, a phrase that comes back, the lift ride, a
+    # stop with people talking, re-scored from the transcripts the audio sidecars already hold.
+    # A clip with no picture and no telemetry (a phone clip) still gets its row.
+    transcripts: dict[str, list] = {}
+    for p in sorted(audio_dir.glob("*.audio.json")) if audio_dir and audio_dir.is_dir() else []:
+        try:
+            a = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        name = a.get("clip") or f"{p.name[: -len('.audio.json')]}.MP4"
+        found = next((c for c in per_clip if Path(c).stem.upper() == Path(name).stem.upper()), None)
+        transcripts[found or name] = a.get("transcript") or []
+    for clip, rows in _talk.moments(transcripts, {c: per_clip[c].get("felt") or [] for c in transcripts
+                                                  if c in per_clip}).items():
+        per_clip.setdefault(clip, {"coarse": {}, "fine": {}, "deep": {}, "track": None,
+                                   "hz": MOTION_HZ})["talk"] = rows
     return per_clip
 
 
