@@ -175,3 +175,6 @@ header #firstpass { flex: 0 0 auto; position: relative; display: flex;
 .fp-empty .fp-newfilm { border: 0; background: transparent; color: var(--accent, #4a9df8); padding: 0; font: inherit; cursor: pointer; }
 .fp-empty .fp-newfilm:hover { background: transparent; text-decoration: underline; }
 .cert-legend { font-size: 11px; color: var(--dim, #94949c); margin: 0 0 6px; line-height: 1.4; }
+#firstpass .fp-lenmsg { font-size: 11px; margin-top: 3px; }
+#firstpass .fp-lenmsg:empty { display: none; }
+.cert.c-quiet { border-color: var(--line, #333337); color: var(--dim, #94949c); }

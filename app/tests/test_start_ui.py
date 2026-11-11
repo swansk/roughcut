@@ -297,7 +297,7 @@ def test_the_length_and_the_brief_ride_with_the_run(tree, live, browser, tmp_pat
     assert "about 1:30 long" in pg.locator('[data-testid="firstpass-plain"]').inner_text()
     typed.fill("soon")
     pg.locator('[data-testid="firstpass-run"]').click()
-    pg.wait_for_function("document.querySelector('[data-testid=firstpass-panel]').innerText.includes('not something I can read')")
+    pg.wait_for_function("document.querySelector('[data-testid=firstpass-panel]').innerText.includes('Fix the length first')")
     assert sent == []
     _end(pg)
 
@@ -337,8 +337,8 @@ def test_aims_for_is_a_button_that_sets_the_length(tree, live, browser, tmp_path
     t = pg.locator('[data-testid="length-typed"]')
     t.fill("nonsense")
     t.press("Enter")
-    pg.wait_for_function("document.querySelector('.nf-len-err').innerText.includes('not a length')")
-    t.fill("2")
+    pg.wait_for_function("document.querySelector('.nf-len-err').innerText.includes('Type a length')")
+    t.fill("2 min")
     t.press("Enter")
     pg.wait_for_function("document.querySelector('[data-testid=empty-aims]').innerText === 'aims for about 2 min'")
     assert pg.locator("#askAims").inner_text() == "aims for about 2 min"       # the Assistant's copy follows
@@ -468,4 +468,115 @@ def test_the_index_panel_says_what_it_is_and_keeps_the_models_under_details(tree
     pg.wait_for_selector('[data-testid=index-mode]', state="visible", timeout=3000)
     assert "3080" in pg.locator('[data-testid=index-mode]').inner_text()          # nothing was removed
     assert pg.evaluate("localStorage.getItem('rc.ix.details')") == "1"
+    _end(pg)
+
+
+# ---------------------------------------------------------------- round 2 (wave 25 follow-ups)
+
+
+def test_the_typed_length_reads_every_way_a_person_types_it_and_says_the_range(tree, live, browser, tmp_path,
+                                                                              first_run_context):
+    _reset(tree, tmp_path)
+    pg = _page(browser, live, first=first_run_context)
+    got = pg.evaluate("""['60', '60s', '60 s', '1:00', '1 min', '90 sec', '1.5 min', '2m', 'banana', '5', '999 min', '-5']
+        .map((t) => rcFirstPass.parseLen(t))""")
+    assert got == [60, 60, 60, 60, 60, 90, 90, 120, None, None, None, None], got
+    _open_panel(pg)
+    typed = pg.locator('[data-testid="firstpass-len-typed"]')
+    typed.fill("60")
+    assert pg.locator('[data-testid="firstpass-len-60"]').get_attribute("aria-pressed") == "true"
+    assert pg.locator('[data-testid="firstpass-len-msg"]').inner_text() == ""
+    typed.fill("5")
+    msg = pg.locator('[data-testid="firstpass-len-msg"]').inner_text()
+    assert "outside what I can aim for" in msg and "10 seconds to 30 minutes" in msg, msg
+    typed.fill("banana")
+    assert "Not a length I can read" in pg.locator('[data-testid="firstpass-len-msg"]').inner_text()
+    _end(pg)
+
+
+def test_the_brief_given_before_the_pass_is_the_films_and_the_assistant_shows_it(tree, live, browser, tmp_path,
+                                                                                first_run_context):
+    _reset(tree, tmp_path)
+    pg = _page(browser, live, first=first_run_context)
+    pg.route("**/api/firstpass", lambda r: r.fulfill(
+        content_type="application/json", body=json.dumps({"job": "zz", "mode": "run", "keep": [],
+                                                           "target": [54, 66], "target_want_s": 60}))
+        if r.request.method == "POST" else r.continue_())
+    _open_panel(pg)
+    pg.locator('[data-testid="firstpass-brief"]').fill("a ski trip with friends")
+    pg.locator('[data-testid="firstpass-run"]').click()
+    pg.wait_for_function("document.getElementById('story').value === 'a ski trip with friends'", timeout=5000)
+    _end(pg)
+
+
+def test_a_running_panel_has_one_set_of_numbers(tree, live, browser, tmp_path, first_run_context):
+    """Round 2, COLD-04: "heard 26/26" over "(7 of 26 clips still to do)"."""
+    import httpx
+
+    _reset(tree, tmp_path)
+    pg = _page(browser, live, first=first_run_context)
+    st = httpx.get(live + "/api/firstpass", timeout=20).json()
+    st.update(state="running", stage="index", steps={"index": {"state": "running"}},
+              counts={"index": {"clips": 26, "listened": 26, "looked": 19, "look_need": 26, "close": 0,
+                                "close_need": 26, "proxied": 4, "pct": 50,
+                                "words": "heard 26/26 · looked at 19/26 · previews 4/26"}})
+    pg.route("**/api/firstpass", lambda r: r.fulfill(content_type="application/json", body=json.dumps(st))
+             if r.request.method == "GET" else r.continue_())
+    pg.evaluate("rcFirstPass.refresh()")
+    pg.wait_for_function("rcFirstPass.state() && rcFirstPass.state().state === 'running'")
+    pg.locator('[data-testid="firstpass-button"]').click()
+    pg.wait_for_selector(f"{PANEL} [data-testid=firstpass-plain]", timeout=5000)
+    text = pg.locator(PANEL).inner_text()
+    assert "heard 26 of 26" in text and "looked at 19 of 26" in text, text
+    assert "still to do" not in text and "heard 26/26 · looked at 19/26" in text
+    assert "First pass · 19/26" in pg.locator('[data-testid="firstpass-button"]').inner_text()
+    _end(pg)
+
+
+@pytest.mark.parametrize("size", [(1536, 864), (1280, 720)])
+def test_the_index_and_selects_tabs_leave_the_timeline_half_the_window(tree, live, browser, tmp_path, size):
+    """Round 2, COLD-18: the Index tab took the left panel to ~600 px and left the Timeline under half
+    the width. The Index keeps its working size (>= 560 px where there is room), Effect Controls gives
+    down first, and everything comes back on Project."""
+    _reset(tree, tmp_path)
+    pg = _page(browser, live, size=size)
+    w = lambda sel: pg.evaluate(f"document.querySelector('{sel}').getBoundingClientRect().width")  # noqa: E731
+    tl0, proj0 = w("#pTimeline"), w("#pProject")
+    for tool in ("index", "bin"):
+        pg.locator(f'.ws-tab[data-tool="{tool}"]').click()
+        pg.wait_for_timeout(400)
+        # half the window where the panel's working size leaves room (1280: it does not widen at all);
+        # at 1536 Effect Controls gives down to its tabs whole and the Timeline keeps >= 38 %
+        want = size[0] / 2 - 8 if size[0] <= 1280 else size[0] * 0.38
+        assert w("#pTimeline") >= want, (tool, size, w("#pTimeline"))
+        assert w("#pProject") >= min(560, proj0) - 1, (tool, w("#pProject"))
+        pg.locator('.ws-tab[data-tool="project"]').click()
+        pg.wait_for_timeout(400)
+        assert abs(w("#pTimeline") - tl0) <= 1 and abs(w("#pProject") - proj0) <= 1
+    _end(pg)
+
+
+def test_unsupported_is_quiet_on_a_shot_kept_for_its_own_reason(tree, live, browser, tmp_path):
+    _reset(tree, tmp_path)
+    pg = _page(browser, live)
+    claim = ("unsupported", "unsupported", "unsupported",
+             "a closer look found nothing there. Claimed: \u201cwhite sweater thumbs-up cocktail toast\u201d. Found nothing")
+    pg.route("**/api/certainty", lambda r: r.fulfill(content_type="application/json", body=json.dumps({"shots": [
+        {"level": claim[0], "chip": claim[1], "name": claim[2], "title": claim[3]},
+        {"level": claim[0], "chip": claim[1], "name": claim[2], "title": claim[3]}]})))
+    pg.evaluate("""() => { document.getElementById('proposalDiff').innerHTML =
+      '<table><tr><td class="pw"><span class="certslot" data-cert-clip="A.MP4" data-cert-in="1" data-cert-out="2"></span>'
+      + 'Opens on the airport bar to set where the trip starts</td></tr>'
+      + '<tr><td class="pw"><span class="certslot" data-cert-clip="B.MP4" data-cert-in="3" data-cert-out="4"></span>'
+      + 'The white sweater guy gives a thumbs-up at the cocktail toast</td></tr></table>'; }""")
+    pg.wait_for_selector('#proposalDiff i.cert[data-level=unsupported]', state="attached", timeout=5000)
+    chips = pg.locator('#proposalDiff i.cert').all()
+    assert len(chips) == 2
+    quiet, red = chips[0], chips[1]
+    assert quiet.get_attribute("data-quiet") == "1" and quiet.inner_text() == "not confirmed"
+    assert "for its own reason" in quiet.get_attribute("title") and "airport bar" in quiet.get_attribute("title")
+    assert "c-quiet" in quiet.get_attribute("class")
+    assert red.inner_text() == "unsupported" and "c-unsupported" in red.get_attribute("class")
+    assert pg.evaluate("getComputedStyle(document.querySelector('#proposalDiff i.c-quiet')).color") != \
+        pg.evaluate("getComputedStyle(document.querySelector('#proposalDiff i.c-unsupported')).color")
     _end(pg)

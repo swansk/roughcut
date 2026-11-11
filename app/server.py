@@ -6387,6 +6387,14 @@ async def api_firstpass_post(request: Request) -> JSONResponse:
             raise HTTPException(409, "the first pass is already running")
         if want is not None:
             set_target(want_s=float(want))
+        # the sentence given before the pass is the film's own: the Assistant shows it, editable,
+        # and does not ask again (round 2, cold's COLD-06)
+        brief = str(body.get("note") or "").strip()[:600]
+        if brief:
+            _edl0 = read_edl()
+            if not str(_edl0.get("story") or "").strip():
+                _edl0["story"] = brief
+                write_edl(_edl0)
         try:
             would = firstpass_plan(body.get("mode"), body.get("keep"))
         except ValueError as exc:
