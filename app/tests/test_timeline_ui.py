@@ -204,9 +204,12 @@ def test_a_click_on_a_block_selects_it_and_the_inspector_and_the_index_selects_t
     assert page.locator("#inspector .clip").text_content() == "CLIP_A"
 
 
-def test_a_double_click_on_a_block_plays_the_cut_from_it(page):
+def test_a_double_click_on_a_block_opens_it_in_the_source_and_does_not_play(page):
+    """Premiere's "match the source" (wave 24 HANDS-03): it used to play the cut from the shot;
+    now the Source monitor gets the shot's clip with its In and Out, paused. Space plays."""
     page.locator("#tl .blk").nth(1).dblclick()
-    page.wait_for_function("player.playing && player.idx === 1", timeout=10000)
+    page.wait_for_function("window.rcSource && window.rcSource.clip === segs[1].clip", timeout=10000)
+    assert not page.evaluate("player.playing")
     assert page.evaluate("[...tl.state.sel]") == [ids(page)[1]]
 
 
