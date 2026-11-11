@@ -88,6 +88,9 @@
   let dragActive = false;              // a native drag from one of the lanes is in flight
   let raf = 0;                         // one redraw per frame, however many triggers
   let rangeGen = 0;                    // proposal playback token
+  let rangeOn = 0;                     // the token of the range that is playing now (0: none)
+  let rangeSet = false;                // the range's own playhead write (onHead ignores it)
+  let headT = 0;
   let mode = 'cut';                    // the ghost lane's toggle
   let seen = {};                       // what the poll last saw
   let ghost = null;                    // the matched proposal, while one is pending
@@ -1073,11 +1076,13 @@
     const s = spd(seg);
     if (what) what.textContent = `proposal · ${nameOf(seg.clip)} ${tl.fmt(seg.in)}–${tl.fmt(seg.out)}${s === 1 ? '' : ` · ${round2(s)}×`}`;
     const step = () => {
-      if (token !== rangeGen || a.player.playing || v.dataset.src !== src) return;
-      tl.setPlayhead(filmFrom + Math.max(0, v.currentTime - seg.in) / s, { reveal: false });
+      if (token !== rangeGen || a.player.playing || v.dataset.src !== src) { if (rangeOn === token) rangeOn = 0; paintT(); return; }
+      setHead(filmFrom + Math.max(0, v.currentTime - seg.in) / s);
       if (v.currentTime >= seg.out - 0.04 || v.ended) {
         v.pause();
         if (onEnd) onEnd();
+        if (rangeOn === token) rangeOn = 0;      // (the next shot of a plan has its own token)
+        paintT();
         return;
       }
       requestAnimationFrame(step);
@@ -1086,6 +1091,8 @@
       if (token !== rangeGen) return;
       v.currentTime = seg.in;
       v.play().catch(() => {});
+      rangeOn = token;
+      paintT();
       step();
     };
     if (v.readyState >= 1) go(); else v.addEventListener('loadedmetadata', go, { once: true });
@@ -1108,14 +1115,84 @@
     const src = v.dataset.src;
     const what = q('#playingWhat');
     if (what) what.textContent = `proposal · ${nameOf(seg.clip)} ${tl.fmt(seg.in)}–${tl.fmt(seg.out)}`;
-    tl.setPlayhead(filmFrom || 0, { reveal: false });
+    setHead(filmFrom || 0);
     const kick = () => { if (v.dataset.src === src && v.readyState < 2) v.currentTime = seg.in; };
     if (v.readyState >= 1) kick(); else v.addEventListener('loadedmetadata', kick, { once: true });
     return true;
   }
 
+  /* (wave 23 TRUTH) The range's own writes to the playhead; onHead tells these from the editor's. */
+  function setHead(t) {
+    rangeSet = true;
+    try { tl.setPlayhead(t, { reveal: false }); } finally { rangeSet = false; }
+  }
+  function paintT() { const f = fn('paintTransport'); if (f) f(); }
+
+  /* The ghost shot the film time `t` is in (the last one past the end), or null. */
+  function ghostAt(t) {
+    if (!ghost || !ghost.ghosts.length) return null;
+    let hit = ghost.ghosts[ghost.ghosts.length - 1];
+    for (const g of ghost.ghosts) {
+      if (t < g.start + tl.dur(g.seg) - 1e-6) { hit = g; break; }
+    }
+    return hit;
+  }
+
+  /* Whether the Program follows the proposal: on an empty sequence it is the film that is reviewed;
+   * on a cut, once the editor has played the proposal (Play it) and not the cut since. */
+  function following() {
+    const a = app();
+    return !!(ghost && a && a.player && !a.player.playing && (!tl.state.segs.length || mode === 'proposal'));
+  }
+
+  /* (wave 23 TRUTH; COLD-11, COLD-12) While a proposal waits the Program follows the playhead through
+   * it: a ruler click, a frame step, a click mid-play (which stops the range and parks), as it
+   * follows the cut. The cut's own seek cues the cut's shot first, so this runs a task later. */
+  function onHead(ev) {
+    if (!ghost || rangeSet || !ev || ev.quiet) return;
+    if (!following()) return;
+    const t = ev.t;
+    // the editor moved the playhead under a running range: its loop stops now (it would write the
+    // playhead back from the video's time before the cue below runs)
+    if (rangeOn) { rangeGen++; rangeOn = 0; }
+    clearTimeout(headT);
+    headT = setTimeout(() => {
+      headT = 0;
+      if (!following() || Math.abs((tl.state.playhead || 0) - t) > 1e-6) return;
+      const g = ghostAt(t);
+      if (!g) return;
+      cueRangeAt(g.seg, g.start, t);
+    }, 0);
+  }
+
+  /* Park the monitor on the proposal's shot `seg` at film time `t`, paused; the playhead stays
+   * where the editor put it. */
+  function cueRangeAt(seg, filmFrom, t) {
+    const a = app();
+    const pauseCut = fn('pauseCut'), liveVideo = fn('liveVideo'), arm = fn('arm'), showLive = fn('showLive');
+    if (!a || !a.player || a.player.playing || !pauseCut || !liveVideo || !arm || !seg) return false;
+    pauseCut();
+    const v = liveVideo();
+    if (!v) return false;
+    rangeGen++;
+    rangeOn = 0;
+    const s = spd(seg);
+    const clipT = Math.max(seg.in, Math.min(seg.out, seg.in + Math.max(0, t - filmFrom) * s));
+    arm(v, seg, clipT);
+    if (showLive) showLive();
+    v.pause();
+    const src = v.dataset.src;
+    const what = q('#playingWhat');
+    if (what) what.textContent = `proposal · ${nameOf(seg.clip)} ${tl.fmt(seg.in)}–${tl.fmt(seg.out)}`;
+    const kick = () => { if (v.dataset.src === src && v.readyState < 2) v.currentTime = clipT; };
+    if (v.readyState >= 1) kick(); else v.addEventListener('loadedmetadata', kick, { once: true });
+    paintT();
+    return true;
+  }
+
   function stopRange() {
     rangeGen++;
+    rangeOn = 0;
     const liveVideo = fn('liveVideo');
     const a = app();
     const v = liveVideo ? liveVideo() : null;
@@ -1554,6 +1631,7 @@
     if (typeof ResizeObserver !== 'undefined') new ResizeObserver(schedule).observe(tl.el.view);
 
     tl.on('change', schedule);
+    tl.on('playhead', onHead);
     tl.on('zoom', schedule);
     const render = tl.render;
     tl.render = function () {
@@ -1586,5 +1664,16 @@
     ghost: () => ghost,
     shown: () => shown,
     mode: () => mode,
+    // (wave 23 TRUTH) the proposal is playing in the monitor; the Program follows the playhead through it;
+    // the ghost shot at a film time; park on it
+    running: () => {
+      if (rangeOn === 0 || rangeOn !== rangeGen) return false;
+      const lv = fn('liveVideo'), v = lv ? lv() : null;
+      return !!v && !v.paused && !v.ended;
+    },
+    following,
+    ghostAt,
+    cueAt: (t) => { const g = ghostAt(t); return g ? cueRangeAt(g.seg, g.start, t) : false; },
+    stop: stopRange,
   };
 })();

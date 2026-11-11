@@ -280,6 +280,35 @@
       catch (e) { gl = null; }
     }
     if (!gl) return null;
+    /* (wave 23 TRUTH, COLD-15 / HANDS-06 / CLUMSY-21) The graphics context can go (a driver reset,
+     * a GPU process restart, a laptop waking): every texture and program of it is gone, the canvas
+     * is black, and a draw says nothing. The page / worker that owns this renderer is told through
+     * ropts.onLost / ropts.onRestored (read from the canvas, so a renderer built again on the same
+     * canvas after a restore is the one told); a lost context draws nothing and says so (render
+     * returns false). preventDefault is what lets the browser restore it. */
+    canvas.__rcGl = ropts || null;
+    if (!canvas.__rcGlListening && typeof canvas.addEventListener === 'function') {
+      canvas.__rcGlListening = true;
+      canvas.addEventListener('webglcontextlost', (ev) => {
+        if (ev && ev.preventDefault) ev.preventDefault();
+        const o = canvas.__rcGl;
+        if (o && o.onLost) o.onLost();
+      });
+      canvas.addEventListener('webglcontextrestored', () => {
+        const o = canvas.__rcGl;
+        if (o && o.onRestored) o.onRestored();
+      });
+    }
+    const isLost = () => { try { return gl.isContextLost(); } catch (e) { return true; } };
+    // test-only: lose the context on purpose (WEBGL_lose_context), restore it `after` ms later
+    // (a negative `after` leaves it lost)
+    function loseContext(after) {
+      const ext = gl.getExtension('WEBGL_lose_context');
+      if (!ext) return false;
+      ext.loseContext();
+      if (after >= 0) setTimeout(() => { try { ext.restoreContext(); } catch (e) { /* gone */ } }, after);
+      return true;
+    }
     // One program per source kind (rgb always; yuv on WebGL2), the quad at attribute 0.
     function program(fs) {
       const p = gl.createProgram();
@@ -1041,6 +1070,7 @@
      * and its video effects' stages after the grade, when it has any (above). `off`
      * (warmStages): the whole draw into the stages' own pictures, the canvas untouched. */
     function render(src, sw, sh, w, h, key, n, data, adj, parkedKey, mix, off) {
+      if (isLost()) return false;      // nothing was drawn: never reported as drawn
       if (!off && (canvas.width !== w || canvas.height !== h)) {
         canvas.width = w;
         canvas.height = h;
@@ -1173,7 +1203,8 @@
       return { w, h, data: px };
     }
 
-    return { gl2, yuv: !!PY, lut, forget, render, mean, pixels, warm, warmStages, warmCanvas, playSize };
+    return { gl2, yuv: !!PY, lut, forget, render, mean, pixels, warm, warmStages, warmCanvas, playSize,
+             lost: isLost, loseContext };
   }
 
   /* A playing frame's planes, for the renderer's yuv path (wave 11 CANVAS): copied out of
@@ -1245,7 +1276,19 @@
   const WORKER_SRC = `'use strict';
 const Renderer = ${Renderer.toString()};
 const yuvPlanes = ${yuvPlanes.toString()};
-let R = null;
+let R = null, CANVAS = null, FULL = false, lostSaid = false;
+// (wave 23 TRUTH) the context went: frames draw nothing (ok false) until it is restored, and the page
+// is told both ways; on a restore the renderer is built again on the same canvas (its textures are gone)
+function ropts() {
+  return { full: FULL,
+    onLost() { lostSaid = true; postMessage({ t: 'lost' }); },
+    onRestored() {
+      try { R = Renderer(CANVAS, (w, h) => new OffscreenCanvas(w, h), ropts()); } catch (err) { R = null; }
+      if (R) { try { R.warm(); } catch (err) { /* the first frame builds them */ } }
+      lostSaid = false;
+      postMessage({ t: 'restored', ok: !!R, yuv: !!(R && R.yuv) });
+    } };
+}
 const bufs = [null, null, null, null];
 let busy = false, next = null;
 function closeFrame(m) {
@@ -1269,6 +1312,8 @@ async function drawFrame(m) {
       }
     }
     if (R) ok = R.render(src, m.sw, m.sh, w, h, m.key, m.n, m.data, adj, null, mix);
+    // a draw on a lost context is no draw (render says so); the page is told once if it missed the event
+    if (R && !ok && !lostSaid && R.lost()) { lostSaid = true; postMessage({ t: 'lost' }); }
     // a parked frame drawn: the stages' routines for the canvas are built in its task, and the
     // frame drawn again over the corner they touched (Renderer warmCanvas), never while playing
     if (ok && !yuv && !m.yuv && R.warmCanvas()) ok = R.render(src, m.sw, m.sh, m.w, m.h, m.key, m.n, m.data, m.adj, null, mix);
@@ -1286,12 +1331,14 @@ async function pump(m) {
 onmessage = (e) => {
   const m = e.data;
   if (m.t === 'init') {
-    try { R = Renderer(m.canvas, (w, h) => new OffscreenCanvas(w, h), { full: !!m.full }); }
+    CANVAS = m.canvas; FULL = !!m.full;
+    try { R = Renderer(m.canvas, (w, h) => new OffscreenCanvas(w, h), ropts()); }
     catch (err) { R = null; }
     if (R) R.warm();
     postMessage({ t: 'ready', ok: !!R, yuv: !!(R && R.yuv) });
     return;
   }
+  if (m.t === 'test-lose') { if (R) postMessage({ t: 'test-lost', ok: R.loseContext(m.after) }); return; }
   if (m.t === 'frame') {
     m.got = performance.timeOrigin + performance.now();
     // (wave 18 PLAY9) a frame with a time to go up at (a slowed shot's, the page's pacer): held
@@ -1356,6 +1403,8 @@ function release() {
     P: null,                 // probe()'s renderer, on a canvas of its own (worker mode)
     S: null,                 // sample()'s (Lumetri Scopes), on a canvas of its own
     worker: null,            // the worker holding #gradeCanvas (worker mode)
+    lost: false,             // (wave 23 TRUTH) the graphics context is lost: the raw picture shows
+    lostLog: [],             // {t, what}: lost / restored / gave up (a record)
     inflight: false,         // a frame is with the worker (its queue: WORKER_SRC)
     sentAt: 0,               // when the last one went
     sentKey: null,           // the LUT key the worker was last sent the data of
@@ -1605,6 +1654,55 @@ function release() {
     }
   }
 
+  /* (wave 23 TRUTH) The graphics context is lost (webglcontextlost, from the worker or the page's own
+   * canvas): the canvas is black over a video that is still fine, so it is taken off at once and the
+   * raw picture shows (the same state as no WebGL), and the tag on the monitor says why. A restore
+   * builds the renderer again and the grade is drawn; when it does not come back within RESTORE_MS the
+   * tag and one toast say the grade could not come back and the picture is shown ungraded. */
+  const RESTORE_MS = 2500;
+  function contextLost() {
+    if (G.lost) return;
+    G.lost = true;
+    G.ok = false;
+    G.inflight = false;
+    G.lostLog.push({ t: Math.round(performance.now()), what: 'lost' });
+    show(false);
+    tag();
+    clearTimeout(G.lostTimer);
+    G.lostTimer = setTimeout(() => {
+      if (!G.lost) return;
+      G.gaveUp = true;
+      G.lostLog.push({ t: Math.round(performance.now()), what: 'gave up' });
+      tag();
+      if (typeof window.toast === 'function') {
+        window.toast('The grade could not come back after a graphics reset: the picture shows ungraded. Reload to get the grade back.');
+      }
+    }, RESTORE_MS);
+  }
+  function contextRestored(ok, yuv) {
+    clearTimeout(G.lostTimer);
+    if (!ok) { G.lost = true; G.gaveUp = true; tag(); return; }
+    G.lost = false;
+    G.gaveUp = false;
+    G.ok = G.ready = true;
+    G.yuv = yuv;
+    G.sentKey = null;              // the worker's textures are gone: the next frame carries its LUT again
+    G.warmed = new Set();
+    G.drewV = null;
+    G.lostLog.push({ t: Math.round(performance.now()), what: 'restored' });
+    tag();
+    if (G.shot != null) setShot(G.shot); else settle();
+  }
+  // the page's own renderer (fallback mode, ?grade=main) builds again on the same canvas
+  function mainOpts() {
+    return { onLost: contextLost,
+             onRestored() {
+               try { G.R = Renderer(G.canvas, stage2d, mainOpts()); } catch (e) { G.R = null; }
+               G.P = G.S = null;
+               contextRestored(!!G.R, !!(G.R && G.R.yuv));
+             } };
+  }
+
   const DRAW_LOG = 600;
   function fromWorker(e) {
     const m = e.data || {};
@@ -1626,6 +1724,12 @@ function release() {
       }
     } else if (m.t === 'warmed') {
       G.warmLog.push({ kinds: m.kinds, ms: Math.round(m.ms * 10) / 10 });
+    } else if (m.t === 'lost') {
+      contextLost();
+    } else if (m.t === 'restored') {
+      contextRestored(!!m.ok, !!m.yuv);
+    } else if (m.t === 'test-lost') {
+      G.lostLog.push({ t: Math.round(performance.now()), what: m.ok ? 'test: lose asked' : 'test: no WEBGL_lose_context' });
     } else if (m.t === 'ready' && m.ok) {
       G.yuv = !!m.yuv;
     } else if (m.t === 'ready' && !m.ok) {
@@ -1820,6 +1924,7 @@ function release() {
     const on = G.canvas.classList.contains('on');
     let R = G.R;
     if (G.worker) {
+      if (G.P && G.P.lost()) G.P = null;
       if (!G.P) {
         try { G.P = Renderer(document.createElement('canvas'), stage2d); } catch (e) { G.P = null; }
       }
@@ -1840,6 +1945,7 @@ function release() {
     if (!G.ok) return null;
     const v = live();
     if (!v || v.readyState < 2) return null;
+    if (G.S && G.S.lost()) G.S = null;
     if (!G.S) {
       try { G.S = Renderer(document.createElement('canvas'), stage2d); } catch (e) { G.S = null; }
       if (!G.S) return null;
@@ -2551,7 +2657,18 @@ function release() {
    * (INTAKE M16 I16.1), where G's state used to be only a toast that faded. */
   function tag() {
     const t = $('#ungraded');
-    if (t) t.hidden = G.enabled;
+    if (!t) return;
+    // (wave 23 TRUTH) a lost graphics context says so on the picture, whatever the G switch is
+    if (G.lost) {
+      t.hidden = false;
+      t.textContent = G.gaveUp ? 'grade lost: reload' : 'grade restoring…';
+      t.title = G.gaveUp ? 'The graphics context was lost and did not come back; the picture is shown ungraded. Reload the page.'
+                         : 'The graphics context was lost; the picture is shown ungraded while the grade comes back.';
+      return;
+    }
+    t.textContent = 'ungraded';
+    t.removeAttribute('title');
+    t.hidden = G.enabled;
   }
 
   function toggle() {
@@ -2569,7 +2686,7 @@ function release() {
     G.canvas = canvas;
     if (!startWorker(canvas)) {
       try {
-        G.R = Renderer(canvas, stage2d);
+        G.R = Renderer(canvas, stage2d, mainOpts());
       } catch (e) {
         console.warn(String(e && e.message || e));
         G.R = null;
@@ -2685,6 +2802,13 @@ function release() {
     get yuv() { return G.yuv; },
     get autoW() { return G.autoW; },
     get mode() { return G.worker ? 'worker' : (G.R ? 'main' : 'off'); },
+    get lost() { return G.lost; },
+    get lostLog() { return G.lostLog; },
+    // test-only: lose the context on purpose; `after` ms later it is restored (negative: never)
+    loseContext(after = 200) {
+      if (G.worker) { G.worker.postMessage({ t: 'test-lose', after }); return true; }
+      return !!(G.R && G.R.loseContext(after));
+    },
     get playRes() { return G.res; },
     set playRes(v) { setRes(String(v)); },
   };

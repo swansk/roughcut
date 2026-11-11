@@ -195,6 +195,29 @@
     if (!raf) raf = requestAnimationFrame(tick);
   }
 
+  /* (wave 23 TRUTH; COLD-16, HANDS-01, FINISH-05) A stopped transport has silent meters. The bars fall
+   * in tick(), which rides requestAnimationFrame: a tab the browser throttles (hidden, a stalled
+   * compositor, a busy box) draws it rarely or never, and the editors saw the last peak pinned for
+   * as long as they looked. A timer of its own watches the media: when nothing has played for
+   * REST_MS the meters are put at rest and drawn, whatever the animation frames are doing. */
+  const REST_MS = 900;
+  let stoppedAt = 0;
+  const anyPlaying = () => [...document.querySelectorAll('#player video, #player audio, #bed')]
+    .some((el) => nodes.has(el) && !el.paused && !el.ended);
+  function atRest() {
+    return lvl.shown.every((x) => x === -Infinity) && lvl.hold.every((x) => x === -Infinity);
+  }
+  setInterval(() => {
+    if (!count) return;
+    if (anyPlaying()) { stoppedAt = 0; return; }
+    if (atRest()) return;
+    const now = performance.now();
+    if (!stoppedAt) { stoppedAt = now; return; }
+    if (now - stoppedAt < REST_MS) return;
+    for (let ch = 0; ch < 2; ch++) { lvl.now[ch] = lvl.shown[ch] = lvl.hold[ch] = -Infinity; }
+    draw();
+  }, 150);
+
   /* ---------------------------------------------------------------- drawing */
   const COL = { bg: '#0b0b0e', off: '#1b1d22', g: '#3fbf6a', y: '#d9c23a', r: '#e0483e',
                 tick: '#3a3d46', txt: '#7d8190', hold: '#e8e8ea' };
