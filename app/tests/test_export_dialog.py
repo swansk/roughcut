@@ -338,8 +338,13 @@ def test_a_running_export_can_be_cancelled(page, project, monkeypatch):
     page.fill("#exFolder", "cancelled")
     page.click("[data-testid=export-go]")
     page.wait_for_selector("[data-testid=export-progress]", timeout=5000)
-    # Escape does not hide or stop a running export
+    # Escape puts the dialog away (wave 24 DELIVER: the board is the editor's while it renders);
+    # it does not stop the export, and Export (Ctrl+M) brings it back, still running
     page.keyboard.press("Escape")
+    assert not is_open(page)
+    assert [j for j in server.RENDERS.values() if j.get("path", "").endswith("/never.mp4")][-1]["state"] == "running"
+    page.keyboard.press("Control+m")
+    page.wait_for_selector("[data-testid=export-cancel]", timeout=5000)
     assert is_open(page)
     t0 = time.time()
     page.click("[data-testid=export-cancel]")

@@ -40,6 +40,8 @@
   let poll = 0;
   let result = null;          // the finished export: {path, url, name}
   let sent = null;            // what the running export was asked for: {segments, from}
+  let startedAt = 0;          // when it was asked (ms): the cut it is of is the cut as of then
+  let unseen = false;         // it ended while the dialog was put away; the next open shows how
 
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -400,7 +402,8 @@
           title="a folder under ${esc(info.root)}: pick a recent one, or type a new name"><datalist id="exFolders">${folders}</datalist>
           <select id="exRecent" aria-label="recent folders" title="the folders under ${esc(info.root)}, most recent first"${recent ? '' : ' disabled'}>
             <option value="">Recent folders${recent ? '' : ' (none yet)'}</option>${recent}</select></div>
-          <div class="ex-path" id="exPath"></div></div>
+          <div class="ex-path" id="exPath"></div>
+          <div class="ex-about ex-namenote" id="exNameNote" data-testid="export-name-note" role="status"></div></div>
         <label for="exRange">Range</label>
         <div><select id="exRange">
           <option value="all">Entire Sequence</option>
@@ -408,6 +411,7 @@
         </select></div>
       </div>
       <div class="ex-summary" id="exSummary"></div>
+      <div class="ex-about ex-sound" id="exSound" data-testid="export-sound"></div>
       <div class="ex-note" id="exNote" role="status">${esc(note || '')}</div>`;
     dlg.querySelector('#exFoot').innerHTML = `
       <span class="ex-key">${IS_MAC ? '⌘M' : 'Ctrl+M'}</span>
@@ -453,6 +457,46 @@
     ensureSample(sel.value);
   }
 
+  /* The sound every file gets, said in words (FINISH-15): the preset's AAC bitrate, 48 kHz
+   * stereo, the music bed mixed in when the cut has one, and the true-peak limiter that
+   * ends every film's sound (wave 23). The server's `info.sound` has the limiter's ceiling. */
+  function paintSound() {
+    const el = dlg.querySelector('#exSound');
+    const p = preset();
+    if (!el || !p) return;
+    const snd = (info && info.sound) || { rate_hz: 48000, channels: 2, limiter_dbtp: -1 };
+    // eslint-disable-next-line no-undef
+    const bed = typeof music !== 'undefined' && music && music.asset;
+    const kbps = Math.round(Number(p.audio_kbps) || 0);
+    el.textContent = `Sound: ${snd.codec || 'AAC'} ${kbps} kbps, ${snd.rate_hz / 1000} kHz ${snd.channels === 2 ? 'stereo' : snd.channels + ' ch'}`
+      + `${bed ? ', with the music bed under the talking' : ''}; peaks are limited at ${String(snd.limiter_dbtp).replace('-', '−')} dBTP (true peak), so the file does not clip. No loudness normalising.`;
+  }
+
+  /* FINISH-25: "a file of this name is never overwritten" said before Export, not after:
+   * the server's own rule (`/api/export/name`) asked a beat after the last keystroke. */
+  let nameTimer = 0, nameSeq = 0;
+  function checkName(folder, name) {
+    clearTimeout(nameTimer);
+    nameTimer = setTimeout(async () => {
+      const el = dlg.querySelector('#exNameNote');
+      if (!el || phase !== 'settings') return;
+      const mine = ++nameSeq;
+      try {
+        const r = await (await fetch(`/api/export/name?folder=${encodeURIComponent(folder)}&name=${encodeURIComponent(name)}`)).json();
+        if (mine !== nameSeq || phase !== 'settings') return;
+        const box = dlg.querySelector('#exNameNote');
+        if (!box) return;
+        box.dataset.exists = r.exists ? 'yes' : 'no';
+        box.dataset.writes = r.writes_name || '';
+        box.textContent = r.exists
+          ? `A file named ${name}.mp4 is already there. This export will be saved as ${r.writes_name}; nothing is overwritten. To use another name, change it above.`
+          : '';
+        const go = dlg.querySelector('#exGo');
+        if (go && !go.disabled) go.title = `Writes ${r.writes}`;
+      } catch (_) { /* the dialog still works; the export says the name it used */ }
+    }, 200);
+  }
+
   function paintEstimate() {
     const p = preset();
     if (!p) return;
@@ -475,6 +519,8 @@
     const path = dlg.querySelector('#exPath');
     path.textContent = `${info.root}/${folder}/${name}.mp4`;
     path.title = 'a file of this name is never overwritten: the export becomes -2, -3 …';
+    checkName(folder, name);
+    paintSound();
     const secs = exportLength();
     const e = current();
     // "measuring…" alone until the figure is known (verdict 9: "493 MB" above
@@ -512,7 +558,7 @@
     const go = dlg.querySelector('#exGo');
     go.disabled = empty || measuring || c.bad;
     go.title = measuring ? 'Export unlocks once the size is measured: a 2 s sample of this sequence is encoding'
-      : c.bad ? 'the Bitrate is not a number of Mbps' : '';
+      : c.bad ? 'the Bitrate is not a number of Mbps' : `Writes ${path.textContent}`;
     dlg.dataset.measuring = measuring ? 'yes' : 'no';
     if (empty) dlg.querySelector('#exNote').textContent = 'The sequence is empty: put a clip on V1 first.';
   }
@@ -529,12 +575,17 @@
                aria-label="export progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
             <div class="ex-fill" id="exFill"></div></div>
           <div class="ex-runline"><span id="exPct">0%</span><span id="exStage"></span></div>
+          <div class="ex-runline"><span id="exLeft" data-testid="export-left"></span><span></span></div>
           <div class="ex-path" id="exRunPath"></div>
+          <div class="ex-about" id="exSnap" data-testid="export-snapshot"></div>
         </div>`;
       dlg.querySelector('#exFoot').innerHTML = `
         <span class="ex-grow"></span>
+        <input type="button" class="ex-btn" id="exHide" data-testid="export-hide" value="Keep working"
+          title="Put this away and go on editing. The export goes on; its progress is in the bar at the top, and Export (Ctrl+M) brings this back.">
         <input type="button" class="ex-btn" id="exCancel" data-testid="export-cancel" value="Cancel Export">`;
       dlg.querySelector('#exCancel').addEventListener('click', () => cancelJob());
+      dlg.querySelector('#exHide').addEventListener('click', () => hide());
     }
     if (!st) return;
     const raw = st.progress_pct != null ? st.progress_pct : st.pct;
@@ -549,6 +600,13 @@
     dlg.querySelector('#exStage').textContent = st.stage === 'joining'
       ? 'joining the shots and mixing the sound'
       : `encoding ${tc(Math.min(enc, planned))} of ${tc(planned)}`;
+    // time left: the server's, from the share written so far; nothing until it can say
+    const left = typeof etaText === 'function' && st.eta_s != null ? etaText(st.eta_s) : '';
+    dlg.querySelector('#exLeft').textContent = left
+      || (now >= 100 ? '' : 'working out the time left…');
+    dlg.querySelector('#exSnap').textContent = startedAt
+      ? `This is an export of the cut as it was at ${new Date(startedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Edits you make while it renders are not in this file.`
+      : '';
     if (st.path) {
       dlg.querySelector('#exRunPath').textContent = st.path;
       dlg.querySelector('#exRunName').textContent = `Exporting ${st.path.split('/').pop()}`;
@@ -656,6 +714,8 @@
     }
     const got = await r.json();
     job = got.job;
+    startedAt = Date.now();
+    unseen = false;
     // eslint-disable-next-line no-undef
     if (typeof strip !== 'undefined' && strip && strip.owned) strip.owned.add(job);
     // eslint-disable-next-line no-undef
@@ -682,16 +742,29 @@
     job = null;
     // eslint-disable-next-line no-undef
     if (typeof setRenderBusy === 'function') setRenderBusy(false);
+    unseen = !dlg.open;
     if (st.state === 'done' && st.output) {
       paintRunning({ ...st, progress_pct: 100 });
       paintDone(st);
+      window.lastExport = { name: result.name, path: result.path, at: Date.now() };
+      // eslint-disable-next-line no-undef
+      if (typeof paintMakeFilm === 'function') paintMakeFilm();
+      if (unseen) say(`Exported ${result.name}. Export (Ctrl+M) shows it.`);
       // eslint-disable-next-line no-undef
       if (typeof refreshVersions === 'function') refreshVersions().catch(() => {});
     } else if (st.state === 'cancelled') {
       paintSettings('Export cancelled. Nothing was written.');
+      restoreSent();
     } else {
       paintFailed(st);
+      if (unseen) say('The export failed. Export (Ctrl+M) says why.');
     }
+  }
+
+  /* One line on the board when something happens to an export that was put away. */
+  function say(text) {
+    // eslint-disable-next-line no-undef
+    if (typeof toast === 'function') toast(text, 8000);
   }
 
   /* A failed export (verdict 7, blocker 2): which shot, where it is in the sequence,
@@ -717,8 +790,9 @@
     return seg ? { seg, t } : null;
   }
 
-  function paintFailed(st) {
-    paintSettings('');
+  /* The settings the export was asked with, back in the fields (a failure or a cancel keeps
+   * what was typed: FINISH-25 lost the name on Cancel). */
+  function restoreSent() {
     if (sent) {
       // the settings it was asked with, to change and try again
       const set = (sel, v) => { const el = dlg.querySelector(sel); if (el && v != null && v !== '') el.value = v; };
@@ -737,6 +811,11 @@
       ensureSample(dlg.querySelector('#exPreset').value);
       askEstimate();
     }
+  }
+
+  function paintFailed(st) {
+    paintSettings('');
+    restoreSent();
     const shot = st.failed_shot || null;
     const at = failedPlace(shot);
     const clip = shot && shot.clip ? String(shot.clip) : '';
@@ -811,6 +890,7 @@
   async function open() {
     if (dlg.open) return;
     if (phase === 'running' && job) { dlg.showModal(); return; }
+    if (unseen) { unseen = false; dlg.showModal(); return; }   // how the put-away export ended
     if (!dlg.querySelector('#exBody')) shell();
     const seq = ++opening;
     touched = false;
@@ -855,8 +935,15 @@
     if (name) { name.focus(); name.select(); }
   }
 
+  /* Put the dialog away while the export goes on (FINISH-21): the board is the editor's
+   * again, the header's bar carries the progress, Ctrl+M / Export brings this back. */
+  function hide() {
+    if (phase !== 'running') return;
+    dlg.close();
+  }
+
   function close() {
-    if (phase === 'running') return;          // a running export is cancelled, not hidden
+    if (phase === 'running') { hide(); return; }     // Escape puts it away; Cancel Export stops it
     const v = dlg.querySelector('#exVideo');
     if (v) v.pause();
     dlg.close();
@@ -878,7 +965,7 @@
    * and an Escape that lands outside the dialog while it is open (focus lost to the page
    * some other way) closes it on keyup, as the first-pass panel does. */
   window.addEventListener('keyup', (e) => {
-    if (e.key !== 'Escape' || !dlg.open || phase === 'running') return;
+    if (e.key !== 'Escape' || !dlg.open) return;
     const t = e.target;
     if (t && t.closest && t.closest('dialog')) return;     // the dialog's own cancel has it
     close();
@@ -919,5 +1006,6 @@
     open, close, clipRange,
     get phase() { return phase; },
     get job() { return job; },
+    hide,
   };
 })();
