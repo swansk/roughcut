@@ -49,6 +49,28 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-11 ~09:30: **Closed loop resumed on Karl's word (2026-11-10 evening: "I will be gone for the rest of the day
+  so continue working on this closedloop"). Waves 23 and 24 are merged on this branch (`2e5e0a2`, pushed): ten Sonnet
+  lanes from `judge/COPPER-EDITORS.md`'s ranked areas**, plans in `judge/WAVE23.md` and `judge/WAVE24.md`:
+  SAFE (proposals wait until answered, Discard undoable, Recent proposals, Stop on every AI job, undo kept across
+  reload and bin switch), TRUTH (grade recovers from a lost context, the Program follows a waiting proposal and the
+  cut after an edit, meters fall), DIRECT (the prompt box remembers the cut's turns, labels the plan, says when it
+  has not looked, a chosen scope stays), EYES (it looks at the frames before cutting on the picture), TITLE (the
+  effect check measures what is drawn; hand controls; replace; one Accept), FILM (rotation per clip from the sensor;
+  -1 dBTP limiter), DESCRIBE (the look describes before it judges; Found / Said in the Index; Find names its clip
+  and says "nothing convincing"), START (New film from a folder; length and brief asked before a first pass; plain
+  words; time estimate), HANDS (one focus rule; copy / cut / paste; typed timecode; steady transport rows), DELIVER
+  (Add music; export in the background). Lead fixes at the merges: a conftest fixture so no job is carried between
+  tests; `/ jobs` budget +1 word +1 control for the pill's Stop (rubric log); the typable timecodes are not
+  role=button. Sent back once: DESCRIBE (its Find re-weighting regressed Killington's offline Find to 0.526 / 0.316;
+  restored to baseline, the floor now a sentence above the hits; its Transcript button moved into menus for the
+  budget). **Gate: quick gate on `8784851` RED on journey only (loop holds of 11-13 s in a GC pause with ~7,000 page
+  faults while five lanes were testing: box, not yet proven); screens and understanding green. Twelve older UI tests
+  fail on the merged tip: lane GATEFIX is classifying them (stale test or regression); the full gate is running on
+  `8a88f07`. 8766 NOT deployed (the unit is down since the 2026-11-11 reboot; it starts on a green tip).** Next: merge
+  GATEFIX, green gate, start 8766, then round 2 of the editors (`research/editor-trial/ROUND2.md`, fresh root, software
+  browser). Not built: J / L cuts, 9:16, title fonts, an AI music op, the .WAV as sound. Judge 17 still held; main,
+  8765 and pushing main stay Karl's.
 - 2026-11-10 ~18:00: **Copper editor trial (Karl: "use /mnt/roughcut/footage/copper-02-2026 to start a project from
   scratch… pain points as a 'human' editor… orchestrated opus 5.5 subagents").** Six Opus editors (cold start, Premiere
   hands, words only, footage finder, finishing, clumsy) each drove their own board on `e9a3116` through screenshots and

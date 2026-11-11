@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- Loop State for waves 23 and 24 (ten lanes merged), and the editors' round-two brief.
 - The typable timecodes are not announced as buttons: they are the same readouts, so the screens budget holds.
 - Screens budget: / jobs allows one more word and control for the Stop on a running Ask's header pill (logged in the rubric log).
 - Tests: every test starts with no background job in flight (an effect's proof check from one test made the next test's saved copy answer 409).
