@@ -306,9 +306,24 @@
     return true;
   }
 
+  /* (wave 23 TRUTH, COLD-12) On an empty sequence with a proposal waiting, the playhead walks the
+   * proposal: its shots' starts and its length (lanes.js parks the Program there). */
+  function ghostEdges() {
+    const g = proposalOnly() && window.tlLanes && tlLanes.ghost ? tlLanes.ghost() : null;
+    return g && g.ghosts.length ? { starts: g.ghosts.map((x) => x.start), total: g.total } : null;
+  }
+
   function prevCut() {
     const list = segs();
-    if (!list.length) return true;
+    if (!list.length) {
+      const ge = ghostEdges();
+      if (ge) {
+        const ph = tl.state.playhead;
+        const prev = ge.starts.filter((x) => x < ph - 0.02).pop();
+        tl.setPlayhead(prev != null ? prev : 0);
+      }
+      return true;
+    }
     const ph = tl.state.playhead;
     const at = tl.shotAt(ph);
     const start = tl.filmStart(at.id);
@@ -319,7 +334,15 @@
 
   function nextCut() {
     const list = segs();
-    if (!list.length) return true;
+    if (!list.length) {
+      const ge = ghostEdges();
+      if (ge) {
+        const ph = tl.state.playhead;
+        const next = ge.starts.find((x) => x > ph + 0.02);
+        tl.setPlayhead(next != null ? next : ge.total);
+      }
+      return true;
+    }
     const at = tl.shotAt(tl.state.playhead);
     const next = list[at.index + 1];
     return next ? goTo(tl.filmStart(next.id), next.id) : goTo(tl.total(), at.id);
@@ -329,7 +352,11 @@
    * nearest 0.01 s (the cue rounds clip times the way the EDL does), so without this a
    * run of frame steps would drift by the rounding. */
   function step(d) {
-    if (!segs().length) return true;
+    if (!segs().length) {
+      const ge = ghostEdges();
+      if (ge) { settle(); tl.setPlayhead(clamp(tl.state.playhead + d, 0, ge.total)); }
+      return true;
+    }
     settle();
     const t = clamp(tl.state.playhead + d, 0, tl.total());
     tl.seek(t);
@@ -832,10 +859,11 @@
         case 'j': case 'k': case 'l': handled = shuttleKey(k, e); break;
         case 'ArrowUp': handled = prevCut(); break;
         case 'ArrowDown': handled = nextCut(); break;
-        case 'Home': handled = segs().length ? goTo(0, segs()[0].id) : true; break;
+        case 'Home': handled = segs().length ? goTo(0, segs()[0].id) : (ghostEdges() ? (tl.setPlayhead(0), true) : true); break;
         case 'End': {
           const list = segs();
-          handled = list.length ? goTo(tl.total(), list[list.length - 1].id) : true;
+          handled = list.length ? goTo(tl.total(), list[list.length - 1].id)
+            : (ghostEdges() ? (tl.setPlayhead(ghostEdges().total), true) : true);
           break;
         }
         case 'ArrowLeft': handled = step(-(e.shiftKey ? BIG : 1) * tl.frame()); break;

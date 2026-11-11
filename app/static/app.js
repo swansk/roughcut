@@ -2875,6 +2875,14 @@ function programInit() {
 
 function toggleCut() {
   if (player.playing) return pauseCut();
+  // a proposal playing from its ghost lane stops where it is (COLD-11: the button did nothing)
+  if (window.tlLanes && typeof tlLanes.running === 'function' && tlLanes.running()) {
+    tlLanes.stop();
+    const v = liveVideo();
+    if (v) v.pause();
+    paintTransport();
+    return;
+  }
   playFrom(sel);
 }
 
@@ -3531,6 +3539,56 @@ function afterFirstFrames(v, fn, frames = 3) {
   v.requestVideoFrameCallback(cb);
 }
 
+/* The Program's duration (wave 23 TRUTH, COLD-11): the cut's; on an empty sequence with a proposal
+ * waiting, the proposal's (it is the film the Program plays then). */
+function paintTotal() {
+  const el = $('#total');
+  if (!el) return;
+  const g = window.tlLanes && typeof tlLanes.ghost === 'function' ? tlLanes.ghost() : null;
+  const t = !segs.length && pendingPlan && g && g.total > 0 ? g.total : total();
+  const s = tcOf(t);
+  if (el.textContent !== s) el.textContent = s;
+}
+window.paintTotal = paintTotal;
+
+/* The Program shows the cut as it now is (wave 23 TRUTH; HANDS-05, CLUMSY-18, WORDS-02). A ripple
+ * delete, an Accept, an undo or an AI edit changes what is under the playhead, and a parked
+ * monitor was only told to re-cue when it was playing: it kept the old frame under the new shot's
+ * label, and its timecode and the timeline disagreed. When the cut changed and the monitor is not
+ * on the shot (and the frame) the playhead is on, it is cued there. Not while a proposal is the
+ * thing the monitor plays (the lanes' follow does that), not while playing. */
+let monSig = null, monCatchT = 0;
+const cutSig = () => segs.map((s) => `${s.id}:${s.clip}:${s.in}:${s.out}:${s.speed || 1}`).join('|');
+function monitorCatchUp(force) {
+  if (!window.tl || !tl.state) return;
+  const sig = cutSig();
+  if (!force && sig === monSig) return;
+  const first = monSig === null;
+  monSig = sig;
+  if (first && !force) return;       // the board's first paint cues the monitor itself
+  clearTimeout(monCatchT);
+  monCatchT = setTimeout(() => {
+    monCatchT = 0;
+    if (player.playing || !segs.length || !player.vids.length) return;
+    if (window.tlLanes && typeof tlLanes.following === 'function' && tlLanes.following()) return;
+    const t = tl.state.playhead || 0;
+    if (t > tl.total() + 0.5 / ((tl.gridRate && tl.gridRate()) || 30)) return;      // parked past the end: black, as Premiere
+    const at = tl.shotAt(t);
+    const seg = at && segs[at.index];
+    if (!seg) return;
+    const v = liveVideo();
+    const fine = v && player.idx === at.index && v.dataset.src === proxyOf(seg)
+      && (v.seeking || v.readyState < 1 || Math.abs(v.currentTime - at.clipT) < 0.35);
+    if (!fine) cueAt(at.index, at.clipT);
+    else {
+      // the picture is right; the label and the timecode follow the playhead
+      paintTransport();
+      const pos = $('#pos'), tc = tcOf(t);
+      if (pos && pos.textContent !== tc) pos.textContent = tc;
+    }
+  }, 0);
+}
+
 /* Keep the monitor honest against the timeline it is playing: hide it when there is
  * nothing to play, and re-cue if the shot under the playhead was edited out from under it. */
 function syncPlayer() {
@@ -3557,6 +3615,7 @@ function syncPlayer() {
       : 'the sequence is empty · drag a clip to the Timeline or press , (Insert)';
   }
   if (player.idx >= segs.length) { pauseCut(); player.idx = -1; }
+  if (!player.playing) monitorCatchUp();
   if (player.playing && player.idx >= 0 && !player.off) {
     const seg = segs[player.idx];
     const v = liveVideo();
@@ -3568,7 +3627,7 @@ function syncPlayer() {
     }
   }
   tl.render();
-  $('#total').textContent = tcOf(total());
+  paintTotal();
   paintTransport();
 }
 
@@ -3634,7 +3693,9 @@ function restSoon() {
 
 function paintTransport() {
   const pc = $('#playCut'), pw = $('#playingWhat');
-  const play = player.playing ? '❚❚ Pause' : '▶ Play';
+  // (wave 23 TRUTH, COLD-11) a proposal playing in the monitor (Play it) is playing: the button says Pause
+  const proposalPlays = !player.playing && window.tlLanes && typeof tlLanes.running === 'function' && tlLanes.running();
+  const play = player.playing || proposalPlays ? '❚❚ Pause' : '▶ Play';
   if (pc.textContent !== play) pc.textContent = play;
   paintRest();
   const seg = segs[player.idx];
@@ -3644,7 +3705,9 @@ function paintTransport() {
     : '';
   // (written only when it changes: a cut calls this, and a new text node is a child-list
   // change the board's `:has()` rules re-match on, in the cut's own frame)
-  if (pw.textContent !== what) pw.textContent = what;
+  // (wave 23 TRUTH) the proposal's own line ("proposal · GX0104 …", the lanes') stays while the monitor is on it
+  const onProposal = window.tlLanes && typeof tlLanes.following === 'function' && tlLanes.following();
+  if (!onProposal && pw.textContent !== what) pw.textContent = what;
   // While the Program plays, the board's own fades (the trim handles' grips, which follow
   // the selection the playback moves at every cut) are instant (timeline.css
   // `.rc-playing`): each was a composited opacity animation, and starting one at a cut
@@ -3900,7 +3963,7 @@ function render() {
     $(sel).style.display = segs.length ? '' : 'none';
   });
 
-  $('#total').textContent = tcOf(total());
+  paintTotal();
   flowSoon();
   paintMusic();             // "loops once at 1:59 under a 3:09 cut" follows the cut's length
   paintVersions();          // so "this cut" follows the timeline rather than the last fetch
@@ -5829,7 +5892,8 @@ const proposalPlayer = {
   ready() { return !!(pendingPlan && !segs.length && window.tlLanes && tlLanes.ghost && tlLanes.ghost()); },
   playing() {
     const v = liveVideo();
-    return this.on && !player.playing && !!v && !v.paused && !v.ended;
+    const ranging = window.tlLanes && typeof tlLanes.running === 'function' && tlLanes.running();
+    return (this.on || ranging) && !player.playing && !!v && !v.paused && !v.ended;
   },
   play() {
     if (!this.ready()) return false;
@@ -5851,6 +5915,7 @@ const proposalPlayer = {
   },
   pause() {
     this.on = false;
+    if (window.tlLanes && typeof tlLanes.stop === 'function') tlLanes.stop();     // the range's own loop ends with it
     const v = liveVideo();
     if (v && !player.playing) v.pause();
     return true;
@@ -6780,7 +6845,15 @@ async function boot() {
     paint();                                  // the inspector follows the anchor
   });
   tl.on('change', renderInspector);           // a trim changes the header; an undo the why
-  tl.on('playhead', () => { if (!player.playing) restSoon(); });
+  tl.on('playhead', (ev) => {
+    if (player.playing) return;
+    restSoon();
+    // (wave 23 TRUTH, COLD-11) the Program's timecode is the playhead's whenever nothing plays the
+    // cut itself: a proposal's Play it, a ruler click on a proposal, a delete that moved it
+    const pos = $('#pos');
+    if (pos && ev && Number.isFinite(ev.t) && !ev.quiet) { const tc = tcOf(ev.t); if (pos.textContent !== tc) pos.textContent = tc; }
+  });
+  tl.on('change', () => monitorCatchUp());
   programInit();                              // V2 and moved A1 sound on the Program
   $('#inspector').addEventListener('click', onInspectorClick);
   // The Bin's tabs and "more found ▸" work from the first paint: bound after the awaits
