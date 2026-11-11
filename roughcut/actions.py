@@ -1559,6 +1559,9 @@ def check(ops: Any, state: dict) -> dict:
             notes = fx.title_notes(state["effects"], state.get("segments") or [], sim.segs)
             if notes:
                 out["notes"] = notes
+                keep = fx.title_keep_actions(state["effects"], state.get("segments") or [], sim.segs)
+                if keep:
+                    out["note_actions"] = keep
     return out
 
 

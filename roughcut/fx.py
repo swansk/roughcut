@@ -435,7 +435,7 @@ def validate_effect(raw: Any, segments: list[dict], clips: dict[str, dict] | Non
     if raw.get("limits"):
         out["limits"] = str(raw["limits"])[:300]      # what the effect could not do
     if keep_meta:
-        for k in ("created", "reference", "verify", "history", "window", "previous", "bounds", "replaces", "auto_accepted", "hand_log", "hand_seq"):
+        for k in ("created", "reference", "verify", "history", "window", "previous", "bounds", "replaces", "auto_accepted", "hand_log", "hand_seq", "wants"):
             if raw.get(k) is not None:
                 out[k] = raw[k]
     return out
@@ -1750,6 +1750,8 @@ def design(note: str, seg: dict, clip: dict, sidecar: dict | None, *,
             effect["events"] = survivors
             effect = validate_effect(effect, segments or [seg], clips, keep_meta=False)
     name_shots(effect, segments or [seg])
+    if requested_place(note):                      # where the editor's words put it: the check holds the drawing to it
+        effect["wants"] = requested_place(note)
     created = _now()
     effect["created"] = created
     effect["history"] = [{"note": note, "at": created}]
@@ -1775,6 +1777,8 @@ def revise(effect: dict, note: str, segments: list[dict], clips: dict | None = N
         new["events"] = answer["events"]
     new["status"] = "proposed"
     new["note"] = note
+    if requested_place(note):                      # a place the change names replaces the one asked before
+        new["wants"] = requested_place(note)
     new = name_shots(validate_effect(new, segments, clips), segments)
     new["history"] = list(effect.get("history") or []) + [{"note": note, "at": _now()}]
     return new
@@ -1896,6 +1900,109 @@ def measure(effect: dict, w: int = 1920, h: int = 1080) -> dict | None:
     return {"w": w, "h": h, "shapes": shapes, "views": views}
 
 
+
+# ---- where a title sits, in plain words, from the measured box (wave 23, FINISH-05 / -07)
+
+_PLACE_V = {"top": "upper", "bottom": "lower", "middle": "middle"}
+
+
+def place_words(box: list[float] | None) -> str:
+    """Where a drawn box sits in the frame, in the words an editor says: "lower left",
+    "centre", "upper centre". From the measured pixels, never from the model's description
+    (the card said "lower left" over a plate in the middle right)."""
+    if not box:
+        return ""
+    cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    v = "top" if cy < 0.34 else "bottom" if cy > 0.66 else "middle"
+    h = "left" if cx < 0.36 else "right" if cx > 0.64 else "centre"
+    if v == "middle" and h == "centre":
+        return "centre"
+    return f"{_PLACE_V[v]} {h}"
+
+
+_WANT_PATTERNS = (
+    (r"\b(?:lower|bottom)[ -](left|right|centre|center|middle)\b", "lower", None),
+    (r"\b(?:upper|top)[ -](left|right|centre|center|middle)\b", "upper", None),
+    (r"\b(?:lower|bottom)[ -]third\b|\bat the bottom\b|\bbottom of the (?:frame|screen|picture)\b|\blower area\b", "lower", ""),
+    (r"\bat the top\b|\btop of the (?:frame|screen|picture)\b|\bupper third\b|\btop third\b", "upper", ""),
+    (r"\b(?:centre|center|middle) of the (?:frame|screen|picture)\b|\bdead centre\b|\bdead center\b", "middle", "centre"),
+)
+
+
+def requested_place(note: str | None) -> dict | None:
+    """The place the editor's words named — `{"v": "lower" | "upper" | "middle", "h": "left" |
+    "right" | "centre" | None}` — or None. Only explicit phrases count ("lower third",
+    "bottom left", "at the top", "centre of the frame"): a place the note did not name is
+    not one the check can hold the drawing to."""
+    text = str(note or "").lower()
+    for pat, v, h in _WANT_PATTERNS:
+        m = re.search(pat, text)
+        if not m:
+            continue
+        if h is None:
+            g = m.group(1)
+            g = "centre" if g in ("center", "middle") else g
+            return {"v": v, "h": g}
+        return {"v": v, "h": h or None}
+    if re.search(r"\b(?:centred|centered)\b", text):
+        return {"v": None, "h": "centre"}
+    return None
+
+
+def want_words(want: dict | None) -> str:
+    if not want:
+        return ""
+    v, h = want.get("v"), want.get("h")
+    if v == "middle" and h == "centre":
+        return "centre"
+    if v and h:
+        return f"{v} {h}"
+    return f"{v} third" if v in ("lower", "upper") else "centre" if h == "centre" else ""
+
+
+def place_ok(box: list[float], want: dict) -> bool:
+    cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    v, h = want.get("v"), want.get("h")
+    if v == "lower" and cy < 0.62:
+        return False
+    if v == "upper" and cy > 0.38:
+        return False
+    if v == "middle" and not 0.3 <= cy <= 0.7:
+        return False
+    if h == "left" and cx > 0.45:
+        return False
+    if h == "right" and cx < 0.55:
+        return False
+    if h == "centre" and not 0.35 <= cx <= 0.65:
+        return False
+    return True
+
+
+def text_share(effect: dict, w: int = 1920, h: int = 1080) -> float | None:
+    """The one size every title has (wave 23, FINISH-07): the height of its biggest text, as
+    the renderer really draws it (shrunk to its box when it was too wide), as a share of the
+    frame's HEIGHT — 0.08 is a line of text 8 % as tall as the picture. The spec's own
+    numbers (`overlay.size`, a shape's `h`) mean different things for every title."""
+    ov = effect.get("overlay")
+    texts = [s for s in (ov or {}).get("shapes") or [] if s.get("type") == "text"]
+    if not texts:
+        return None
+    t = _measure_times(ov)[0]
+    scale = pose_at(ov, t)["scale"] or 1.0
+    box = ov["size"] * w * scale
+    best = 0.0
+    for sh in texts:
+        px = max(4, int(sh.get("h", 0.2) * box))
+        if sh.get("fit", True):
+            font = _font(px, sh.get("bold", True))
+            widest = max((font.getlength(l) for l in str(sh["text"]).split("\n")), default=0)
+            limit = 0.95 * box
+            if widest > limit > 0:
+                px = max(4, int(px * limit / widest))
+        best = max(best, px)
+    return best / h
+
+
 def _area(b) -> float:
     return max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
 
@@ -1913,7 +2020,7 @@ def _say(text: str) -> str:
     return f"“{one[:40]}{'…' if len(one) > 40 else ''}”"
 
 
-def problems(m: dict | None, safe: float = SAFE_MARGIN) -> list[dict]:
+def problems(m: dict | None, safe: float = SAFE_MARGIN, want: dict | None = None) -> list[dict]:
     """What is wrong with where an effect draws (`measure`'s numbers), worst first, each
     `{"kind", "shape", "detail"}` with a sentence a designer or a person can act on:
     `text_outside` (a text leaves the frame or the title-safe area), `shape_outside` (a
@@ -1987,6 +2094,13 @@ def problems(m: dict | None, safe: float = SAFE_MARGIN) -> list[dict]:
                         f"{_say(kinds[i]['text'])} (over {_pct(part)} of it) without covering all of it: a plate must be larger than "
                         "its words (w and h in box units, the text's own width is its characters × "
                         "0.65 × h), an accent bar goes beside them, never through them", part)
+        if want and view.get("all"):
+            whole = view["all"]
+            if not place_ok(whole, want):
+                cx, cy = (whole[0] + whole[2]) / 2, (whole[1] + whole[3]) / 2
+                add("place", texts[0],
+                    f"it was asked for at the {want_words(want)} but it is drawn at the {place_words(whole)} "
+                    f"(its middle at x {_pct(cx)}, y {_pct(cy)} of the frame)", 0.4)
         for a_i, a in enumerate(texts):
             for b_i in texts[a_i + 1:]:
                 ba, bb = boxes.get(a), boxes.get(b_i)
@@ -1999,6 +2113,43 @@ def problems(m: dict | None, safe: float = SAFE_MARGIN) -> list[dict]:
                         f"are drawn on each other ({_pct(part)} of the smaller): put them on "
                         "different lines — one text shape with \\n, or different y", part)
     return sorted(found.values(), key=lambda p: -p["weight"])
+
+
+def move_to_place(effect: dict, want: dict, w: int = 1920, h: int = 1080, safe: float = SAFE_MARGIN) -> dict | None:
+    """The same effect moved — no model — so its drawn box sits where `want` says (lower,
+    upper, middle; left, right, centre), inside the safe area. A copy, or None when it
+    already is there or cannot be measured."""
+    import copy
+
+    e = copy.deepcopy(effect)
+    res = check_bounds(e, w, h, safe)
+    box = res.get("all")
+    if not box or not e.get("events"):
+        return None
+    bw, bh = box[2] - box[0], box[3] - box[1]
+    cx, cy = (box[0] + box[2]) / 2, (box[1] + box[3]) / 2
+    tx, ty = cx, cy
+    margin = safe + 0.03
+    v, hz = want.get("v"), want.get("h")
+    if hz == "left":
+        tx = margin + bw / 2
+    elif hz == "right":
+        tx = 1 - margin - bw / 2
+    elif hz == "centre":
+        tx = 0.5
+    if v == "lower":
+        ty = min(0.82, 1 - margin - bh / 2)
+    elif v == "upper":
+        ty = max(0.18, margin + bh / 2)
+    elif v == "middle":
+        ty = 0.5
+    dx, dy = tx - cx, ty - cy
+    if abs(dx) < 0.002 and abs(dy) < 0.002:
+        return None
+    for ev in e["events"]:
+        ev["x"] = round(min(1.0, max(0.0, ev["x"] + dx)), 4)
+        ev["y"] = round(min(1.0, max(0.0, ev["y"] + dy)), 4)
+    return e
 
 
 def bounds_check(effect: dict, w: int = 1920, h: int = 1080) -> dict | None:
@@ -2028,15 +2179,19 @@ def check_bounds(effect: dict, w: int = 1920, h: int = 1080, safe: float = SAFE_
     except Exception as exc:  # noqa: BLE001 — a spec that cannot be drawn is not a spec that fits
         return {"ok": None, "safe": safe, "problems": [], "text": None,
                 "error": f"{type(exc).__name__}: {exc}"[:200]}
-    probs = problems(m, safe)
-    union = None
+    probs = problems(m, safe, effect.get("wants"))
+    union = whole = None
     if m:
         tx = [v["boxes"][i] for v in m["views"] for i, s in ((s["i"], s) for s in m["shapes"])
               if s["type"] == "text" and i in v["boxes"]]
         if tx:
             union = [min(b[0] for b in tx), min(b[1] for b in tx),
                      max(b[2] for b in tx), max(b[3] for b in tx)]
-    return {"ok": not probs, "safe": safe,
+        al = [v["all"] for v in m["views"] if v.get("all")]
+        if al:
+            whole = [min(b[0] for b in al), min(b[1] for b in al), max(b[2] for b in al), max(b[3] for b in al)]
+    return {"ok": not probs, "safe": safe, "all": whole, "place": place_words(whole),
+            "share": text_share(effect, w, h),
             "problems": [{k: p[k] for k in ("kind", "shape", "detail")} for p in probs],
             "text": union}
 
@@ -2087,7 +2242,9 @@ def refit_note(res: dict, w: int, h: int) -> str:
               "each way; every text must sit inside it and no shape may cut across a text. Fix "
               "exactly that and keep the rest — the words, the timing, the look. A text line is "
               "about characters × 0.65 × h × size of the frame's width: make h or size smaller, "
-              "move the event's x / y, or split the words over two lines. Keep a plate larger "
+              "move the event's x / y (the lower third sits at y 0.80-0.85, the top at 0.12-0.18, "
+              "centred at x 0.5; the box is `size` wide, so x = 0.05 + size/2 puts it at the left), "
+              "or split the words over two lines. Keep a plate larger "
               "than its words and an accent bar beside them.")
 
 
@@ -2108,6 +2265,10 @@ def refit(effect: dict, segments: list[dict], clips: dict | None = None, *, w: i
         note = refit_note(res, w, h)
         new = revise(effect, note, segments, clips)
         new["note"] = effect.get("note") or ""             # the editor's words stay the note
+        if effect.get("wants"):                            # …and so does the place they asked for
+            new["wants"] = effect["wants"]
+        else:
+            new.pop("wants", None)
         hist = list(effect.get("history") or [])
         hist.append({"note": note[:300], "at": _now(), "auto": "frame check"})
         new["history"] = hist
@@ -2166,7 +2327,7 @@ def apply_hand(effect: dict, edit: dict, *, w: int = 1920, h: int = 1080,
     ov = e.get("overlay")
     if not isinstance(edit, dict) or not edit:
         raise ValueError("nothing to change")
-    if not ov and any(k in edit for k in ("words", "size", "length", "fit")):
+    if not ov and any(k in edit for k in ("words", "size", "length", "fit", "text_height", "place")):
         raise ValueError("this effect draws nothing to change")
     events = e.get("events") or []
     if "words" in edit:
@@ -2210,6 +2371,20 @@ def apply_hand(effect: dict, edit: dict, *, w: int = 1920, h: int = 1080,
             if shot is not None:
                 t = min(max(t, float(shot[0])), float(shot[1]))
             ev["t"] = round(t, 3)
+    if "text_height" in edit:
+        # one size for every title: the text's height as a percent of the frame's height
+        target = _num(edit["text_height"], "text_height", 1, 60) / 100.0
+        for _ in range(4):
+            cur = text_share(e, w, h)
+            if not cur:
+                raise ValueError("this effect has no text to size")
+            if abs(cur - target) < 0.0015:
+                break
+            ov["size"] = round(min(MAX_SIZE, max(MIN_SIZE, ov["size"] * target / cur)), 4)
+    if isinstance(edit.get("place"), dict):
+        moved = move_to_place(e, edit["place"], w, h)
+        if moved is not None:
+            e = moved
     if edit.get("fit"):
         fitted = fit_to_frame(e, w, h)
         if fitted is None:
@@ -2302,6 +2477,28 @@ def _film_starts_of(segments: list[dict]) -> dict[str, float]:
 def _clock(t: float) -> str:
     m, sec = divmod(int(round(max(0.0, t))), 60)
     return f"{m}:{sec:02d}"
+
+
+def title_keep_actions(effects: list[dict], before: list[dict], after: list[dict]) -> list[dict]:
+    """For each title that opened the film (on the first shot, at the film's start) and no
+    longer would: `{"fx", "shot", "name", "words"}` — keeping it at the start is moving it to
+    the shot that will be first (wave 23, FINISH-08: "sticking to the shot is right for a name
+    super, wrong for an opening title"). A name super that was not at the start is not offered."""
+    if not effects or not before or not after:
+        return []
+    b0, a0 = _film_starts_of(before), _film_starts_of(after)
+    first = str(after[0].get("id"))
+    out = []
+    for e in effects:
+        sid = str(e.get("shot"))
+        key = text_key(e)
+        if not key or sid not in b0 or sid not in a0 or e.get("status") not in (None, "accepted", "proposed"):
+            continue
+        if b0[sid] < 0.05 and a0[sid] >= 0.05 and sid != first:
+            words = max((s.get("text") or "" for s in (e.get("overlay") or {}).get("shapes") or []
+                         if s.get("type") == "text"), key=len)
+            out.append({"fx": e.get("id"), "shot": first, "words": " / ".join(words.split("\n"))[:60]})
+    return out
 
 
 def title_notes(effects: list[dict], before: list[dict], after: list[dict]) -> list[str]:

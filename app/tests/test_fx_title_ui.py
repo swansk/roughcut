@@ -116,9 +116,9 @@ def test_the_hand_controls_change_the_effect_and_recheck_at_once(page):
     page.locator("#fx .fxhand button[data-hand-nudge='1,0']").click()
     got = wait_effect(page, e["id"], "e => e.events[0].x > 0.18")
     assert abs(got["events"][0]["x"] - 0.19) < 0.001
-    page.locator("#fx .fxhand input[data-hand=size]").evaluate(
-        "el => { el.value = 0.5; el.dispatchEvent(new Event('change', {bubbles: true})); }")
-    got = wait_effect(page, e["id"], "e => e.overlay.size === 0.5")
+    page.locator("#fx .fxhand input[data-hand=text_height]").evaluate(
+        "el => { el.value = 5; el.dispatchEvent(new Event('change', {bubbles: true})); }")
+    got = wait_effect(page, e["id"], "e => e.bounds && Math.abs(e.bounds.share - 0.05) < 0.004")
     assert got["bounds"]["by_hand"] is True and got["bounds"]["ok"] is True     # a short word, small: inside
     page.locator("#fx .fxhand input[data-hand=length]").evaluate(
         "el => { el.value = 3.5; el.dispatchEvent(new Event('change', {bubbles: true})); }")
@@ -168,8 +168,8 @@ def _fire(page, sel, value):
 def test_each_hand_change_to_a_title_is_one_undo_step_and_survives_a_reload(page):
     e = _accept_fitted(page)
     fid = e["id"]
-    _fire(page, "#fx .fxhand input[data-hand=size]", "0.5")
-    wait_effect(page, fid, "e => e.overlay.size === 0.5")
+    _fire(page, "#fx .fxhand input[data-hand=text_height]", "5")
+    wait_effect(page, fid, "e => e.bounds && Math.abs(e.bounds.share - 0.05) < 0.004")
     page.wait_for_selector("#fx .fxhand")
     _fire(page, "#fx .fxhand input[data-hand=x]", "40")
     wait_effect(page, fid, "e => Math.abs(e.events[0].x - 0.4) < 0.001")
@@ -183,11 +183,11 @@ def test_each_hand_change_to_a_title_is_one_undo_step_and_survives_a_reload(page
     page.keyboard.press("Control+z")                                   # the words only
     wait_effect(page, fid, "e => e.overlay.shapes.every(s => s.text === 'COPPER 2026')")
     got = wait_effect(page, fid, "e => e.status === 'accepted'")     # the title is still there
-    assert got["overlay"]["size"] == 0.5 and abs(got["events"][0]["x"] - 0.4) < 0.001
+    assert abs(got["bounds"]["share"] - 0.05) < 0.004 and abs(got["events"][0]["x"] - 0.4) < 0.001
     assert "title place" in (page.locator("#undo").get_attribute("title") or "")
     page.keyboard.press("Control+z")                                   # the place only
     got = wait_effect(page, fid, "e => Math.abs(e.events[0].x - 0.4) > 0.01")
-    assert got["overlay"]["size"] == 0.5
+    assert abs(got["bounds"]["share"] - 0.05) < 0.004
     page.keyboard.press("Control+Shift+z")                             # redo puts the place back
     wait_effect(page, fid, "e => Math.abs(e.events[0].x - 0.4) < 0.001")
     # past a reload: the step is still on the board's stack and still goes back on its own
@@ -199,7 +199,7 @@ def test_each_hand_change_to_a_title_is_one_undo_step_and_survives_a_reload(page
     page.evaluate("document.activeElement && document.activeElement.blur()")
     page.keyboard.press("Control+z")
     got = wait_effect(page, fid, "e => Math.abs(e.events[0].x - 0.4) > 0.01")
-    assert got["status"] == "accepted" and got["overlay"]["size"] == 0.5
+    assert got["status"] == "accepted" and abs(got["bounds"]["share"] - 0.05) < 0.004
 
 
 def test_a_number_box_that_cannot_read_what_was_typed_keeps_its_value_and_says_why(page):
@@ -243,3 +243,29 @@ def test_a_title_being_designed_has_a_stop_on_its_card_and_its_pill_and_leaves_n
     finally:
         GATE["on"].set()
         GATE["on"] = None
+
+
+def test_the_hand_fields_never_move_when_the_check_line_changes(page):
+    e = _design(page)                                         # off the frame: the check line says so
+    page.locator("#fx button[data-act=hand]").first.click()
+    page.wait_for_selector("#fx .fxhand")
+    page.wait_for_selector("#fx .fxcheck.bad", timeout=20000)
+    ys = []
+    for _ in range(2):
+        ys.append(page.locator("#fx .fxhand input[data-hand=x]").bounding_box()["y"])
+        h = page.locator("#fx .fxcheck").first.bounding_box()["height"]
+        page.locator("#fx button[data-act=fit]").first.click()              # ✗ becomes ✓ / checking…
+        wait_effect(page, e["id"], "e => e.bounds && e.bounds.ok === true")
+        page.wait_for_timeout(400)
+        assert page.locator("#fx .fxcheck").first.bounding_box()["height"] == h
+        break
+    ys.append(page.locator("#fx .fxhand input[data-hand=x]").bounding_box()["y"])
+    assert abs(ys[0] - ys[-1]) < 0.5, ys
+
+
+def test_the_card_says_where_the_title_really_is_in_words_and_one_size_scale(page):
+    e = _design(page)
+    page.locator("#fx button[data-act=fit]").first.click()
+    got = wait_effect(page, e["id"], "e => e.bounds && e.bounds.ok === true && !!e.bounds.place")
+    text = page.locator("#fx .fxreads").first.inner_text()
+    assert got["bounds"]["place"] in text and "% of the frame's height" in text

@@ -107,3 +107,4 @@
 section[data-tool=ask].aiup #askFold, section[data-tool=ask].aiup #askStory,
 section[data-tool=ask].aiup #askPanel, section[data-tool=ask].aiup #askFirst,
 section[data-tool=ask].aiup #lastAsk { display: none !important; }
+#aiReview .air-keep { display: block; cursor: pointer; }

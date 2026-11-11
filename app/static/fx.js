@@ -313,6 +313,8 @@
       if (name === 'preview') preview(e);
       else if (name === 'fit') {
         await hand(e, { fit: true });
+      } else if (name === 'moveplace') {
+        await hand(e, { place: e.wants });
       } else if (name === 'why' || name === 'moments' || name === 'hand') {
         const set = name === 'why' ? S.whyOpen : name === 'hand' ? S.handOpen : S.momentsOpen;
         if (name === 'hand') showGuides(e.id);
@@ -1064,20 +1066,33 @@
     shape_outside: 'a bar is cut off by the edge of the frame',
     cuts_text: 'a bar cuts across the words',
     text_overlap: 'two lines of words sit on each other',
+    place: 'it is not where you asked',
   };
   function boundsBad(e) { return e.bounds && e.bounds.ok === false && (e.bounds.problems || []).length ? e.bounds : null; }
-  function boundsLine(b) {
-    const p = b.problems[0];
-    return `<div class="fxcheck bad">✗ ${esc(BOUNDS_WORDS[p.kind] || 'the words are not inside the frame')}`
-      + ` <button class="fxlink" data-act="fit" title="shrink and move it, by hand, until the words are inside the safe area — no model is asked">Fit to frame</button></div>`;
+  const WANT_WORDS = (w) => {
+    if (!w) return '';
+    if (w.v === 'middle' && w.h === 'centre') return 'centre';
+    if (w.v && w.h) return `${w.v} ${w.h}`;
+    return w.v ? `${w.v} third` : w.h === 'centre' ? 'centre' : '';
+  };
+  // one line, always one line's height (CSS .fxcheck): the controls below never move when the check changes
+  function boundsLine(b, e, extra = '') {
+    const kinds = new Set(b.problems.map((p) => p.kind));
+    const p = b.problems.find((x) => x.kind === 'place') || b.problems[0];
+    const where = p.kind === 'place' && b.place ? ` — it is at the ${esc(b.place)}` : '';
+    const move = kinds.has('place') && e && e.wants
+      ? ` <button class="fxlink" data-act="moveplace" title="move it, by hand, to the ${esc(WANT_WORDS(e.wants))} — no model is asked">Move it to the ${esc(WANT_WORDS(e.wants))}</button>` : '';
+    const fit = [...kinds].some((k) => k !== 'place')
+      ? ` <button class="fxlink" data-act="fit" title="shrink and move it, by hand, until the words are inside the safe area — no model is asked">Fit to frame</button>` : '';
+    return `<div class="fxcheck bad">✗ ${esc(BOUNDS_WORDS[p.kind] || 'the words are not inside the frame')}${where}${extra}${move}${fit}</div>`;
   }
   function checkLine(e) {
     if (e.status === 'removed') return '';
     const b = boundsBad(e);              // measured on the drawn pixels, at once, before the proof renders
     const framed = !!(e.bounds && e.bounds.ok === true);
     // one true thing at each moment: checking…, ✓ inside the frame, or ✗ with the reason
-    if (S.checking.has(e.id)) return `<div class="fxcheck wait">checking…</div>` + (b ? boundsLine(b) : '');
-    if (b) return boundsLine(b);
+    if (S.checking.has(e.id)) return b ? boundsLine(b, e, ' · checking…') : `<div class="fxcheck wait">checking…</div>`;
+    if (b) return boundsLine(b, e);
     const v = e.verify;
     if (!v || !Array.isArray(v.checks)) return framed ? `<div class="fxcheck ok">✓ inside the frame</div>` : '';
     const bad = v.checks.find((c) => c.ok === false && (e.sound || !SOUND_CHECKS.includes(c.key)));
@@ -1117,10 +1132,11 @@
     const num = (k, v, min, max, step, unit) => `<input type="number" data-hand="${k}" data-good="${v}" min="${min}" max="${max}" step="${step}" value="${v}" aria-label="${k}">${unit}`;
     const arrows = [['←', -1, 0], ['↑', 0, -1], ['↓', 0, 1], ['→', 1, 0]]
       .map(([a, dx, dy]) => `<button class="nudge" data-hand-nudge="${dx},${dy}" title="one percent of the frame">${a}</button>`).join('');
+    const shareNow = e.bounds && e.bounds.share ? Math.round(e.bounds.share * 1000) / 10 : 8;
     return `<div class="fxhand" data-hand-for="${esc(e.id)}">`
       + words
-      + `<label class="fxh"><span>size</span><input type="range" data-hand="size" min="0.1" max="1.6" step="0.01" value="${Number(e.overlay.size)}">`
-      + `<output>${Number(e.overlay.size).toFixed(2)}</output></label>`
+      + `<label class="fxh"><span>size</span><input type="range" data-hand="text_height" min="2" max="40" step="0.5" value="${shareNow}">`
+      + `<output>${shareNow} %</output><span class="hint">text height, % of the frame's height</span></label>`
       + `<div class="fxh"><span>place</span>x ${num('x', Math.round(ev.x * 100), 0, 100, 1, '%')} y ${num('y', Math.round(ev.y * 100), 0, 100, 1, '%')} ${arrows}</div>`
       + `<div class="fxh"><span>in / out</span>in ${num('start', into.toFixed(2), 0, 3600, 0.04, ' s')} for ${num('length', Number(e.overlay.duration).toFixed(2), 0.1, 30, 0.1, ' s')}</div>`
       + `<div class="fxh fxhandmsg-row"><span></span><span class="fxhandmsg" role="status"></span></div>`
@@ -1130,8 +1146,8 @@
   }
 
   function handWhat(edit) {
-    return 'words' in edit ? 'words' : 'size' in edit ? 'size' : ('x' in edit || 'y' in edit || 'nudge' in edit) ? 'place'
-      : ('start' in edit || 'length' in edit) ? 'in / out' : edit.fit ? 'fit to frame' : 'change';
+    return 'words' in edit ? 'words' : ('size' in edit || 'text_height' in edit) ? 'size' : ('x' in edit || 'y' in edit || 'nudge' in edit) ? 'place'
+      : ('start' in edit || 'length' in edit) ? 'in / out' : (edit.fit || edit.place) ? 'fit to frame' : 'change';
   }
 
   async function hand(e, edit) {
@@ -1179,6 +1195,13 @@
     ctx.fillStyle = 'rgba(255,255,255,.85)';
     ctx.font = `${Math.max(10, Math.round(W / 70))}px system-ui, sans-serif`;
     ctx.fillText('title-safe', SAFE * W + 6, SAFE * H + Math.max(12, W / 60));
+    const al = e && e.bounds && e.bounds.all;
+    if (al) {                                  // everything the effect draws (plate and bars too)
+      ctx.setLineDash([W / 160, W / 160]);
+      ctx.strokeStyle = 'rgba(120,200,255,.9)';
+      ctx.strokeRect(al[0] * W, al[1] * H, (al[2] - al[0]) * W, (al[3] - al[1]) * H);
+      ctx.setLineDash([]);
+    }
     const t = e && e.bounds && e.bounds.text;
     if (t) {
       ctx.strokeStyle = e.bounds.ok ? 'rgba(80,220,120,.9)' : 'rgba(255,90,90,.95)';
@@ -1223,6 +1246,7 @@
     return `<div class="fxwhybox">`
       + (e.note ? `<div class="fxnote">“${esc(named(e.note))}”</div>` : '')
       + (e.says && e.why ? `<div class="hint">${esc(named(e.why))}</div>` : '')
+      + (!e.says && e.why && e.bounds && e.bounds.place ? `<div class="hint">the designer says: ${esc(named(e.why))} (where it really sits is measured: ${esc(e.bounds.place)})</div>` : '')
       + (e.limits && e.status !== 'proposed' ? `<div class="hint">couldn't: ${esc(named(e.limits))}</div>` : '')
       + (v && Array.isArray(v.checks) && v.checks.length
         ? `<ul class="fxchecks">${v.checks.filter((c) => e.sound || !SOUND_CHECKS.includes(c.key)).map(checkRow).join('')}</ul>` : '')
@@ -1241,7 +1265,10 @@
     const proposed = e.status === 'proposed';
     const removed = e.status === 'removed';
     const prev = Array.isArray(e.previous) ? e.previous.length : 0;
-    const says = named(e.says || e.why || '');
+    // for a title the words about WHERE it sits and how big come from the measured box, never from
+    // the designer's description (FINISH-05: the card said "lower left" over a plate in the middle right)
+    const measured = textsOf(e).length && e.bounds && e.bounds.place;
+    const says = measured && !e.says ? '' : named(e.says || e.why || '');
     const moments = hasMoments(e) && !removed && (proposed || S.momentsOpen.has(e.id));
     const why = `<button class="fxlink" data-act="why">why? ${S.whyOpen.has(e.id) ? '▾' : '▸'}</button>`
       + (canHand(e) ? `<button class="fxlink" data-act="hand" title="the words, the size, the place, in and out — by hand, no model asked">edit by hand ${S.handOpen.has(e.id) ? '▾' : '▸'}</button>` : '');
@@ -1273,10 +1300,12 @@
       // what the model says it did not do, on the waiting card itself: "✓ checked" is the
       // free check of what was made, not of what was asked, and this shortfall is what
       // Accept vs Change turns on — behind why? ▸ it read as checked and complete
-      + (textsOf(e).length ? `<div class="fxreads" title="the words the effect draws — spelled as they are drawn; edit them by hand">reads ${textsOf(e).map((t) => `“${esc(t.replace(/\n/g, ' / '))}”`).join(' · ')}</div>` : '')
+      + (textsOf(e).length ? `<div class="fxreads" title="the words the effect draws — spelled as they are drawn; edit them by hand">reads ${textsOf(e).map((t) => `“${esc(t.replace(/\n/g, ' / '))}”`).join(' · ')}`
+        + (e.bounds && e.bounds.place ? ` · ${esc(e.bounds.place)}` : '')
+        + (e.bounds && e.bounds.share ? ` · text ${Math.round(e.bounds.share * 1000) / 10} % of the frame's height` : '') + `</div>` : '')
       + (proposed && e.limits ? `<div class="fxlimits">didn't: ${esc(named(e.limits))}</div>` : '')
       + (proposed && Array.isArray(e.replaces) && e.replaces.length ? `<div class="fxlimits">replaces the earlier ${e.replaces.length === 1 ? 'one' : `${e.replaces.length}`} with the same words — Accept takes ${e.replaces.length === 1 ? 'it' : 'them'} out</div>` : '')
-      + checkLine(e)
+      + (checkLine(e) || (S.handOpen.has(e.id) ? '<div class="fxcheck"></div>' : ''))
       + (moments ? momentsHtml(e) : '')
       + handHtml(e)
       + btns + iter
@@ -1736,7 +1765,7 @@
   }
 
   const NUMBER_RULE = { x: [0, 100, 'a number from 0 to 100'], y: [0, 100, 'a number from 0 to 100'],
-    size: [0.1, 1.6, 'a number from 0.1 to 1.6'], start: [0, 3600, 'a number of seconds, 0 or more'],
+    size: [0.1, 1.6, 'a number from 0.1 to 1.6'], text_height: [1, 60, 'a number from 1 to 60'], start: [0, 3600, 'a number of seconds, 0 or more'],
     length: [0.1, 30, 'a number of seconds from 0.1 to 30'] };
   /* Why a number box's text cannot be used, or '' (typing "abc" read as 0 and put a title half
    * off the frame): empty, not a number, or outside what the field takes. */
@@ -1756,7 +1785,7 @@
     const card = t.closest('.fxcard');
     const eff = card ? byId(card.dataset.id) : null;
     if (!eff || !k) return;
-    if (t.type === 'range') { const o = t.parentElement.querySelector('output'); if (o) o.textContent = Number(t.value).toFixed(2); }
+    if (t.type === 'range') { const o = t.parentElement.querySelector('output'); if (o) o.textContent = t.dataset.hand === 'text_height' ? `${Number(t.value)} %` : Number(t.value).toFixed(2); }
     if (e.type !== 'change') { showGuides(eff.id); return; }     // typed or dragged: guides now, the call on release
     const bad = badNumber(t, k);
     const msg = t.closest('.fxhand').querySelector('.fxhandmsg');
@@ -1777,6 +1806,7 @@
       if (!to) { say('a title cannot be empty — remove the effect instead'); paint(true); return; }
       if (to !== t.dataset.from) edit = { words: { [t.dataset.from]: to } };
     } else if (k === 'size') edit = { size: Number(t.value) };
+    else if (k === 'text_height') edit = { text_height: Number(t.value) };
     else if (k === 'x' || k === 'y') edit = { [k]: Number(t.value) / 100 };
     else if (k === 'start') {
       const sg = seg(eff.shot);
@@ -2508,8 +2538,22 @@
     window.fx.ready = true;
   }
 
+  /* A title moved to another shot, no model (POST /api/fx/move), as one undo step: "keep the
+   * title at the start of the film" in a proposal's review (actions.js). */
+  async function moveTitle(id, shot) {
+    const n = await api('POST', '/api/fx/move', { id, shot });
+    const k = S.effects.findIndex((x) => x.id === id);
+    if (k >= 0) S.effects[k] = n; else S.effects.push(n);
+    const t = TL();
+    if (n.hand_entry && t && typeof t.mark === 'function') t.mark('title kept at the start', n.hand_entry.tag);
+    paint(true);
+    refresh();
+    return n;
+  }
+
   window.fx = {
     ready: false,
+    moveTitle,
     refresh,
     badge,
     focus,
