@@ -7368,6 +7368,18 @@ async function boot() {
  * copy, or in the next bin's cut. The board has no in-place reload; the switcher
  * reloads the page and boot() reads the new cut. */
 window.roughcutFlush = flushSave;
+/* (wave 23 FILM) clips whose rotation decision moved: dock.js has given their entries the new
+ * proxy / poster URLs. The Program re-cues the shot it is parked on (a different URL: the buffer
+ * opens the rebuilt file at the same clip second), and the timeline repaints its strips. */
+window.rcRotationMoved = (names) => {
+  const seg = segs[player.idx];
+  const v = liveVideo();
+  if (seg && names.includes(seg.clip) && v) {
+    const t = Number.isFinite(v.currentTime) && v.currentTime > 0 ? v.currentTime : seg.in;
+    cueAt(player.idx, t);
+  }
+  tl.render();
+};
 window.rcCutShots = () => segs.length;          // flow.js: Next never offers a first cut over one
 
 /* Re-read the cut from disk and repaint it in place (INTAKE M16, C5) — the timeline, the

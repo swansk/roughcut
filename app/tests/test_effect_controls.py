@@ -489,3 +489,23 @@ def test_the_fx_stack_bypasses_and_orders_designed_effects(live_server, project)
         assert pg.evaluate("segs[0].controls") is None
         assert pg._errors == []
         browser.close()
+
+
+def test_a_quarter_turn_offers_one_click_fill_and_nothing_otherwise(page):
+    """(wave 23 FILM) Rotation of a quarter turn shows "Fill the frame" beside it: one click sets
+    the Scale that covers the frame (a 16:9 shot turned 90° needs 177.8 %), one undo. At any other
+    rotation the row is not in view."""
+    select_first(page)
+    fill = page.locator("#inspector .ec-fillrow")
+    assert not fill.is_visible()
+    type_value(page, "rotation", 90)
+    assert fill.is_visible()
+    errs = []
+    page.on("pageerror", lambda e: errs.append(str(e)))
+    page.locator("#inspector [data-fillscale]").click()
+    assert errs == [], errs
+    assert page.evaluate("effects.value('scale')") == pytest.approx(177.8, abs=0.1)
+    type_value(page, "rotation", 30)
+    assert not fill.is_visible()
+    type_value(page, "rotation", 270)
+    assert fill.is_visible()

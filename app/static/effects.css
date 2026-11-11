@@ -244,3 +244,7 @@
 #tl .tl-lane[data-lane=V1] .blk.has-vfx::before { content: 'fx'; position: absolute; right: 3px; top: 2px; z-index: 3;
   font: italic 600 9px/11px ui-sans-serif, system-ui, sans-serif; color: #f0d36a; border: 1px solid rgba(240,211,106,.8);
   border-radius: 2px; padding: 0 2px; background: rgba(0,0,0,.5); pointer-events: none; }
+
+/* (wave 23 FILM) "Fill the frame" beside Rotation, only while it is a quarter turn */
+.ec-fillrow[hidden] { display: none; }
+.ec-fillbtn { grid-column: 2 / -1; justify-self: start; font-size: 11px; }
