@@ -898,6 +898,65 @@ def test_accepting_a_title_is_one_ctrl_z_and_ctrl_shift_z_puts_it_back(page, pro
     assert record()["status"] == "proposed"
 
 
+def test_an_accepted_title_walks_the_stored_history_across_a_reload(page, project):
+    """Wave 23 SAFE: the undo history is kept past a reload. A title accepted is an entry
+    `effect: <name>` whose undo is the SERVER's (POST /api/fx/undo): after a reload the page no
+    longer remembers making it, so the entry must still reach its effect. Ctrl+Z then puts the
+    title back to a proposal and the EDL as it was, Ctrl+Shift+Z accepts it again, and the trim
+    under it is still there."""
+    import server
+
+    def edl():
+        return json.loads(Path(project["edl"]).read_text(encoding="utf-8"))
+
+    def wait_until(pred, what, timeout=10.0):
+        end = time.time() + timeout
+        while time.time() < end:
+            try:
+                got = pred()
+                if got:
+                    return got
+            except ValueError:
+                pass
+            time.sleep(0.1)
+        raise AssertionError(f"{what} never happened: {edl()}")
+
+    sid1, sid2 = shot_ids(page)
+    page.evaluate(f"tl.setRange('{sid1}', 1.5, null)")
+    wait_until(lambda: edl()["segments"][0]["in"] == 1.5, "the trim's save")
+    fx.save(server.fx_home(), {
+        "id": "fx_title2", "shot": sid2, "clip": "CLIP_B.MP4", "name": "SEND IT pop-in title with a fade",
+        "note": "a big white SEND IT title", "why": "",
+        "events": [{"t": 0.0, "x": 0.5, "y": 0.3, "label": "shot start"}],
+        "overlay": {"duration": 2.0, "size": 0.5,
+                    "shapes": [{"type": "text", "text": "SEND IT", "h": 0.3, "fade": 0.2}]},
+        "sound": None, "status": "proposed", "created": "2026-10-19T09:00:00"})
+    open_fx(page, 1)
+    page.evaluate("fx.refresh()")
+    wait_effect(page, "fx_title2", "e => !!e.verify", timeout=20)
+    page.locator("#fx .fxcard[data-id='fx_title2'] button[data-act=accept]").click()
+    wait_until(lambda: [e for e in edl().get("effects") or [] if e["id"] == "fx_title2"], "the accept")
+    page.wait_for_function("(document.querySelector('#undo').title || '').startsWith('undo: effect: ')")
+    page.wait_for_timeout(900)                                   # the history is written a moment after
+
+    page.reload()
+    page.wait_for_selector("#tl .blk")
+    page.wait_for_function("(document.querySelector('#undo').title || '').startsWith('undo: effect: ')", timeout=10000)
+    page.wait_for_function("window.fx && fx.refresh")
+    page.evaluate("fx.refresh()")
+    page.evaluate("document.activeElement && document.activeElement.blur()")
+    page.keyboard.press("Control+z")
+    wait_until(lambda: fx.load(server.fx_home(), "fx_title2")["status"] == "proposed", "the title going back")
+    wait_until(lambda: "effects" not in edl(), "the EDL going back")
+    assert page.locator("#undo").get_attribute("title") == "undo: trim (Ctrl+Z)"
+    page.keyboard.press("Control+Shift+z")
+    wait_until(lambda: fx.load(server.fx_home(), "fx_title2")["status"] == "accepted", "the redo")
+    page.keyboard.press("Control+z")
+    wait_until(lambda: fx.load(server.fx_home(), "fx_title2")["status"] == "proposed", "the second undo")
+    page.keyboard.press("Control+z")
+    wait_until(lambda: edl()["segments"][0]["in"] == 1.0, "the trim's undo")
+
+
 def test_a_proposal_waiting_when_the_board_opens_is_checked_by_itself(page):
     """INTAKE M16 I16.5: the free check runs itself. The server checks every new design,
     and the tool checks a proposal made before it did — but the tool read /api/fx at

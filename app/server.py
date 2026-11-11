@@ -52,6 +52,7 @@ import gc
 import json
 import math
 import mimetypes
+import hashlib
 import os
 import re
 import shutil
@@ -3437,7 +3438,8 @@ def _ask_run(entry, job: str, segments: list[dict], clips: dict, story: str, not
     # `waits`: this proposal stays waiting until the editor answers it or a newer one
     # replaces it; `cut`: the cut it was made against, which it waits for (wave 23 SAFE)
     record = {"job": job, "created": time.time(), "note": note, "story": story,
-              "plan": plan, "waits": True, "cut": str(STATE["edl"])}
+              "plan": plan, "waits": True, "cut": str(STATE["edl"]),
+              "base": cut_sig(segments)}
     path = STATE["asks"] / f"{job}.json"
     # The one that was waiting is kept, marked replaced: the Assistant lists it
     bumped = ask_replace_waiting(job)
@@ -3637,8 +3639,20 @@ def api_asks_recent() -> JSONResponse:
 
 @app.get("/api/asks/{job}")
 def api_asks_one(job: str) -> JSONResponse:
-    """One proposal's record, whole, from disk (the memory of a job is gone after a restart)."""
-    return JSONResponse({"record": ask_record(job)[1]})
+    """One proposal's record, whole, from disk (the memory of a job is gone after a restart),
+    and whether the cut has changed since it was made (`stale`; `now` is the server's clock)."""
+    rec = ask_record(job)[1]
+    return JSONResponse({"record": rec, "stale": ask_stale(rec), "same": ask_same(rec),
+                         "now": time.time()})
+
+
+@app.post("/api/asks/undone")
+async def api_asks_undone(request: Request) -> JSONResponse:
+    """The board's undo (or redo) of an accept, by the label of its undo entry: the record
+    says "accepted, then undone" (or "accepted" again)."""
+    body = await request.json()
+    out = mark_undone((body or {}).get("label"), bool((body or {}).get("redo")))
+    return JSONResponse({"ok": True, "marked": out})
 
 
 @app.post("/api/asks/reopen")
@@ -3685,6 +3699,10 @@ def stop_job(job: str) -> dict:
         if scope is not None:
             threading.Thread(target=scope.kill, daemon=True, name=f"stop-{job}").start()
         return {"ok": True, "job": job, "state": "cancelled", "stopped": True, "said": said}
+    if job in ASSISTS:
+        r = json.loads(api_assist_cancel(job).body)
+        return {"ok": True, "job": job, "state": "cancelled" if r.get("ok") else r.get("status"),
+                "stopped": bool(r.get("ok")), "said": r.get("said") or f"it had already {r.get('status')}"}
     if job in FX:
         out = _fx_cancel(job)
         return {**out, "stopped": out.get("state") == "cancelled",
@@ -3750,7 +3768,7 @@ async def api_undo_put(request: Request) -> JSONResponse:
         for e in body.get(key) or []:
             if (isinstance(e, dict) and isinstance(e.get("label"), str)
                     and isinstance(e.get("before"), str) and isinstance(e.get("after"), str)):
-                out.append({k: e[k] for k in ("label", "before", "after", "tag") if k in e})
+                out.append({k: e[k] for k in ("label", "before", "after", "tag", "at") if k in e})
         return out
 
     rec = {"head": body.get("head") if isinstance(body.get("head"), str) else None,
@@ -3778,7 +3796,8 @@ def reopen_ask(job: str) -> dict:
     rec.setdefault("cut", str(STATE["edl"]))
     rec["reopened"] = time.time()
     _ask_save(path, rec)
-    return {"ok": True, "job": job, "record": rec, "replaced": replaced}
+    return {"ok": True, "job": job, "record": rec, "replaced": replaced,
+            "stale": ask_stale(rec), "same": ask_same(rec), "now": time.time()}
 
 
 # ---------------------------------------------------------------- find a moment
@@ -5045,23 +5064,60 @@ def _ask_save(path: Path, rec: dict, *, keep_mtime: bool = False) -> None:
         os.utime(path, stamp)
 
 
+def cut_sig(segments: list[dict] | None) -> str:
+    """The cut as a proposal sees it: each shot's clip, range and speed, in order. A proposal
+    records the cut it was made from; accepting it replaces the cut as it is now (wave 23)."""
+    rows = [[str(x.get("clip")), round(float(x.get("in") or 0), 3), round(float(x.get("out") or 0), 3),
+             round(float(x.get("speed") or 1), 3)]
+            for x in (segments or []) if isinstance(x, dict) and "in" in x and "out" in x]
+    return hashlib.sha1(json.dumps(rows).encode()).hexdigest()[:16]
+
+
+def ask_same(rec: dict, saved: list[dict] | None = None) -> bool:
+    """The cut on disk already holds this proposal's shots: accepting it changes nothing."""
+    plan = rec.get("plan") or {}
+    if plan.get("unchanged"):
+        return False
+    if saved is None:
+        try:
+            saved = fpmod._segments(read_edl())
+        except (OSError, ValueError):
+            return False
+    return fpmod.is_accept(saved, plan.get("segments") or [])
+
+
+def ask_stale(rec: dict, saved: list[dict] | None = None) -> bool:
+    """The cut has changed since this proposal was made from it (so accepting it would put
+    the cut back as it was then, and the changes since go)."""
+    plan = rec.get("plan") or {}
+    base = rec.get("base")
+    if not base or plan.get("unchanged"):
+        return False
+    if saved is None:
+        try:
+            saved = fpmod._segments(read_edl())
+        except (OSError, ValueError):
+            return False
+    return cut_sig(saved) != base
+
+
 def ask_status(rec: dict, saved: list[dict] | None = None) -> str:
     """Where one proposal stands: waiting | accepted | discarded | replaced.
 
     A record made since proposals were kept (`waits`) waits until it is ANSWERED or
     REPLACED, whatever else happens to the cut (a save, a saved copy, an index run: wave 23
-    SAFE, CLUMSY-09, FINDER-20). The one inference: a cut on disk that is exactly the
-    proposal's shots is that proposal accepted (an Accept whose answer never landed).
+    SAFE, CLUMSY-09, FINDER-20). Nothing is inferred from the cut.
     A record from before that is read by the old rule, in `ask_pending`."""
     ans = rec.get("answered")
     if isinstance(ans, dict) and ans.get("answer"):
-        return "accepted" if ans["answer"] == "accept" else "discarded"
+        if ans["answer"] == "accept":
+            return "undone" if ans.get("undone") else "accepted"
+        return "discarded"
     if rec.get("replaced"):
         return "replaced"
-    plan = rec.get("plan") or {}
-    if saved is not None and not plan.get("unchanged") and fpmod.is_accept(
-            saved, plan.get("segments") or []):
-        return "accepted"
+    # Never inferred: a proposal is waiting until the editor answers it or a later job replaces
+    # it. A cut that happens to hold the proposal's shots is not an Accept (wave 23, finder 8):
+    # the card says "this is the cut you already have" (`ask_same`) instead.
     return "waiting"
 
 
@@ -5105,9 +5161,41 @@ def ask_pending(edl_mtime: float) -> dict | None:
 ASK_RECENT_N = 8
 
 
+def _assist_rows() -> list[dict]:
+    """The prompt box's itemised edits (the AI edit card), as proposals too: ready, accepted,
+    set aside, or accepted and then undone."""
+    rows = []
+    try:
+        files = list(assist_home().glob("*.json"))
+    except OSError:
+        return rows
+    for path in files:
+        rec = _ask_load(path)
+        res = (rec or {}).get("result") or {}
+        if not rec or rec.get("status") != "done" or res.get("kind") != "ops" or not res.get("ops"):
+            continue
+        if rec.get("cut") and rec.get("cut") != assist_cut():
+            continue                    # another cut's edits are not this cut's list (a new cut starts its own)
+        ans = rec.get("answer") if isinstance(rec.get("answer"), dict) else None
+        if ans is None:
+            status = "waiting"
+        elif ans.get("accepted"):
+            status = "undone" if ans.get("undone") else "accepted"
+        else:
+            status = "discarded"
+        words, plan = revise.split_note(str(rec.get("text") or ""))
+        rows.append({"job": rec.get("job"), "created": rec.get("created"), "note": words[:160],
+                     "plan": "", "shots": len(res["ops"]), "colour_only": False, "kind": "edits",
+                     "edits": len(res["ops"]), "status": status, "cut": None, "this_cut": True, "reopen": True,
+                     "replaced_by": None, "partial": False, "stale": False,
+                     "_at": float(rec.get("created") or 0)})
+    return rows
+
+
 def asks_recent(n: int = ASK_RECENT_N) -> list[dict]:
     """The last few proposals of this bin, newest first, with where each stands: the
-    Assistant's list (any of them can be reopened). No plans: those are one fetch away."""
+    Assistant's list (any of them can be reopened). No plans: those are one fetch away.
+    Whole-cut proposals and the prompt box's itemised edits are listed together."""
     try:
         saved = fpmod._segments(read_edl())
     except (OSError, ValueError):
@@ -5125,56 +5213,59 @@ def asks_recent(n: int = ASK_RECENT_N) -> list[dict]:
             status = ask_status(rec, saved if _ask_for_this_cut(rec) else None)
         else:
             ans = rec.get("answered")
-            status = ("accepted" if isinstance(ans, dict) and ans.get("answer") == "accept"
+            status = (("undone" if ans.get("undone") else "accepted")
+                      if isinstance(ans, dict) and ans.get("answer") == "accept"
                       else "discarded" if isinstance(ans, dict) and ans.get("answer")
                       else "waiting" if rec.get("job") == (pend or {}).get("job")
                       else "replaced")
         cut = rec.get("cut")
+        words, brief = revise.split_note(str(rec.get("note") or ""))
         rows.append({
             "job": rec.get("job"), "created": rec.get("created"),
-            "note": revise.split_note(rec.get("note") or "")[0][:160],
+            "note": words[:160], "plan": brief[:400], "kind": "cut",
             "shots": len(plan["segments"]), "colour_only": bool(plan.get("unchanged")),
             "status": status, "cut": Path(cut).name.removesuffix(CUT_SUFFIX) if cut else None,
-            "this_cut": _ask_for_this_cut(rec),
+            "this_cut": _ask_for_this_cut(rec), "reopen": True,
             "replaced_by": (rec.get("replaced") or {}).get("by"),
-            "partial": bool(((rec.get("answered") or {}).get("partial")))})
-        if len(rows) >= n:
-            break
-    more = _assist_recent(n)            # the prompt box's own proposals, beside the re-cuts
-    if more:
-        rows = sorted(rows + more, key=lambda r: -(r.get("created") or 0))
+            "stale": _ask_for_this_cut(rec) and ask_stale(rec, saved),
+            "same": _ask_for_this_cut(rec) and ask_same(rec, saved),
+            "answered_at": (rec.get("answered") or {}).get("at"),
+            "partial": bool(((rec.get("answered") or {}).get("partial"))),
+            "_at": path.stat().st_mtime})
+    rows.extend(_assist_rows())
+    rows.sort(key=lambda r: r["_at"], reverse=True)
+    for r in rows:
+        r.pop("_at", None)
     return rows[:n]
 
 
-def _assist_recent(n: int) -> list[dict]:
-    """The prompt box's edit proposals of this cut as rows of the Assistant's list: the editor's
-    words, how many edits, and what became of them. They cannot be opened again (`reopen`
-    false): their edits were reviewed in place."""
-    cut = assist_cut()
-    rows = []
-    try:
-        files = sorted(assist_home().glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:60]
-    except OSError:
-        return []
-    for path in files:
-        try:
-            rec = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        res = rec.get("result") or {}
-        if rec.get("status") != "done" or rec.get("cut") != cut or res.get("kind") != "ops" or not res.get("ops"):
-            continue
-        ans = rec.get("answer")
-        took, left = len((ans or {}).get("accepted") or []), len((ans or {}).get("rejected") or [])
-        status = ("waiting" if ans is None and not rows else "replaced" if ans is None
-                  else "accepted" if took and not left else "partial" if took else "discarded")
-        rows.append({"job": rec.get("job"), "created": rec.get("created"), "note": str(rec.get("text") or "")[:160],
-                     "shots": None, "edits": len(res["ops"]), "colour_only": False, "status": status,
-                     "cut": cut, "this_cut": True, "reopen": False, "replaced_by": None,
-                     "partial": status == "partial"})
-        if len(rows) >= n:
-            break
-    return rows
+def mark_undone(label: str, redo: bool) -> dict | None:
+    """The editor's Ctrl+Z took back the accept that carried this label: the newest accepted
+    proposal (a whole cut or the prompt box's edits) that has it says "accepted, then undone";
+    a redo says "accepted" again."""
+    label = str(label or "")
+    cands = []
+    for path in STATE["asks"].glob("*.json"):
+        rec = _ask_load(path)
+        ans = (rec or {}).get("answered")
+        if isinstance(ans, dict) and ans.get("answer") == "accept":
+            cands.append((path, rec, ans, "proposal"))
+    for path in assist_home().glob("*.json"):
+        rec = _ask_load(path)
+        ans = (rec or {}).get("answer")
+        if isinstance(ans, dict) and ans.get("accepted"):
+            cands.append((path, rec, ans, ans.get("label") or ""))
+    cands = [c for c in cands if c[3] == label and bool(c[2].get("undone")) == redo]
+    if not cands:
+        return None
+    key = (lambda c: float(c[2].get("undone") or 0)) if redo else (lambda c: float(c[2].get("at") or 0))
+    path, rec, ans, _ = max(cands, key=key)
+    if redo:
+        ans.pop("undone", None)
+    else:
+        ans["undone"] = time.time()
+    _ask_save(path, rec, keep_mtime=True)
+    return {"job": rec.get("job"), "undone": not redo}
 
 
 def _edl_mtime() -> float:
@@ -5790,6 +5881,8 @@ def answer_ask(body: dict) -> dict:
         return {"ok": True, "job": None}
     rec = json.loads(files[0].read_text(encoding="utf-8"))
     rec["answered"] = {"answer": answer, "at": time.time()}
+    if answer == "accept":
+        rec["answered"]["label"] = str(body.get("label") or "proposal")
     partial = body.get("partial")
     if answer == "accept" and isinstance(partial, dict):
         rec["answered"]["partial"] = partial      # which shots the Accept took (PICKS)
@@ -18286,6 +18379,12 @@ def clean_scope(raw) -> dict:
     return out
 
 
+def _assist_said() -> str:
+    """What the prompt's Stop did, in the words every AI job's Stop uses."""
+    return ("Stopped — nothing was changed, the call was ended, no answer will arrive"
+            + ("; the call already sent still ends and is billed to the API key" if config.charges_money() else "") + ".")
+
+
 def _assist_record_path(job: str) -> Path:
     if not re.fullmatch(r"[0-9a-f]{8,32}", job or ""):
         raise HTTPException(404, "no such job")
@@ -18608,6 +18707,15 @@ def _assist_looker(job: str, entry, state: dict):
 
 
 def _assist_job(job: str, text: str, scope: dict) -> None:
+    procs = ASK_SCOPES.setdefault(job, procscope.Scope(f"assist {job}"))
+    try:
+        with procscope.active(procs):          # the prompt's Stop kills the call (wave 23 SAFE)
+            _assist_run(job, text, scope)
+    finally:
+        ASK_SCOPES.pop(job, None)
+
+
+def _assist_run(job: str, text: str, scope: dict) -> None:
     entry = ASSISTS[job]
     record = {"job": job, "created": time.time(), "text": text, "scope": scope,
               "cut": entry.get("cut") or ""}
@@ -18739,6 +18847,9 @@ async def api_assist_event(request: Request) -> JSONResponse:
     if kind not in ("undo", "redo"):
         raise HTTPException(400, "kind must be undo or redo")
     await asyncio.to_thread(assist_note_event, kind, body.get("label") or "")
+    # One source for what was taken back: the same event marks the proposal's record "accepted,
+    # then undone" (or accepted again), so the list and the ledger the AI reads agree (wave 23)
+    await asyncio.to_thread(mark_undone, body.get("label") or "", kind == "redo")
     return JSONResponse({"ok": True})
 
 
@@ -18862,7 +18973,22 @@ def api_assist_cancel(job: str) -> JSONResponse:
         _assist_write(job, {"job": job, "created": entry.get("started"), "text": entry.get("text"),
                             "scope": entry.get("scope"), "cut": entry.get("cut") or "", "status": "cancelled",
                             "error": "cancelled by the editor"})
-    return JSONResponse({"ok": True, "status": "cancelled"})
+    killer = ASK_SCOPES.get(job)
+    if killer is not None:                       # the call itself is ended, not only ignored
+        threading.Thread(target=killer.kill, daemon=True, name=f"stop-{job}").start()
+    return JSONResponse({"ok": True, "status": "cancelled", "said": _assist_said()})
+
+
+@app.post("/api/assist/{job}/reopen")
+def api_assist_reopen(job: str) -> JSONResponse:
+    """Set-aside edits come back for review: the answer is taken off the record."""
+    path = _assist_record_path(job)
+    rec = _ask_load(path) if path.exists() else None
+    if rec is None:
+        raise HTTPException(404, "no such job")
+    rec.pop("answer", None)
+    _assist_write(job, rec)
+    return JSONResponse(_assist_view(job))
 
 
 @app.post("/api/assist/{job}/answer")
@@ -18891,6 +19017,8 @@ async def api_assist_answer(job: str, request: Request) -> JSONResponse:
     if set(acc) & set(rej):
         raise HTTPException(400, "an op cannot be both accepted and rejected")
     rec["answer"] = {"accepted": acc, "rejected": rej, "at": time.time()}
+    if acc and body.get("label"):
+        rec["answer"]["label"] = str(body["label"])
     _assist_write(job, rec)
     if acc and rec.get("cut") == assist_cut():          # the change joins the cut's complete ledger
         res = rec.get("result") or {}

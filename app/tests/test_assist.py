@@ -365,7 +365,8 @@ def test_a_cancelled_ask_drops_its_answer(board):
                                     "ops": [{"op": "marker", "at": 1.0}]}, gate=gate))
     job = c.post("/api/assist", json={"text": "a marker"}).json()["job"]
     r = c.post(f"/api/assist/{job}/cancel")
-    assert r.status_code == 200 and r.json() == {"ok": True, "status": "cancelled"}
+    assert r.status_code == 200 and r.json()["ok"] is True and r.json()["status"] == "cancelled"
+    assert "no answer will arrive" in r.json()["said"]
     d = c.get(f"/api/assist/{job}").json()
     assert d["status"] == "cancelled" and d["error"] == "cancelled by the editor"
     gate.set()

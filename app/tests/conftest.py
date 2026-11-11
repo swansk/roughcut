@@ -138,17 +138,23 @@ def no_job_carried_over():
 
 @pytest.fixture(autouse=True)
 def no_undo_history_carried_over():
-    """Every test starts with nothing to undo. The board keeps the undo history with the cut
-    (wave 23 SAFE) and takes it back when the same cut loads again; the suite seeds the same
-    cut for every test, so one test's history would be the next one's."""
-    server = sys.modules.get("server")
-    state = getattr(server, "STATE", None) if server is not None else None
-    if state and state.get("edl") and state.get("work"):
-        try:
-            server.undo_path().unlink(missing_ok=True)
-        except (OSError, KeyError):
-            pass
+    """Every test starts with nothing to undo and no proposal waiting. The board keeps the undo
+    history with the cut and takes it back when the same cut loads again, and a proposal waits
+    until it is answered (wave 23 SAFE); the suite seeds the same cut for every test, so one
+    test's history or waiting proposal would be the next one's."""
+    def clean():
+        server = sys.modules.get("server")
+        state = getattr(server, "STATE", None) if server is not None else None
+        if state and state.get("edl") and state.get("work"):
+            try:
+                server.undo_path().unlink(missing_ok=True)
+                for left in state["asks"].glob("*.json"):
+                    left.unlink()
+            except (OSError, KeyError):
+                pass
+    clean()
     yield
+    clean()
 
 
 @pytest.fixture(autouse=True)

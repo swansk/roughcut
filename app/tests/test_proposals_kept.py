@@ -154,15 +154,24 @@ def test_a_saved_copy_does_not_drop_the_proposal_it_waits_for_its_cut(client, mo
     assert again["pending"] is True and again["record"]["job"] == job
 
 
-def test_a_cut_equal_to_the_proposal_is_that_proposal_accepted(client, model, clean_asks):
-    """An Accept whose answer never landed: the cut on disk is the proposal's shots."""
+def test_a_cut_equal_to_the_proposal_is_not_an_accept(client, model, clean_asks):
+    """Finder 8: nothing is inferred. A cut that holds the proposal's shots leaves it waiting
+    (through a switch of cuts and back); the reply says it is the cut already there."""
     job = _ask(client, model, PLAN_A)
     edl = clean_asks.read_edl()
     plan = client.get(f"/api/asks/{job}").json()["record"]["plan"]["segments"]
-    edl["segments"] = [dict(s) for s in plan]          # what the board's Accept saves, verbatim
+    edl["segments"] = [dict(s) for s in plan]
     clean_asks.write_edl(edl)
+    assert _status(client, job) == "waiting"
+    got = client.get(f"/api/asks/{job}").json()
+    assert got["same"] is True
+    assert client.get("/api/asks/latest").json()["pending"] is True
+    client.post("/api/asks/answer", json={"answer": "accept", "job": job})      # recorded, then
     assert _status(client, job) == "accepted"
-    assert client.get("/api/asks/latest").json()["pending"] is False
+    client.post("/api/asks/reopen", json={"job": job})                          # reopened: waiting
+    assert _status(client, job) == "waiting"
+    row = next(r for r in client.get("/api/asks/recent").json()["proposals"] if r["job"] == job)
+    assert row["same"] is True and row["answered_at"] is None
 
 
 # ---------------------------------------------------------------- two proposals
@@ -301,3 +310,114 @@ def test_each_cut_has_its_own_history(client, project):
         client.post("/api/cuts/open", json={"path": str(project["edl"])})
         for p in (project["work"] / "projects").rglob("other-take.edl.json"):
             p.unlink()
+
+
+# ---------------------------------------------------------------- round 2: stale, edits, undone, Stop
+
+def test_a_proposal_records_the_cut_it_was_made_from(client, model, clean_asks):
+    job = _ask(client, model, PLAN_A)
+    assert client.get(f"/api/asks/{job}").json()["stale"] is False
+    edl = clean_asks.read_edl()
+    edl["segments"] = edl["segments"][:1]                       # the editor cuts a shot by hand
+    clean_asks.write_edl(edl)
+    got = client.get(f"/api/asks/{job}").json()
+    assert got["stale"] is True and got["now"] > got["record"]["created"]
+    row = next(r for r in client.get("/api/asks/recent").json()["proposals"] if r["job"] == job)
+    assert row["stale"] is True
+    assert client.post("/api/asks/reopen", json={"job": job}).json()["stale"] is True
+
+
+def test_the_list_shows_the_editors_words_and_the_plan_on_its_own(client, model, clean_asks):
+    from roughcut import revise
+    job = _ask(client, model, PLAN_A, note=revise.compose_note("put the walk first", "Open on C, then A."))
+    row = next(r for r in client.get("/api/asks/recent").json()["proposals"] if r["job"] == job)
+    assert row["note"] == "put the walk first" and row["plan"] == "Open on C, then A."
+
+
+def _assist_record(server, job, answer=None, status="done"):
+    rec = {"job": job, "created": time.time(), "text": "more punch on the first two", "status": status,
+           "result": {"kind": "ops", "summary": "more punch",
+                      "ops": [{"op": "set", "id": "a", "prop": "contrast", "value": 20}]}}
+    if answer is not None:
+        rec["answer"] = answer
+    server._assist_write(job, rec)
+    return rec
+
+
+def test_the_prompt_boxs_itemised_edits_are_listed_too_and_reopen(client, clean_asks):
+    server = clean_asks
+    job = "a1b2c3d4e5f6"
+    path = server._assist_record_path(job)
+    try:
+        _assist_record(server, job)
+        row = next(r for r in client.get("/api/asks/recent").json()["proposals"] if r["job"] == job)
+        assert row["kind"] == "edits" and row["edits"] == 1 and row["status"] == "waiting"
+        assert row["note"] == "more punch on the first two"
+        client.post(f"/api/assist/{job}/answer", json={"accepted": [], "rejected": [0]})
+        assert next(r for r in client.get("/api/asks/recent").json()["proposals"]
+                    if r["job"] == job)["status"] == "discarded"
+        back = client.post(f"/api/assist/{job}/reopen").json()
+        assert back["job"] == job and "answer" not in back and back["ops"]
+        assert next(r for r in client.get("/api/asks/recent").json()["proposals"]
+                    if r["job"] == job)["status"] == "waiting"
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_an_undone_accept_reads_accepted_then_undone_and_a_redo_accepts_it_again(client, model, clean_asks):
+    server = clean_asks
+    job = _ask(client, model, PLAN_A)
+    client.post("/api/asks/answer", json={"answer": "accept", "job": job, "label": "proposal"})
+    ajob = "b1b2c3d4e5f6"
+    path = server._assist_record_path(ajob)
+    try:
+        _assist_record(server, ajob, answer={"accepted": [0], "rejected": [], "at": time.time() + 5,
+                                             "label": "AI: more punch"})
+
+        def status(j):
+            return next(r["status"] for r in client.get("/api/asks/recent").json()["proposals"] if r["job"] == j)
+
+        assert client.post("/api/asks/undone", json={"label": "AI: more punch"}).json()["marked"]["job"] == ajob
+        assert status(ajob) == "undone" and status(job) == "accepted"
+        assert client.post("/api/asks/undone", json={"label": "proposal"}).json()["marked"]["job"] == job
+        assert status(job) == "undone"
+        assert client.post("/api/asks/undone", json={"label": "nothing like it"}).json()["marked"] is None
+        client.post("/api/asks/undone", json={"label": "proposal", "redo": True})
+        assert status(job) == "accepted"
+        client.post("/api/asks/reopen", json={"job": job})          # and Accept again is a reopen
+        assert status(job) == "waiting"
+    finally:
+        path.unlink(missing_ok=True)
+
+
+def test_stop_ends_the_prompt_boxs_ask_and_nothing_arrives(client, model, clean_asks):
+    server = clean_asks
+    model.gate = threading.Event()
+    r = client.post("/api/assist", json={"text": "what is in the second shot"})
+    job = r.json()["job"]
+    end = time.time() + 10
+    while model.calls == 0 and time.time() < end:
+        time.sleep(0.02)
+    out = client.post(f"/api/jobs/{job}/stop").json()
+    assert out["stopped"] is True and out["state"] == "cancelled" and "no answer will arrive" in out["said"]
+    assert client.post(f"/api/assist/{job}/cancel").json()["ok"] is False        # already stopped
+    model.gate.set()
+    time.sleep(1.0)
+    got = client.get(f"/api/assist/{job}").json()
+    assert got["status"] == "cancelled" and "ops" not in got and "text" not in got
+    assert not any(server.assist_home().glob(f"{job}.json")) or json.loads(
+        server._assist_record_path(job).read_text())["status"] == "cancelled"
+
+
+def test_stop_ends_a_title_design_or_revise_job(client):
+    from roughcut import progress
+    import server
+    for kind in ("design", "revise"):
+        job = f"fx{kind[:2]}0001"
+        server.FX[job] = progress.Job("fx", f"{kind} a title", id=job, state="running", fx_kind=kind)
+        try:
+            out = client.post(f"/api/jobs/{job}/stop").json()
+            assert out["state"] == "cancelled" and out["stopped"] is True, out
+            assert server.FX[job]["state"] == "cancelled"
+        finally:
+            server.FX.pop(job, None)
