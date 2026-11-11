@@ -438,6 +438,19 @@ def parse_windows(spec: str, around: float) -> dict[str, list[tuple[float, float
     return out
 
 
+def orient_of(video: Path, orient: str, decisions: Path | None) -> str:
+    """The orient rule for one clip (wave 23 FILM): the project's `none` wins, else the app's
+    per-clip decision (`{"clips": {stem: {"mode": ...}}}`), else the project's rule."""
+    if orient == "none" or decisions is None:
+        return orient
+    try:
+        rec = (json.loads(Path(decisions).read_text(encoding="utf-8")).get("clips") or {}).get(video.stem)
+    except (OSError, ValueError, AttributeError):
+        return orient
+    mode = rec.get("mode") if isinstance(rec, dict) else rec
+    return mode if mode in ("auto", "none") else orient
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Prototype visual pass over contact sheets.")
     ap.add_argument("input", type=Path)
@@ -447,6 +460,10 @@ def main() -> int:
     ap.add_argument("--rows", type=int, default=5)
     ap.add_argument("--width", type=int, default=320, help="thumbnail width in px")
     ap.add_argument("--orient", choices=("auto", "none"), default="auto")
+    ap.add_argument("--orient-clips", type=Path, default=None,
+                    help="the app's per-clip rotation decisions (orient/<bin>.json): a clip "
+                         "marked `none` is read with its rotation flag ignored; --orient none "
+                         "still ignores every flag")
     ap.add_argument("--only", default="", help="comma-separated stems to include")
     ap.add_argument("--windows", default="",
                     help="read only these windows, one sheet each, and write "
@@ -506,7 +523,8 @@ def main() -> int:
             continue
         try:
             result = analyse(video, args.out, args.interval, args.cols, args.rows,
-                             args.orient, args.role, args.width, want)
+                             orient_of(video, args.orient, args.orient_clips), args.role,
+                             args.width, want)
         except (RuntimeError, OSError) as exc:
             print(f"{video.name}: SKIPPED — {exc}", file=sys.stderr, flush=True)
             continue

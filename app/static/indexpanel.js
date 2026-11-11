@@ -291,6 +291,10 @@
       const tr = e.target.closest('tr[data-clip]');
       if (tr) pick(tr.dataset.clip, e);
     });
+    $('.ix-detail', sec).addEventListener('change', (e) => {
+      const sel = e.target.closest('.ix-rotsel');
+      if (sel) setRotation(sel.dataset.clip, sel.value);
+    });
     tb.addEventListener('dblclick', (e) => {
       const tr = e.target.closest('tr[data-clip]');
       if (tr && window.dock && dock.project && typeof dock.project.select === 'function') dock.project.select(tr.dataset.clip);
@@ -380,8 +384,10 @@
     const name = esc(stem(r.clip));
     const tuned = r.tuned ? `<span class="tuned" title="its next look reads one frame every ${Number(r.interval_s)} s (the bin: ${Number(IX.rep.interval_s)} s)">${Number(r.interval_s)} s</span>` : '';
     const junk = r.junk ? '<span class="junk" title="marked junk: its looks are skipped">junk</span>' : '';
+    const rot = r.orient && r.orient.flag && r.orient.mode === 'none' && r.orient.text
+      ? `<span class="rotign" title="${esc(r.orient.text)}">flag ignored</span>` : '';
     return `<tr class="row${sel}${r.missing ? ' missing' : ''}" data-clip="${esc(r.clip)}" data-testid="index-row">`
-      + `<td class="name" title="${esc(r.clip)}"><span class="n">${name}</span>${tuned}${junk}</td>`
+      + `<td class="name" title="${esc(r.clip)}"><span class="n">${name}</span>${tuned}${junk}${rot}</td>`
       + cols().map(([k]) => cell(r, k)).join('')
       + `<td class="num cost" title="${esc(c.title || 'no model call on this clip yet')}">${rowCost(r) > 0 ? esc(c.text) : '—'}</td>`
       + `<td class="ran" title="${esc(ran ? `last ran ${when(ran, true)}` : 'nothing indexed yet')}">${esc(ran ? shortWhen(ran) : '—')}</td></tr>`;
@@ -447,7 +453,27 @@
       }
       return `<div class="ix-dl" data-stage="${k}"><span class="k">${NAME[k]}</span><span class="v">${bits.filter(Boolean).join(' · ')}</span></div>`;
     }).join('');
-    el.innerHTML = head + lines;
+    /* (wave 23 FILM) which way up this clip is shown, in words, and the editor's word over it */
+    const o = r.orient;
+    let rotLine = '';
+    if (o && o.flag) {
+      const opt = (v, t, on) => `<option value="${v}"${on ? ' selected' : ''}>${t}</option>`;
+      const cur = o.hand || 'sensor';
+      rotLine = `<div class="ix-dl ix-rot" data-stage="rotation" data-testid="index-rotation"><span class="k">Rotation</span><span class="v">${esc(o.text)}`
+        + ` <select class="ix-rotsel" data-clip="${esc(r.clip)}" aria-label="Which way up is ${esc(stem(r.clip))}">`
+        + opt('sensor', 'let the sensor decide', cur === 'sensor') + opt('auto', 'use the file\'s flag', cur === 'auto')
+        + opt('none', 'ignore the flag', cur === 'none') + '</select></span></div>';
+    }
+    el.innerHTML = head + lines + rotLine;
+  }
+
+  async function setRotation(clip, mode) {
+    try {
+      await getJSON(`/api/clips/${encodeURIComponent(clip)}/orient`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode }) });
+    } catch (e) { IX.err = `the rotation was not changed: ${e.message}`; }
+    window.dispatchEvent(new CustomEvent('rc:clips-changed', { detail: {} }));
+    refresh();
   }
 
   function paintFoot() {

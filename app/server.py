@@ -81,6 +81,7 @@ from roughcut import deep as deepmod  # noqa: E402
 from roughcut import firstpass as fpmod  # noqa: E402
 from roughcut import procscope  # noqa: E402
 from roughcut import telemetry_events  # noqa: E402
+from roughcut import orient as orientmod  # noqa: E402     # wave 23 FILM: rotation per clip
 from roughcut import fxcheck  # noqa: E402
 from roughcut import dirwatch  # noqa: E402
 from roughcut import tracks as tracksmod  # noqa: E402
@@ -1004,7 +1005,7 @@ def ensure_proxies(clips: list[str], progress=None) -> None:
         if not src.exists():
             print(f"  !! missing footage {clip}", flush=True)
             continue
-        build_proxy(src, pdir / f"{Path(clip).stem}.mp4", STATE["orient"])
+        build_proxy(src, pdir / f"{Path(clip).stem}.mp4", clip_orient(clip))
         # Its colour now, in this job (the caller's background scope: niced, paused
         # while the Program plays), not in the next GET /api/junk (verdict 7 blocker 3:
         # a reload after a proxy landed waited ~30 s on this measurement).
@@ -1046,6 +1047,229 @@ def scaffold_edl(path: Path, footage: Path, orient: str) -> dict:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(edl, indent=1), encoding="utf-8")
     return edl
+
+
+# ---------------------------------------------------------------- rotation, per clip
+#
+# (wave 23, lane FILM; COLD-08, COLD-13, WORDS-23, FINISH-22) A rotation flag in the file is
+# the camera's claim. Copper's GX010474 / 484 / 492 are flagged +-90 and were shot upright:
+# honouring the flag laid people on their side in every picture and in the export, while
+# 497-499 (flagged 180, truly inverted) need theirs. So the flag is decided per clip
+# (`roughcut/orient.py`): honoured unless the telemetry's gravity vector contradicts it;
+# honoured where there is no telemetry (as before) or it is not conclusive; and settable
+# by hand. The project-wide `orient` of the cut file stays the master switch: `none` there
+# ignores every flag, as it always did.
+#
+# Stored with the project: `<work>/orient/<bin>.json`, one record per clip stem:
+#   mode / why / flag / sensor   the decision (`orientmod.decide`), `hand` the editor's word
+#   built                        the mode the clip's cached pictures were made under
+#   rev                          how many times that has changed: it is in the clip's poster
+#                                and sprite names (`pic_tag`), which are served `immutable`,
+# so a clip whose decision changes gets new URLs and is rebuilt (its proxy, preview, heads
+# and range proxies are deleted), and a clip whose decision did not change is not touched:
+# `built` defaults to "auto", which is what every project made before this was built under.
+# The decision is made lazily the first time anything asks (`clip_orient`) and again when
+# the telemetry lands (the index's telemetry stage), at open, and on the editor's word.
+
+ORIENT_LOCK = threading.RLock()
+
+
+def orient_file() -> Path:
+    return STATE["work"] / "orient" / f"{STATE['footage'].name}.json"
+
+
+def _orient_map() -> dict:
+    with ORIENT_LOCK:
+        m = STATE.get("orient_map")
+        if m is None:
+            m = {}
+            try:
+                d = json.loads(orient_file().read_text(encoding="utf-8"))
+                if isinstance(d, dict) and isinstance(d.get("clips"), dict):
+                    m = d["clips"]
+            except (OSError, ValueError, KeyError):
+                pass
+            STATE["orient_map"] = m
+        return m
+
+
+def _orient_save() -> None:
+    p = orient_file()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + f".{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps({"v": 1, "clips": _orient_map()}, indent=1), encoding="utf-8")
+    tmp.replace(p)
+
+
+def _orient_sensor(clip: str) -> tuple:
+    """(median up vector, mount, axis convention) from the clip's telemetry sidecars."""
+    try:
+        d = load_telemetry(clip) or {}
+    except Exception:  # noqa: BLE001
+        d = {}
+    o = d.get("orientation") if isinstance(d.get("orientation"), dict) else {}
+    up, mount = o.get("median_up_vector"), o.get("mount")
+    if not mount:
+        try:
+            mount = telemetry_events.mount(clip)
+        except Exception:  # noqa: BLE001
+            mount = None
+    return up, mount, o.get("convention") if isinstance(o.get("convention"), dict) else None
+
+
+def _orient_decide(clip: str, hand: str | None) -> dict | None:
+    """The decision from the file's flag and the sensors as they are now; None while the
+    file cannot be read (nothing is stored for a clip that is not there)."""
+    f = media_facts(clip_path(clip))
+    if f is None:
+        return None
+    up, mount, conv = _orient_sensor(clip)
+    return orientmod.decide(f.get("rotation"), up, mount, conv, hand)
+
+
+def purge_clip_pictures(stem: str) -> None:
+    """Delete everything derived from a clip's picture, so it is made again under the
+    rule now in force: its proxy, preview, heads, range proxies, posters and sprites."""
+    paths: list[Path] = [STATE["proxy_dir"] / f"{stem}.mp4"]
+    try:
+        paths += [preview_path(stem), *preview_dir().glob(f"{stem}.*.mp4")]
+        paths += list(head_dir().glob(f"{stem}.head*"))
+        paths += list(range_dir().glob(f"{stem}.*"))
+        paths += list(STATE["posters"].glob(f"{stem}@*"))
+        paths += list(sprite_dir().glob(f"{stem}.*"))
+    except OSError:
+        pass
+    for p in paths:
+        try:
+            p.unlink()
+        except OSError:
+            pass
+    with SPRITES["lock"]:
+        SPRITES["mem"].pop(stem, None)
+        SPRITES["failed"].pop(stem, None)
+    with MEDIA["lock"]:
+        for k in [k for k in MEDIA["failed"] if f"/{stem}." in k]:
+            MEDIA["failed"].pop(k, None)
+    STATE.get("probes", {}).pop(stem, None)
+
+
+def _orient_commit(clip: str, dec: dict) -> bool:
+    """Store a decision; True when it changed what the clip's pictures must show (then
+    they are deleted and `rev` moves). Under the lock: the caller holds it."""
+    stem = Path(clip).stem
+    m = _orient_map()
+    old = m.get(stem)
+    built = old.get("built", "auto") if old else "auto"
+    rev = int(old.get("rev", 0)) if old else 0
+    changed = dec["mode"] != built
+    if changed:
+        purge_clip_pictures(stem)
+        built, rev = dec["mode"], rev + 1
+    new = {**dec, "built": built, "rev": rev}
+    if new != old:
+        m[stem] = new
+        _orient_save()
+    return changed
+
+
+def _orient_rebuild(clips: list[str]) -> None:
+    """Make the pictures of clips whose rotation changed again, without anyone asking."""
+    if not clips or not STATE.get("proxies_enabled", True):
+        return
+    threading.Thread(target=ensure_proxies, args=(clips,), daemon=True,
+                     name="orient proxies").start()
+    kick_previews()
+
+
+def refresh_orient(clips: list[str] | None = None, *, rebuild: bool = True) -> list[str]:
+    """Decide again for these clips (all of the bin's by default) from the file's flag and
+    the sensors as they are now; the clips whose pictures changed are returned, and made
+    again in the background. Nothing is rebuilt for a clip whose decision did not change."""
+    if STATE.get("orient") == "none":
+        return []
+    changed: list[str] = []
+    for clip in (footage_clips() if clips is None else clips):
+        with ORIENT_LOCK:
+            rec = _orient_map().get(Path(clip).stem)
+            dec = _orient_decide(clip, (rec or {}).get("hand"))
+            if dec is not None and _orient_commit(clip, dec):
+                changed.append(clip)
+    if changed:
+        with SNAP["lock"]:
+            SNAP["gen"] += 1
+        if rebuild:
+            _orient_rebuild(changed)
+    return changed
+
+
+def orient_record(clip) -> dict:
+    """A clip's stored decision (decided now if nothing has asked yet)."""
+    stem = Path(str(clip)).stem
+    with ORIENT_LOCK:
+        rec = _orient_map().get(stem)
+        if rec is None:
+            try:
+                name = clip_for_stem(stem)
+                dec = _orient_decide(name, None) if name else None
+            except Exception:  # noqa: BLE001
+                dec = None
+            if dec is None:
+                return {"mode": "auto", "why": "noflag", "flag": 0, "rev": 0, "built": "auto"}
+            _orient_commit(name, dec)
+            rec = _orient_map().get(stem)
+        return rec
+
+
+def clip_orient(clip) -> str:
+    """"auto" or "none" for this clip (a name or a path): `none` ignores its rotation flag.
+    The cut file's project-wide `orient: none` wins over every clip's own decision."""
+    if STATE.get("orient") == "none":
+        return "none"
+    try:
+        return orient_record(clip)["mode"]
+    except (OSError, KeyError, TypeError):
+        return "auto"
+
+
+def pic_tag(stem: str, decide: bool = True) -> str:
+    """PICTURE_V, plus the clip's rotation revision once its decision has changed: the
+    name its poster and sprite carry. `decide=False` (the clip lists, which run where
+    nothing may probe) reads what is stored and decides nothing."""
+    if STATE.get("orient") == "none":
+        return PICTURE_V
+    try:
+        rec = orient_record(stem) if decide else (_orient_map().get(stem) or {})
+        rev = int(rec.get("rev") or 0)
+    except (OSError, KeyError, TypeError, ValueError):
+        rev = 0
+    return PICTURE_V if not rev else f"{PICTURE_V}r{rev}"
+
+
+def orient_args() -> list[str]:
+    """assemble.py's `--orient-clips <file>`: every clip of the bin decided (a clip nothing
+    has asked about yet is decided here) and the project's decisions handed over, so the
+    export turns each clip as the monitor does."""
+    if STATE.get("orient") == "none":
+        return []
+    try:
+        for clip in footage_clips():
+            orient_record(clip)
+    except (OSError, KeyError, TypeError, ValueError):
+        pass
+    return ["--orient-clips", str(orient_file())] if orient_file().exists() else []
+
+
+def orient_row(clip: str) -> dict:
+    """What /api/clips and the Index panel say of a clip's rotation: the decision, the
+    plain-words line, and whether it is the editor's own word."""
+    if STATE.get("orient") == "none":
+        return {"mode": "none", "why": "project", "flag": None, "hand": None, "turned": False,
+                "text": "Every rotation flag in this project is ignored (the cut's orient is none)."}
+    rec = orient_record(clip)
+    return {"mode": rec["mode"], "why": rec["why"], "flag": rec.get("flag") or 0,
+            "hand": rec.get("hand"), "sensor": rec.get("sensor"),
+            "turned": bool(rec.get("flag")) and rec["mode"] == "auto",
+            "text": orientmod.words(rec)}
 
 
 def folder_clips() -> list[str]:
@@ -6430,7 +6654,7 @@ def visual_cmd(only: list[str], force: bool) -> list[str]:
         interval = {Path(c).stem: v for c, v in clip_look_intervals().items()}.get(only[0])
     interval = interval or look_interval()
     cmd = ["uv", "run", "--quiet", str(TOOLS / "visual_pass.py"), str(tool_footage()),
-           "-o", str(STATE["visual"]), "--orient", STATE["orient"],
+           "-o", str(STATE["visual"]), "--orient", STATE["orient"], *orient_args(),
            "--interval", f"{interval:g}"]
     if only:
         cmd += ["--only", ",".join(only)]
@@ -7632,6 +7856,13 @@ def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
                        *(["--force"] if forced else [])])
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"the felt events failed: {exc}") from exc
+        # The sensor has spoken: a rotation flag it contradicts is ignored from here on, and
+        # a picture already made under the flag is made again (wave 23 FILM). A clip whose
+        # decision did not change is not touched.
+        try:
+            refresh_orient([clip])
+        except Exception as exc:  # noqa: BLE001
+            print(f"  !! rotation: {clip}: {exc}", flush=True)
         return 0.0
     if stage == "asr":
         # One tool run over every clip still waiting on it, not one per clip: the
@@ -7672,7 +7903,7 @@ def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
         j.set_facts(clip, index_facts(clip))
         return 0.0
     if stage == "proxy":
-        build_proxy(src, STATE["proxy_dir"] / f"{stem}.mp4", STATE["orient"])
+        build_proxy(src, STATE["proxy_dir"] / f"{stem}.mp4", clip_orient(clip))
         measure_colour(clip, force=True)      # the proxy is the colour file's source
         STATE["proxies_ready"] = all(
             (STATE["proxy_dir"] / f"{Path(c).stem}.mp4").exists() for c in footage_clips())
@@ -8505,6 +8736,38 @@ async def api_clips() -> Response:
                               known=_clips_known)
 
 
+@app.post("/api/clips/{clip}/orient")
+async def api_clip_orient(clip: str, request: Request) -> JSONResponse:
+    """The editor's word on one clip's rotation (wave 23 FILM): `{"mode": "auto"}` turns it
+    by the file's flag, `"none"` leaves it as the camera stored it, `"sensor"` goes back to
+    the telemetry deciding. It is a clip-level override, not the shot's Effect Controls
+    rotation, which still applies on top. The clip's pictures are made again under it."""
+    body = await request.json() if request.headers.get("content-length") not in (None, "0") else {}
+    mode = (body or {}).get("mode") if isinstance(body, dict) else None
+    if mode not in ("auto", "none", "sensor"):
+        raise HTTPException(400, 'mode: "auto" (use the file\'s flag), "none" (ignore it) or '
+                                 '"sensor" (let the camera\'s sensor decide)')
+    name = next((c for c in footage_clips() if c == clip or Path(c).stem == clip), None)
+    if name is None:
+        raise HTTPException(404, f"no such clip: {clip}")
+    if STATE.get("orient") == "none":
+        raise HTTPException(409, "this project ignores every rotation flag (the cut's orient is none)")
+
+    def work() -> dict:
+        with ORIENT_LOCK:
+            dec = _orient_decide(name, None if mode == "sensor" else mode)
+            if dec is None:
+                raise HTTPException(404, f"{name} cannot be read")
+            changed = _orient_commit(name, dec)
+        if changed:
+            with SNAP["lock"]:
+                SNAP["gen"] += 1
+            _orient_rebuild([name])
+        return {"clip": name, "changed": changed, "orient": orient_row(name)}
+
+    return JSONResponse(await asyncio.to_thread(work))
+
+
 def clips_payload() -> dict:
     """`GET /api/clips`' answer (on a snapshot thread: it may wait CLIP_FACTS_WAIT_S for
     a clip's facts and reads the disk)."""
@@ -8561,6 +8824,7 @@ def clips_payload() -> dict:
             # uploaded from the viewer's computer — Premiere's Media Path
             **_clip_origin(clip, sources),
             "media": media_state(clip),       # the bin's "preview building" (verdict 8)
+            "orient": orient_row(clip) if ok else None,    # wave 23 FILM: which way up, in words
             "journal": None if rec is None else {
                 "priority": rec.get("priority"), "missing": bool(rec.get("missing")),
                 "parked": rec.get("parked"),
@@ -9413,6 +9677,7 @@ def _index_clips_disk() -> dict:
             "held": (rec or {}).get("held"), "missing": bool((rec or {}).get("missing")),
             "parked": (rec or {}).get("parked"),
             "words": f.get("words"), "telemetry_peaks": f.get("telemetry_peaks"),
+            "orient": orient_row(clip),
             # the interval its next look reads it at, and whether it is tuned off the bin's
             "interval_s": per.get(clip) or proj, "tuned": clip in per,
             "sheets_at": {f"{i:g}": sheets_for(clip, i, probe=False) for i in VISUAL_INTERVALS},
@@ -9692,7 +9957,7 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
            "--footage", str(tool_footage()), "--sidecars", str(STATE["sidecars"]),
            "--assets", str(STATE["assets"]), "--profile", meta.get("profile", "preview"),
            "--colour-dir", str(colour_dir()),
-           "--generated-dir", str(generated_dir()),
+           "--generated-dir", str(generated_dir()), *orient_args(),
            "--parts-dir", str(parts_dir), "--progress", "-o", str(write_to)]
     if meta.get("fps"):
         cmd[-2:-2] = ["--fps", str(meta["fps"])]
@@ -10484,6 +10749,7 @@ def _sample_job(preset: str, key: str, scope: procscope.Scope,
                "--footage", str(tool_footage()), "--sidecars", str(STATE["sidecars"]),
                "--assets", str(STATE["assets"]), "--profile", p["profile"],
                "--colour-dir", str(colour_dir()), "--generated-dir", str(generated_dir()),
+               *orient_args(),
                "--parts-dir", str(work / "parts"), "--fps", rate, "-o", str(out),
                # every slice at once (verdict 6, punch 7): a slice is a quarter second, so
                # what it waits on is its ffmpeg's start and seek, not the cores. Measured,
@@ -11333,7 +11599,7 @@ def poster_path(stem: str, t: float) -> Path:
     # PICTURE_V in the name: a poster cut from a v1 preview of a rotation-flagged clip is
     # upside down, and an old cache must be rebuilt rather than served (verdict 3 punch 1).
     # The time to 4 places (wave 17 PLAY8): a name of the old 0.01 s cut is never served.
-    return STATE["posters"] / f"{stem}@{t:012.4f}.{PICTURE_V}.jpg"
+    return STATE["posters"] / f"{stem}@{t:012.4f}.{pic_tag(stem)}.jpg"
 
 
 def build_poster(src: Path, dest: Path, t: float, original: bool = False) -> None:
@@ -11359,7 +11625,7 @@ def build_poster(src: Path, dest: Path, t: float, original: bool = False) -> Non
     vf = f"scale=min({POSTER_W}\\,iw):-2"
     decoders: list[list[str]] = [[]]
     if original:
-        if STATE.get("orient") == "none":
+        if clip_orient(src) == "none":
             pre = ["-display_rotation", "0"]
         norm = source_normalise(src)
         if norm:
@@ -11397,7 +11663,7 @@ def build_poster(src: Path, dest: Path, t: float, original: bool = False) -> Non
 def nearest_poster(stem: str, t: float) -> tuple[Path, float] | None:
     """The poster of `stem` already on disk whose time is nearest `t` (any time), or None."""
     best: tuple[float, Path, float] | None = None
-    tail = f".{PICTURE_V}.jpg"
+    tail = f".{pic_tag(stem)}.jpg"
     for p in STATE["posters"].glob(f"{stem}@*{tail}"):
         try:
             pt = float(p.name[len(stem) + 1: -len(tail)])
@@ -11439,8 +11705,7 @@ def media_poster(name: str, t: float = 0.0, near: int = 0) -> Response:
     when it is cut (dock.js `posterStandins` / `posterSoon`).
     """
     stem = Path(name).stem
-    if stem.endswith(f".{PICTURE_V}"):          # poster_url's versioned name
-        stem = stem[: -len(PICTURE_V) - 1]
+    stem = re.sub(rf"\.{PICTURE_V}(?:r\d+)?$", "", stem)   # poster_url's versioned name
     if not re.fullmatch(r"[A-Za-z0-9._-]+", stem):
         raise HTTPException(404, f"no such clip: {name}")
     if not math.isfinite(t) or t < 0:
@@ -12190,7 +12455,7 @@ def browser_playable(src: Path) -> bool:
     # The browser turns a tagged original itself, exactly as the export's autorotate does
     # (`orient: auto`), but only by quarter turns; `orient: none` says the tag is wrong
     # and the browser would honour it anyway. Either way: a preview, built by the rule.
-    if f["rotation"] % 360 and (STATE.get("orient") == "none" or f["rotation"] % 90):
+    if f["rotation"] % 360 and (clip_orient(src) == "none" or f["rotation"] % 90):
         return False
     return True
 
@@ -12208,7 +12473,7 @@ def poster_url(stem: str, t: float | None = None) -> str:
     (upside down) frame keeps it until the URL changes: the version is in the URL as well
     as in the file name (lead's wave-4 queue). In the name, not a query, so every page
     that appends `?t=` to a clip's poster keeps working; /media/poster drops it."""
-    url = f"/media/poster/{stem}.{PICTURE_V}.jpg"
+    url = f"/media/poster/{stem}.{pic_tag(stem, decide=False)}.jpg"
     return url if t is None else f"{url}?t={t:.2f}"
 
 
@@ -12535,7 +12800,7 @@ def ensure_preview(clip: str) -> Path | None:
         return None
     ev, owner = _claim_preview(str(dest))
     if owner:
-        _build_claimed(clip_path(clip), dest, STATE.get("orient", "auto"), ev)
+        _build_claimed(clip_path(clip), dest, clip_orient(clip), ev)
     else:
         with media_waiting(str(dest)):
             ev.wait()
@@ -12558,7 +12823,7 @@ def start_preview(clip: str) -> threading.Event | None:
     ev, owner = _claim_preview(key)
     if owner:
         threading.Thread(target=_build_claimed, daemon=True, args=(
-            clip_path(clip), dest, STATE.get("orient", "auto"), ev, True)).start()
+            clip_path(clip), dest, clip_orient(clip), ev, True)).start()
     return ev
 
 
@@ -12720,7 +12985,7 @@ def head_record(stem: str) -> dict | None:
             continue
         if not isinstance(rec, dict) or rec.get("stem") != stem or rec.get("picture_v") != PICTURE_V:
             continue
-        if rec.get("orient") != STATE.get("orient", "auto") or rec.get("src") != src_id:
+        if rec.get("orient") != clip_orient(clip) or rec.get("src") != src_id:
             continue
         mp4 = js.with_suffix(".mp4")
         if not mp4.exists():
@@ -12852,7 +13117,7 @@ def want_head(clip: str, t: float) -> None:
             threading.Thread(target=cur["scope"].kill, daemon=True).start()
         return
     threading.Thread(target=_build_heads, daemon=True, name=f"head-{stem}",
-                     args=(clip, src, STATE.get("orient", "auto"), key, ev)).start()
+                     args=(clip, src, clip_orient(clip), key, ev)).start()
     start_yield()                   # the background encodes pause while it is made (yield_tick)
     try:
         yield_tick()
@@ -13178,7 +13443,7 @@ def range_record(stem: str) -> dict | None:
             continue
         if (rec.get("v"), rec.get("proxy_v"), rec.get("picture_v")) != (RANGE_V, PROXY_V, PICTURE_V):
             continue
-        if rec.get("orient") != STATE.get("orient", "auto") or rec.get("src") != src_id:
+        if rec.get("orient") != clip_orient(clip) or rec.get("src") != src_id:
             continue
         mp4 = js.with_suffix(".mp4")
         if not mp4.exists():
@@ -13302,7 +13567,7 @@ def needs_range(clip: str, cut: dict | None = None) -> bool:
     rec = range_record(stem)
     if rec is not None and ranges_cover(rec.get("spans"), want, dur):
         return False
-    key = range_key(src, merge_ranges(want, dur), STATE.get("orient", "auto"))
+    key = range_key(src, merge_ranges(want, dur), clip_orient(clip))
     return not _failed_recently(str(range_dir() / f"{stem}.{key}.mp4"))
 
 
@@ -13322,7 +13587,7 @@ def ensure_range(clip: str, cut: dict | None = None) -> dict | None:
     preview = ensure_preview(clip)
     if preview is None:
         return rec
-    orient = STATE.get("orient", "auto")
+    orient = clip_orient(clip)
     spans = merge_ranges(want, dur)
     rdir = range_dir()
     dest = rdir / f"{stem}.{range_key(src, spans, orient)}.mp4"
@@ -14109,7 +14374,7 @@ SPRITE_COLS = 5                  # the grid's width in cells (4 rows of 5)
 SPRITE_W = 240                   # a cell's width: the Icon view's largest tile at 1x
 SPRITE_Q = 5                     # mjpeg quality scale, as the posters'
 SPRITE_RETRY_S = 300.0           # a failed sprite is tried again after this long
-SPRITE_NAME = re.compile(r"([A-Za-z0-9._-]+)\.(\d+-\d+)\.(v\d+)\.jpg")
+SPRITE_NAME = re.compile(r"([A-Za-z0-9._-]+)\.(\d+-\d+)\.(v\d+(?:r\d+)?)\.jpg")
 SPRITES: dict = {"lock": threading.Lock(), "pending": [], "waiting": set(), "failed": {},
                  "thread": None, "mem": {}, "force": None}
 
@@ -14132,7 +14397,8 @@ def sprite_dest(clip: str) -> Path | None:
         st = clip_path(clip).stat()
     except OSError:
         return None
-    return sprite_dir() / f"{Path(clip).stem}.{st.st_size}-{st.st_mtime_ns}.{PICTURE_V}.jpg"
+    return sprite_dir() / (f"{Path(clip).stem}.{st.st_size}-{st.st_mtime_ns}."
+                           f"{pic_tag(Path(clip).stem)}.jpg")
 
 
 def sprite_info(clip: str) -> dict | None:
@@ -14183,7 +14449,7 @@ def _sprite_frame(src: Path, t: float, original: bool) -> bytes:
     pre: list[str] = []
     vf = f"scale={SPRITE_W}:-2,setsar=1,format=rgb24"
     if original:
-        if STATE.get("orient") == "none":
+        if clip_orient(src) == "none":
             pre = ["-display_rotation", "0"]
         norm = source_normalise(src)
         if norm:
@@ -14388,7 +14654,7 @@ def media_sprite(name: str) -> Response:
     """A built sprite, by the name /api/sprites gave it (its clip's version in it, so it is
     immutable); 404 for any other name."""
     m = SPRITE_NAME.fullmatch(Path(name).name)
-    if not m or m.group(3) != PICTURE_V:
+    if not m or m.group(3) != pic_tag(m.group(1)):
         raise HTTPException(404, f"not found: {Path(name).name}")
     path = sprite_dir() / m.group(0)
     if not (path.exists() and path.with_suffix(".json").exists()):
@@ -17555,7 +17821,8 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
         REVIEW_STATE.clear()
     # Per-clip caches are keyed by clip name, and two bins can share a GoPro stem: a
     # re-point must not serve the last bin's durations or capture times for this one.
-    for key in ("capture", "durations", "telemetry", "render_res_cache", "clip_facts"):
+    for key in ("capture", "durations", "telemetry", "render_res_cache", "clip_facts",
+                "orient_map"):
         STATE.pop(key, None)
     # the status snapshots and the peaks in memory are this bin's (wave 11 CHEAP)
     forget_peaks()
@@ -17585,10 +17852,21 @@ def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path
     if not proxies:
         STATE["proxies_ready"] = True
     else:
-        threading.Thread(target=ensure_proxies, args=(clips,), daemon=True).start()
+        threading.Thread(target=_open_pictures, args=(clips,), daemon=True).start()
         kick_previews()          # posters and playable previews for every clip, first
         # the black a gap is cut from, before the first gap (a few seconds, niced, once)
         threading.Thread(target=ensure_black_master, daemon=True, name="black master").start()
+
+
+def _open_pictures(clips: list[str]) -> None:
+    """At open: decide each clip's rotation from its flag and its sensors first (a project
+    made before this, or whose telemetry landed since, has pictures made under the flag:
+    only the clips whose decision changed lose theirs), then make the missing proxies."""
+    try:
+        refresh_orient(rebuild=False)
+    except Exception as exc:  # noqa: BLE001
+        print(f"  !! rotation at open: {exc}", flush=True)
+    ensure_proxies(clips)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
