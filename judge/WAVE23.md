@@ -16,6 +16,7 @@ jsonl has the same text: `wanted / did / happened / expected / suggestion`).
 | DIRECT | 3. an AI you can direct | WORDS-01, -05, -06, -08, -10, -17, -18; COLD-17; CLUMSY-12 | `roughcut/actions.py`, `roughcut/assist.py`, `roughcut/revise.py`: the note the cut is written from; `app/server.py`: the prompt-box / Ask endpoints (not `ask_pending`, not the fx endpoints); `app/static/aiprompt.js`; new tests |
 | TITLE | 4. titles a person can ship | HANDS-17; WORDS-15, -19, -20, -21; FINISH-07, -09, -17, -18 | `roughcut/fx.py`, `roughcut/fxcheck.py`, `app/static/fx.js`, `app/static/fx.css`; `app/server.py`: the `_fx_*` functions and `/api/fx/*` endpoints; new tests |
 | FILM | 2 and 7. what goes in the file is right | COLD-08, -13, -19; FINISH-20, -22; WORDS-23; HANDS (0 dB note) | `research/tools/assemble.py`; `app/server.py`: `build_proxy`, `proxy_gpu_args`, the poster / preview / sprite builders, `scaffold_edl`, `configure`'s orient handling, `api_projects_open`'s `orient`; `roughcut/telemetry_events.py` (read; add a helper only); new tests |
+| DESCRIBE | 6. describe the footage as it is, and let the editor read it | FINDER-01, -02, -04, -05, -06, -07, -08, -11, -12, -13, -14, -15, -22 | `research/tools/visual_pass.py` (the look prompt and its fields); `roughcut/find.py`; `app/static/indexpanel.js` + css; the Selects tab's Find results (their file); `app/server.py`: the find and transcript endpoints; new tests |
 
 Two files are shared by region (`app.js`: SAFE the proposal, TRUTH the Program; `server.py`: four lanes, four regions).
 Stay in your region; if you must touch another lane's, say so in your hand-back with the reason.
@@ -75,6 +76,22 @@ limiter (ceiling -1 dBTP) after the loudness levelling; a film that was peaking 
 -1.0, mean level within 1 dB of before; the preview profile too. Measure on a real render of a Copper cut
 (`/mnt/roughcut/space/roughcut-loop/copper/editors/finish/work`, copy it first). Tests for both on the fixture.
 
+**DESCRIBE** (added an hour into the wave; its files are disjoint from the other five). (a) The look no longer
+assumes "an action camera worn on the skier's helmet or chest" and no longer writes a verdict on action: each clip's
+description says who is there, where, what happens and what is said or funny, in that order, and events (jump, fall,
+crash) stay a separate field under the same strict rules as today. On Copper the descriptions of 488, 490, 491, 492,
+493 and 494 name the milk jug, the planted camera and the jump at 19.6-20.2 s, and the chairlift
+(`judge/copper-editors/finder-audit.md` is the truth table: score before and after against it). Event recall must not
+fall: re-look a labelled Killington subset with the old and new prompt and compare against
+`research/R12-understanding/eval/killington-moments.checked.json`; up to 150 live calls on the plan for both bins
+together, logged to your scratch ledger, and no change to `baseline.json`. (b) The editor can read what the index
+found: the transcript of a clip (with times, click to cue) and its found moments, in the Index panel and from the
+Source monitor's clip; a description the editor corrects by hand sticks and is marked as theirs. (c) Find: each hit
+names its clip and time, a click opens the clip in the Source monitor at that moment (not a preview below the fold),
+a query with nothing above a score floor answers "nothing like that in this footage" (choose the floor from the
+finder's 12 real and 3 absent queries, and say how it was chosen), a spoken phrase outranks a black frame, and a
+running search shows that it is running.
+
 ## Lane rules (as wave 22, plus two)
 
 - Your own worktree and branch (given in your brief). Commit there: conventional prefix, a CHANGELOG `[Unreleased]`
@@ -99,9 +116,9 @@ limiter (ceiling -1 dBTP) after the loudness levelling; a film that was peaking 
 
 ## After the lanes
 
-The lead merges in the order SAFE, TRUTH, DIRECT, TITLE, FILM, runs the quick gate on the merged tip, restarts
+The lead merges in the order SAFE, TRUTH, DIRECT, TITLE, FILM, DESCRIBE, runs the quick gate on the merged tip, restarts
 `roughcut-redesign` (8766), and sends the editors back in on fresh Copper copies with the software browser:
-`clumsy` (SAFE), `words` (DIRECT), `finish` (TITLE, FILM), `hands` (TRUTH), each told what changed and asked for
+`clumsy` (SAFE), `words` (DIRECT), `finish` (TITLE, FILM), `hands` (TRUTH), `finder` (DESCRIBE), each told what changed and asked for
 what still hurts. Their second reports decide wave 24, which otherwise takes the next areas in order: starting a
-film (5), describing the footage and Find (6), music and background export (7), the hands' focus rule, copy / paste
+film (5), music and background export (7), the hands' focus rule, copy / paste
 and typed timecode (8), and the AI looking before it cuts (3).
