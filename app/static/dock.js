@@ -717,29 +717,40 @@
                     cuts: null, cutsSig: '', cutsSoon: null, proposal: null, propSig: '',
                     subs: new Map(), subsSig: '', cols: '', colList: null };
 
-  /* (wave 23 FILM) A clip's rotation decision moved (the sensor was read, or the editor turned
-     it): its proxy / preview / poster are made again under the new rule, and a tab that already
-     played the old file must take the new one without a reload. The server revalidates every
-     media response (`cache-control: no-cache`); a <video> that holds the old source is emptied
-     here, and the monitor sets its source again at its next cue. */
+  /* (wave 23 FILM) A clip's rotation decision moved (the sensor was read, the Index panel's
+     select, Rotate clip): its proxy / preview / poster are made again under the new rule and
+     every open tab must show the new picture without a reload. The clip list carries
+     `orient.rev`; the proxy URL carries it (`?r=`, as posters carry it in their names), so
+     what a tab holds is a different URL. Here: the board's clip entries take the new URLs,
+     the Program re-cues the shot it is parked on (app.js rcRotationMoved), the Source monitor
+     opens the clip again at the same second, and posters / strips repaint from the new names. */
   const rotRev = new Map();
+  const revOf = (url) => { const m = /[?&]r=(\d+)/.exec(String(url || '')); return m ? Number(m[1]) : 0; };
+  const revQ = (stem) => { const r = rotRev.get(stem); return r ? `?r=${r}` : ''; };
   function rotationSeen(clips) {
     const moved = [];
     clips.forEach((c) => {
-      const r = c.orient ? Number(c.orient.rev || 0) : null;
-      if (r == null) return;
-      if (rotRev.has(c.stem) && rotRev.get(c.stem) !== r) moved.push(c.stem);
+      if (!c.orient || c.orient.rev == null) return;
+      const r = Number(c.orient.rev || 0);
+      const have = typeof P !== 'undefined' && P && P.clips && P.clips[c.clip];   // eslint-disable-line no-undef
+      const prev = rotRev.has(c.stem) ? rotRev.get(c.stem) : (have ? revOf(have.proxy) : r);
       rotRev.set(c.stem, r);
+      if (prev !== r) moved.push(c);
     });
     if (!moved.length) return;
-    document.querySelectorAll('video').forEach((v) => {
-      const s = String(v.dataset.src || v.currentSrc || v.getAttribute('src') || '');
-      if (!moved.some((m) => s.includes(`/${m}.`))) return;
-      v.dataset.src = '';
-      v.removeAttribute('src');
-      try { v.load(); } catch (e) { /* a detached element */ }
+    moved.forEach((c) => {
+      const e = P.clips[c.clip];                                                  // eslint-disable-line no-undef
+      if (!e) return;
+      e.proxy = `/media/proxy/${c.stem}.mp4${revQ(c.stem)}`;
+      if (c.poster) e.poster = String(c.poster).split('?')[0];
     });
-    window.dispatchEvent(new CustomEvent('rc:rotation-changed', { detail: { stems: moved } }));
+    const names = moved.map((c) => c.clip);
+    if (typeof window.rcRotationMoved === 'function') window.rcRotationMoved(names);
+    if (source.clip && names.includes(source.clip.clip) && source.v) {
+      const fresh = moved.find((c) => c.clip === source.clip.clip);
+      source.load({ ...source.clip, ...fresh }, { keepTime: true });
+    }
+    window.dispatchEvent(new CustomEvent('rc:rotation-changed', { detail: { clips: names } }));
   }
 
   async function loadClips() {
@@ -806,7 +817,7 @@
     const entry = {
       ...(have || {}),
       clip: name, stem, duration: Number(c.duration) || (have && have.duration) || 0,
-      proxy: `/media/proxy/${stem}.mp4`, poster: c.poster ? String(c.poster).split('?')[0] : `/media/poster/${stem}.jpg`,
+      proxy: `/media/proxy/${stem}.mp4${revQ(stem)}`, poster: c.poster ? String(c.poster).split('?')[0] : `/media/poster/${stem}.jpg`,
       transcript: [], visual: (have && have.visual) || {}, captured: c.captured || null,
       candidates: [], summary: { speech_fraction: null, wind_dominant_fraction: null,
                                  integrated_lufs: null, audio_usable: null },
@@ -2250,7 +2261,7 @@
       $('#srcEmpty').hidden = true;
       const [a] = this.marksFor(c);
       const poster = $('#srcPoster');
-      const url = `/media/proxy/${c.stem || c.clip.replace(/\.[^.]+$/, '')}.mp4`;
+      const url = `/media/proxy/${c.stem || c.clip.replace(/\.[^.]+$/, '')}.mp4${revQ(c.stem || c.clip.replace(/\.[^.]+$/, ''))}`;
       if (v.dataset.src !== url || !same) {
         if (this.stopWait) { this.stopWait(); this.stopWait = null; }
         v.dataset.src = url;

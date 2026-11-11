@@ -416,8 +416,10 @@
     const junk = r.junk ? '<span class="junk" title="marked junk: its looks are skipped">junk</span>' : '';
     const rot = r.orient && (r.orient.flag || r.orient.hand) && r.orient.mode !== 'auto' && r.orient.text
       ? `<span class="rotign" title="${esc(r.orient.text)}">${r.orient && r.orient.mode === 'none' ? 'flag ignored' : 'turned by you'}</span>` : '';
+    const stale = r.orient && r.orient.look_stale
+      ? `<span class="rotign" title="${esc(r.orient.text)}">look out of date</span>` : '';
     return `<tr class="row${sel}${r.missing ? ' missing' : ''}" data-clip="${esc(r.clip)}" data-testid="index-row">`
-      + `<td class="name" title="${esc(r.clip)}"><span class="n">${name}</span>${tuned}${junk}${rot}</td>`
+      + `<td class="name" title="${esc(r.clip)}"><span class="n">${name}</span>${tuned}${junk}${rot}${stale}</td>`
       + cols().map(([k]) => cell(r, k)).join('')
       + `<td class="num cost" title="${esc(c.title || 'no model call on this clip yet')}">${rowCost(r) > 0 ? esc(c.text) : '—'}</td>`
       + `<td class="ran" title="${esc(ran ? `last ran ${when(ran, true)}` : 'nothing indexed yet')}">${esc(ran ? shortWhen(ran) : '—')}</td></tr>`;
@@ -486,7 +488,7 @@
     /* (wave 23 FILM) which way up this clip is shown, in words, and the editor's word over it */
     const o = r.orient;
     let rotLine = '';
-    if (o && (o.flag || o.hand) && o.text) {
+    if (o && (o.flag || o.hand || o.look_stale) && o.text) {
       const opt = (v, t, on) => `<option value="${v}"${on ? ' selected' : ''}>${t}</option>`;
       const cur = o.hand || 'sensor';
       rotLine = `<div class="ix-dl ix-rot" data-stage="rotation" data-testid="index-rotation"><span class="k">Rotation</span><span class="v">${esc(o.text)}`

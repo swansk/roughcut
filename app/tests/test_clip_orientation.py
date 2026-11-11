@@ -744,3 +744,142 @@ def test_media_is_revalidated_so_a_tab_takes_a_rebuilt_file(board):
     server.ensure_proxies(["FLAT.MP4"])
     assert client.get("/media/proxy/FLAT.mp4").headers["cache-control"] == "no-cache"
     assert client.get("/media/proxy/FLAT.mp4", headers={"range": "bytes=0-99"}).headers["cache-control"] == "no-cache"
+
+
+# ---------------------------------------------------------- an open tab takes a changed rotation (no reload)
+
+_FRAME_JS = """(sel) => {
+  const v = document.querySelector(sel);
+  if (!v || v.readyState < 2 || !v.videoWidth) return null;
+  const c = document.createElement('canvas'); c.width = 64; c.height = 64;
+  const g = c.getContext('2d'); g.drawImage(v, 0, 0, 64, 64);
+  const d = g.getImageData(0, 0, 64, 64).data, q = [[0,0],[32,0],[0,32],[32,32]].map(([x0,y0]) => {
+    let r = 0, gg = 0, b = 0;
+    for (let y = y0; y < y0 + 32; y++) for (let x = x0; x < x0 + 32; x++) { const i = (y*64+x)*4; r += d[i]; gg += d[i+1]; b += d[i+2]; }
+    return [r/1024, gg/1024, b/1024];
+  });
+  return {w: v.videoWidth, h: v.videoHeight, q};
+}"""
+
+
+def _wait_frame(pg, sel, portrait: bool, timeout=60000):
+    pg.wait_for_function(
+        "([sel, portrait]) => { const v = document.querySelector(sel);"
+        " return v && v.readyState >= 2 && v.videoWidth && ((v.videoHeight > v.videoWidth) === portrait); }",
+        arg=[sel, portrait], timeout=timeout)
+    return pg.evaluate(_FRAME_JS, sel)
+
+
+def test_open_tabs_swap_the_picture_when_a_clips_rotation_changes_without_a_reload(served, rbin):
+    """Source and Program are open on a clip whose flag the sensor ignored (landscape). The
+    editor turns it in the Index panel: both monitors show the rebuilt, turned picture, its
+    aspect and its quadrants different, with no reload of the page."""
+    pytest.importorskip("playwright.sync_api")
+    from playwright.sync_api import sync_playwright
+    server = served["server"]
+    server.write_edl({"variant": "T", "title": "t", "orient": "auto", "story": "", "target_s": [1, 9],
+                      "segments": [{"clip": "SENS90.MP4", "in": 0.5, "out": 2.5, "id": "s1"}]})
+    server.ensure_proxies(server.footage_clips())
+    src = rbin["footage"] / "SENS90.MP4"
+    with sync_playwright() as pw:
+        b = pw.chromium.launch()
+        pg = b.new_page(viewport={"width": 1440, "height": 900})
+        errors: list[str] = []
+        pg.on("pageerror", lambda e: errors.append(str(e)))
+        pg.goto(served["url"] + "/")
+        pg.wait_for_function("window.rcIndex && window.dock && window.tl && window.rcCutShots() > 0", timeout=30000)
+        marker = pg.evaluate("window.__noReload = Math.random()")
+        # the Source monitor on the clip (a double-click in the bin), the Program parked on its shot
+        pg.wait_for_selector('#projList [data-clip="SENS90.MP4"]', timeout=15000)
+        pg.locator('#projList [data-clip="SENS90.MP4"]').first.dblclick()
+        pg.evaluate("cueAt(0, 1.0)")
+        live = "#prog video.live, #monitor video.live, video.live"
+        before_src = _wait_frame(pg, "#srcScreen video", False)
+        before_prog = _wait_frame(pg, live, False)
+        _same(np.array(before_src["q"]), _stored(src), "source, flag ignored")
+        _same(np.array(before_prog["q"]), _stored(src), "program, flag ignored")
+
+        # the editor turns it in the Index panel's Rotation select ("use the file's flag")
+        pg.locator("#menubar .mtop", has_text="Window").click()
+        pg.locator('#menubar button[data-cmd="w:index"]').click()
+        pg.wait_for_selector('[data-testid="index-panel"]', state="visible", timeout=5000)
+        pg.locator('[data-testid="index-row"][data-clip="SENS90.MP4"]').click()
+        sel = pg.locator('[data-testid="index-rotation"] select')
+        sel.wait_for(timeout=5000)
+        sel.select_option("auto")
+        import threading
+        threading.Thread(target=lambda: (time.sleep(0.5), server.ensure_proxies(["SENS90.MP4"])), daemon=True).start()
+
+        after_src = _wait_frame(pg, "#srcScreen video", True)
+        after_prog = _wait_frame(pg, live, True)
+        _same(np.array(after_src["q"]), _upright(src), "source, turned by the flag")
+        _same(np.array(after_prog["q"]), _upright(src), "program, turned by the flag")
+        assert after_src["q"] != before_src["q"] and after_prog["q"] != before_prog["q"]
+        assert pg.evaluate("window.__noReload") == marker, "the page was reloaded"
+        # the timeline's and the bin's posters moved to the clip's new revision
+        assert pg.evaluate("P.clips['SENS90.MP4'].proxy").endswith("?r=2") or "?r=" in pg.evaluate("P.clips['SENS90.MP4'].proxy")
+        assert "v2r" in pg.evaluate("P.clips['SENS90.MP4'].poster")
+        assert errors == [], errors
+        b.close()
+
+
+def test_the_looks_frames_of_a_flagged_but_upright_clip_are_upright_on_a_cold_start(rbin, tmp_path, monkeypatch):
+    """Cold start: no sensor read yet when the look is asked for. The look pass's command reads
+    the sensor first (the early read), so the frames the model sees are cut under the decision:
+    an upright clip is not shown sideways ("recorded sideways"). Its close looks and the check
+    strips read the proxy, which is made under the same decision."""
+    import server
+    work = tmp_path / "work"
+    _open(server, rbin, work, telemetry={})
+    reads = []
+
+    def fake_tool(cmd):
+        stem = next(x for x in CASES if x in " ".join(cmd))
+        reads.append(stem)
+        if CASES[stem][1] is not None:
+            _telemetry(server.telemetry_dir(), stem, CASES[stem][1])
+        return ""
+
+    monkeypatch.setattr(server, "_run_tool", fake_tool)
+    monkeypatch.setattr(server, "has_telemetry", lambda clip: True)
+    cmd = server.visual_cmd(["SENS90"], False)
+    assert "SENS90" in reads, "the sensor was read before the look's command was built"
+    decisions = Path(cmd[cmd.index("--orient-clips") + 1])
+    tools = ROOT / "research" / "tools"
+    sys.path.insert(0, str(tools))
+    import contact_sheet
+    import visual_pass
+    video = rbin["footage"] / "SENS90.MP4"
+    mode = visual_pass.orient_of(video, cmd[cmd.index("--orient") + 1], decisions)
+    assert mode == "none"
+    (tmp_path / "f").mkdir()
+    (tmp_path / "g").mkdir()
+    frames = contact_sheet.extract_frames(video, tmp_path / "f", 1.0, 160, mode)
+    assert frames, "no look frames"
+    _same(_quads(frames[0]), _stored(video), "the look's frame of the upright clip")
+    # and the same clip under the flag would have been shown turned (the test is not vacuous)
+    flagged = contact_sheet.extract_frames(video, tmp_path / "g", 1.0, 160, "auto")
+    _same(_quads(flagged[0]), _upright(video), "the look's frame under the flag")
+
+
+def test_a_look_written_before_the_decision_changed_is_marked_out_of_date_not_redone(rbin, tmp_path):
+    import server
+    work = tmp_path / "work"
+    _open(server, rbin, work, telemetry={})
+    server.ensure_proxies(["SENS90.MP4"])
+    vis = server.STATE["visual"]
+    vis.mkdir(parents=True, exist_ok=True)
+    (vis / "SENS90.visual.json").write_text("{}")               # a look made from the flag's frames
+    assert server.orient_row("SENS90.MP4")["look_stale"] is False
+    time.sleep(0.05)
+    _telemetry(server.telemetry_dir(), "SENS90", CASES["SENS90"][1])
+    server.refresh_orient(["SENS90.MP4"], rebuild=False)
+    row = server.orient_row("SENS90.MP4")
+    assert row["look_stale"] is True and "look at it again" in row["text"]
+    assert (vis / "SENS90.visual.json").read_text() == "{}", "nothing is looked at again by itself"
+    # the editor looks again: the new file is newer than the decision, and the mark goes
+    time.sleep(0.05)
+    (vis / "SENS90.visual.json").write_text('{"again": true}')
+    assert server.orient_row("SENS90.MP4")["look_stale"] is False
+    # a clip with no look is never marked
+    assert server.orient_row("SENS180.MP4")["look_stale"] is False

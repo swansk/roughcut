@@ -1201,7 +1201,12 @@
     if (s.key === 'motion') {
       body = animRow('pos', 'Position', valInput('posx', 'X') + valInput('posy', 'Y'), 'posx,posy', BK('posx').hover)
         + animRow('scale', 'Scale', valInput('scale'), 'scale', BK('scale').hover)
-        + animRow('rotation', 'Rotation', valInput('rotation'), 'rotation', BK('rotation').hover);
+        + animRow('rotation', 'Rotation', valInput('rotation'), 'rotation', BK('rotation').hover)
+        // (wave 23 FILM) shown only while Rotation is a quarter turn: one click sets the Scale
+        // that covers the frame, so nobody works the arithmetic out (a landscape shot turned 90°
+        // needs 177.8 %). Hidden otherwise: nothing new in view.
+        + '<div class="ec-row ec-fillrow" data-row="fillscale" hidden><span class="ec-name"></span>'
+        + '<button type="button" class="ec-fillbtn" data-fillscale title="set Scale so the turned picture covers the frame (a quarter turn leaves it small, with black bars)">Fill the frame</button></div>';
     } else if (s.key === 'opacity') body = animRow('opacity', 'Opacity', valInput('opacity'), 'opacity', BK('opacity').hover);
     else if (s.key === 'volume') body = animRow('volume_db', 'Level', valInput('volume_db'), 'volume_db', BK('volume_db').hover);
     else if (s.key === 'time') {
@@ -1551,6 +1556,8 @@
       if (sw) { e.stopPropagation(); toggleAnim(sw.dataset.sw); return; }
       const ka = e.target.closest('[data-kact]');
       if (ka) { e.stopPropagation(); keyAct(ka.dataset.kact, ka.dataset.g); return; }
+      const fs = e.target.closest('[data-fillscale]');
+      if (fs) { e.stopPropagation(); fillScale(); return; }
       const rs = e.target.closest('[data-reset]');
       if (rs) { e.stopPropagation(); resetKeys(rs.dataset.reset.split(',')); return; }
       const sr = e.target.closest('[data-sreset]');
@@ -2408,9 +2415,32 @@
   document.addEventListener('dragend', () => dropMark(null), true);
   document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) dropMark(null); }, true);
 
-  /* ------------------------------------------------------------ fill */
+  /* ------------------------------------------------------------ fill the frame (a turned shot) */
+  const quarterTurn = (seg) => Math.abs(Number(BY_KEY.get('rotation').get(seg)) % 180) === 90;
+  /* The Scale that makes a quarter-turned picture cover the frame. The picture is fitted in the
+   * frame at 100 %; turned a quarter it stands on its side, so it needs max(frame w / its
+   * height, frame h / its width). A clip the clip-level turn already stands upright (Rotate
+   * clip, a flag that is obeyed) is the portrait picture it shows. */
+  function fillScaleFor(seg) {
+    const c = window.dock && dock.project && typeof dock.project.clips === 'function'
+      ? dock.project.clips().find((x) => x.clip === seg.clip) : null;
+    let cw = (c && c.width) || FRAME_W, ch = (c && c.height) || FRAME_H;
+    const o = c && c.orient;
+    if (o && (o.mode === 'turn90' || o.mode === 'turn270' || (o.mode === 'auto' && Math.abs(o.flag % 180) === 90))) [cw, ch] = [ch, cw];
+    const fit = Math.min(FRAME_W / cw, FRAME_H / ch);
+    const pw = cw * fit, ph = ch * fit;
+    return Math.round(Math.max(FRAME_W / ph, FRAME_H / pw) * 1000) / 10;
+  }
+  function fillScale() {
+    const seg = cur();
+    if (!seg || !quarterTurn(seg)) return;
+    const p = BY_KEY.get('scale');
+    change(p, seg, Math.min(p.hi, fillScaleFor(seg)));
+  }
   function fill(box, seg) {
     if (!box || !seg) return;
+    const fr = box.querySelector('.ec-fillrow');
+    if (fr) fr.hidden = !quarterTurn(seg);
     paintVfx(box, seg);                      // the video effects' sections first: their rows fill below
     box.querySelectorAll('.ec-v').forEach((el) => {
       const p = propOf(el.dataset.k, seg);

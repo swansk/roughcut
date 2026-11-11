@@ -1259,6 +1259,10 @@ def _orient_commit(clip: str, dec: dict) -> bool:
         purge_clip_pictures(stem)
         built, rev = dec["mode"], rev + 1
     new = {**dec, "built": built, "rev": rev}
+    if old and old.get("decided"):
+        new["decided"] = old["decided"]
+    if changed:
+        new["decided"] = time.time()      # frames cut before this saw the other rotation
     if new != old:
         m[stem] = new
         _orient_save()
@@ -1297,6 +1301,7 @@ def refresh_orient(clips: list[str] | None = None, *, rebuild: bool = True) -> l
                 cur = _orient_map().get(Path(clip).stem)
                 if cur is not None:                  # new poster / sprite names (immutable cache)
                     cur["rev"] = int(cur.get("rev") or 0) + 1
+                    cur["decided"] = time.time()
                     _orient_save()
                 changed.append(clip)
     if changed:
@@ -1359,6 +1364,23 @@ def pic_tag(stem: str, decide: bool = True) -> str:
     return PICTURE_V if not rev else f"{PICTURE_V}r{rev}"
 
 
+def rev_q(stem: str) -> str:
+    """`?r=<rev>` once a clip's rotation decision has changed, else nothing: the query that
+    makes a tab take a clip's rebuilt proxy / preview / head instead of the file it holds
+    (posters and sprites carry the rev in their names). Reads what is stored, decides nothing."""
+    if STATE.get("orient") == "none":
+        return ""
+    try:
+        rev = int((_orient_map().get(stem) or {}).get("rev") or 0)
+    except (OSError, KeyError, TypeError, ValueError):
+        rev = 0
+    return f"?r={rev}" if rev else ""
+
+
+def proxy_url(stem: str) -> str:
+    return f"/media/proxy/{stem}.mp4{rev_q(stem)}"
+
+
 def orient_args() -> list[str]:
     """assemble.py's `--orient-clips <file>`: every clip of the bin decided (a clip nothing
     has asked about yet is decided here) and the project's decisions handed over, so the
@@ -1380,11 +1402,21 @@ def orient_row(clip: str) -> dict:
         return {"mode": "none", "why": "project", "flag": None, "hand": None, "turned": False,
                 "text": "Every rotation flag in this project is ignored (the cut's orient is none)."}
     rec = orient_record(clip, early=False)
-    return {"mode": rec["mode"], "why": rec["why"], "flag": rec.get("flag") or 0,
+    text = orientmod.words(rec)
+    stale = False
+    try:
+        vis = STATE["visual"] / f"{Path(clip).stem}.visual.json"
+        stale = bool(rec.get("decided")) and vis.exists() and vis.stat().st_mtime < float(rec["decided"])
+    except (OSError, KeyError, TypeError, ValueError):
+        stale = False
+    if stale:
+        text = (text + " " if text else "") + ("Its look was written from frames cut before this "
+                                               "was decided: look at it again in the Index.")
+    return {"look_stale": stale, "mode": rec["mode"], "why": rec["why"], "flag": rec.get("flag") or 0,
             "hand": rec.get("hand"), "sensor": rec.get("sensor"), "rev": int(rec.get("rev") or 0),
             "turned": (bool(rec.get("flag")) and rec["mode"] == "auto")
                       or rec["mode"].startswith("turn"),
-            "text": orientmod.words(rec)}
+            "text": text}
 
 
 def folder_clips() -> list[str]:
@@ -1905,7 +1937,7 @@ def project_payload() -> dict:
             # whole frames of the clip's own rate (verdict 7, punch 9), and that rate
             "duration": on_clip_grid(d["duration_s"], rate),
             "fps": rate,
-            "proxy": f"/media/proxy/{Path(clip).stem}.mp4",
+            "proxy": proxy_url(Path(clip).stem),
             # The card's picture: this URL plus ?t=<in-point>. A card is a still, not
             # a stream — see /media/poster for what sixteen streams cost the monitor.
             "poster": poster_url(Path(clip).stem),
@@ -3767,7 +3799,7 @@ def _match_rows(matches: list[dict]) -> list[dict]:
     for m in matches:
         stem = Path(m["clip"]).stem
         out.append({**m,
-                    "proxy": f"/media/proxy/{stem}.mp4",
+                    "proxy": proxy_url(stem),
                     "poster": f"/media/poster/{stem}.jpg?t={m['start']:.2f}",
                     "duration": clip_duration(m["clip"])})
     return out
@@ -4067,7 +4099,7 @@ def _pick_rows(rows: list[dict]) -> list[dict]:
     out = []
     for p in rows:
         stem = Path(p["clip"]).stem
-        out.append({**p, "proxy": f"/media/proxy/{stem}.mp4",
+        out.append({**p, "proxy": proxy_url(stem),
                     "poster": f"/media/poster/{stem}.jpg?t={p['anchor']:.2f}",
                     "duration": clip_duration(p["clip"])})
     return out
@@ -4355,7 +4387,7 @@ def junk_rows(edl: dict | None = None) -> list[dict]:
                      "colour": cstate,
                      "reasons": a["reasons"], "numbers": a["numbers"],
                      "duration": clip_duration(clip), "used": clip in used,
-                     "proxy": f"/media/proxy/{stem}.mp4",
+                     "proxy": proxy_url(stem),
                      "poster": f"/media/poster/{stem}.jpg"})
     return rows
 
@@ -8962,7 +8994,7 @@ def unheard_clip(clip: str, used: bool = False) -> dict:
     return {
         "clip": clip, "stem": stem, "duration": on_clip_grid(clip_duration(clip), clip_rate(clip)),
         "fps": clip_rate(clip),
-        "proxy": f"/media/proxy/{stem}.mp4", "poster": poster_url(stem),
+        "proxy": proxy_url(stem), "poster": poster_url(stem),
         "transcript": [], "visual": load_visual(clip), "captured": capture_time(clip),
         "candidates": [],
         "summary": {"speech_fraction": None, "wind_dominant_fraction": None,
@@ -12848,7 +12880,7 @@ def preview_path(stem: str) -> Path:
 
 
 def preview_url(stem: str) -> str:
-    return f"/media/preview/{preview_path(stem).name}"
+    return f"/media/preview/{preview_path(stem).name}{rev_q(stem)}"
 
 
 def turn_needed(f: dict, orient: str) -> int:
@@ -13362,7 +13394,7 @@ def head_record(stem: str) -> dict | None:
         if not mp4.exists():
             continue
         if best is None or float(rec.get("made") or 0) > float(best.get("made") or 0):
-            best = {**rec, "path": mp4, "url": f"/media/head/{mp4.name}"}
+            best = {**rec, "path": mp4, "url": f"/media/head/{mp4.name}{rev_q(stem)}"}
     return best
 
 
@@ -14216,7 +14248,7 @@ def media_status(name: str, at: float | None = None) -> JSONResponse:
         # the head's time while a head is what will play (verdict 11 punch 5), else the
         # whole preview's
         "eta_s": wait_eta(clip) if kind == "building" else None,
-        "url": f"/media/proxy/{stem}.mp4" if kind == "proxy" else url,
+        "url": proxy_url(stem) if kind == "proxy" else url,
         "ready": kind in ("proxy", "original", "range", "preview"),
         "proxy": (STATE["proxy_dir"] / f"{stem}.mp4").exists(),
         "preview": preview_path(stem).exists(),
