@@ -546,26 +546,43 @@ def test_an_accepted_answers_design_is_accepted_with_it_when_it_fits(server_fx, 
     project, answers, calls = server_fx
     s1, _ = _seed(project, client)
     answers.append(GOOD)
-    snap = _wait(client, client.post("/api/fx/design", json={"shot": s1, "note": "a title", "accept": True}).json()["job"])
-    e = _effects(client)[snap["result"]["id"]]
-    assert e["status"] == "accepted" and e.get("auto_accepted") and "in the cut" in snap["detail"]
+    snap = _wait(client, client.post("/api/fx/design", json={"shot": s1, "note": "a title"}).json()["job"])
+    fx_id = snap["result"]["id"]
+    assert _effects(client)[fx_id]["status"] == "proposed"          # a design alone waits for its review
+    r = client.post("/api/fx/accept", json={"id": fx_id, "auto": True}).json()
+    e = _effects(client)[fx_id]
+    assert r["ok"] and e["status"] == "accepted" and e.get("auto_accepted")
     # its Ctrl+Z: the accept is taken back and the design set aside; the redo puts it back
-    r = client.post("/api/fx/discard", json={"id": e["id"], "withdraw": True})
+    r = client.post("/api/fx/discard", json={"id": fx_id, "withdraw": True})
     assert r.status_code == 200 and r.json()["withdrawn"] is True
     assert json.loads(project["edl"].read_text(encoding="utf-8")).get("effects") in (None, [])
-    assert client.post("/api/fx/restore", json={"id": e["id"]}).status_code == 200
-    assert [x["id"] for x in json.loads(project["edl"].read_text(encoding="utf-8")).get("effects") or []] == [e["id"]]
+    assert client.post("/api/fx/restore", json={"id": fx_id}).status_code == 200
+    assert [x["id"] for x in json.loads(project["edl"].read_text(encoding="utf-8")).get("effects") or []] == [fx_id]
 
 
 def test_an_accepted_answers_design_that_fails_the_frame_check_waits_for_the_editor(server_fx, client):
     project, answers, calls = server_fx
     s1, _ = _seed(project, client)
-    snap = _wait(client, client.post("/api/fx/design", json={"shot": s1, "note": "a title", "accept": True}).json()["job"])
-    e = _effects(client)[snap["result"]["id"]]
-    assert e["status"] == "proposed" and e["bounds"]["ok"] is False
+    snap = _wait(client, client.post("/api/fx/design", json={"shot": s1, "note": "a title"}).json()["job"])
+    fx_id = snap["result"]["id"]
+    r = client.post("/api/fx/accept", json={"id": fx_id, "auto": True}).json()
+    e = _effects(client)[fx_id]
+    assert r["accepted"] is False and e["status"] == "proposed" and e["bounds"]["ok"] is False
 
 
-def test_a_design_with_no_accept_flag_is_a_proposal_as_before(server_fx, client):
+def test_a_marker_design_is_never_accepted_with_the_answer(server_fx, client, monkeypatch):
+    project, answers, calls = server_fx
+    s1, _ = _seed(project, client)
+    marker = {"events": [{"t": 1.5, "x": 0.5, "y": 0.5}], "overlay": {
+        "duration": 0.35, "size": 0.12, "anim": {},
+        "shapes": [{"type": "circle", "at": [0, 0], "r": 0.5, "fill": False, "width": 0.1}]}}
+    answers.append(marker)
+    fx_id = _wait(client, client.post("/api/fx/design", json={"shot": s1, "note": "a ring"}).json()["job"])["result"]["id"]
+    assert client.post("/api/fx/accept", json={"id": fx_id, "auto": True}).json()["accepted"] is False
+    assert _effects(client)[fx_id]["status"] == "proposed"
+
+
+def test_a_design_with_no_auto_flag_is_a_proposal_as_before(server_fx, client):
     project, answers, calls = server_fx
     s1, _ = _seed(project, client)
     answers.append(GOOD)

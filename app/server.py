@@ -14409,7 +14409,8 @@ def _fx_bounds(e: dict) -> dict | None:
     if not e.get("overlay") or not any(s.get("type") == "text" for s in e["overlay"].get("shapes") or []):
         return None
     w, h = _fx_frame()
-    return fx.check_bounds(e, w, h)
+    res = fx.check_bounds(e, w, h)
+    return None if res.get("ok") is None else res
 
 
 def _fx_refit(e: dict, segments: list[dict], clips: dict, entry: progress.Job | None = None,
@@ -14457,7 +14458,7 @@ def _fx_replaces(e: dict) -> list[str]:
 
 
 def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict | None,
-                   window: tuple[float, float] | None = None, accept: bool = False) -> None:
+                   window: tuple[float, float] | None = None) -> None:
     entry = FX[job]
     scope = FX_DESIGN_SCOPES[job] = procscope.Scope(f"fx design {job}")
     fx_id = None
@@ -14515,22 +14516,11 @@ def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict 
             fx.save(fx_home(), e)
             _fx_sound(e)
             entry["result"] = {"id": fx_id}
-            took = False
-            if (accept and not e.get("edits") and (e.get("bounds") or {}).get("ok", True)
-                    and e.get("overlay")):
-                # an AI answer the editor accepted asked for this: one Accept, not a second
-                # in Designed Effects. Only what draws or sounds, and only inside the frame;
-                # a design that changes the cut, or that the check faulted, still waits.
-                try:
-                    _fx_accept(fx_id, auto=True)
-                    took = True
-                except HTTPException:
-                    took = False
             _fx_autoverify(fx_id)                   # the free check, by itself (I16.5)
             n_ev, n_ed = len(e.get("events") or []), len(e.get("edits") or [])
             what = " · ".join(x for x in [f"{n_ev} moment{'s' if n_ev != 1 else ''}" if n_ev else "",
                                          f"{n_ed} change{'s' if n_ed != 1 else ''} to the cut" if n_ed else ""] if x)
-            entry.finish("done", detail=f"{e['name']} — {what}, " + ("in the cut" if took else "a proposal"))
+            entry.finish("done", detail=f"{e['name']} — {what}, a proposal")
     except Exception as exc:  # noqa: BLE001 — the job reports, the server lives
         with FX_DESIGN_LOCK:
             stopped = bool(entry.get("cancel"))     # its cancel already said how it ended
@@ -14952,7 +14942,7 @@ async def api_fx_design(request: Request) -> JSONResponse:
     refuse_past_cap("the design", fx.price(place_frames=_fx_place_frames(seg) if placing else 0))
     return _fx_job("design", f"Designing an effect — {Path(seg['clip']).stem}",
                    _fx_design_job, shot, note, bool(body.get("place")), body.get("reference"),
-                   window, bool(body.get("accept")))
+                   window)
 
 
 @app.post("/api/fx/revise")
@@ -14991,7 +14981,17 @@ async def api_fx_accept(request: Request) -> JSONResponse:
     Karl, 2026-09-20: *"make sure that when effects are applied long term they are
     reversable / we can add more on top of them."*"""
     body = await request.json()
-    return _fx_accept(str(body.get("id") or ""))
+    fx_id = str(body.get("id") or "")
+    if body.get("auto"):
+        # an accepted AI answer's design is accepted with it (wave 23: one Accept for a
+        # title, not one in the Assistant and one in Designed Effects). Only a title the
+        # frame check passed and that changes no shot; anything else keeps its review.
+        e = _fx_get(fx_id)
+        if (e.get("status") != "proposed" or e.get("edits") or not (e.get("bounds") or {}).get("ok")):
+            return JSONResponse({"ok": True, "accepted": False, "effect": _fx_urls(e)})
+        res = await asyncio.to_thread(_fx_accept, fx_id, auto=True)
+        return res
+    return _fx_accept(fx_id)
 
 
 def _fx_accept(fx_id: str, *, auto: bool = False) -> JSONResponse:

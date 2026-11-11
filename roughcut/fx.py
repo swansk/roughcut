@@ -1769,6 +1769,14 @@ def _bare(overlay: dict, only: int | None = None) -> dict:
             continue
         c = {k: v for k, v in s.items() if k not in ("start", "end", "fade", "reveal", "cps")}
         c["opacity"] = 1.0
+        if c["type"] in ("text", "rect", "circle", "ring"):      # a hand-written record may lack what validate fills
+            c.setdefault("x", 0.0)
+            c.setdefault("y", 0.0)
+        if c["type"] == "text":
+            c.setdefault("h", 0.2)
+        if c["type"] == "rect":
+            c.setdefault("w", 1.0)
+            c.setdefault("h", 1.0)
         shapes.append(c)
     anim = {k: v for k, v in (overlay.get("anim") or {}).items() if k != "opacity"}
     return {"duration": overlay["duration"], "size": overlay["size"], "shapes": shapes,
@@ -1961,6 +1969,9 @@ def bounds_check(effect: dict, w: int = 1920, h: int = 1080) -> dict | None:
     if not any(sh.get("type") == "text" for sh in (effect.get("overlay") or {}).get("shapes") or []):
         return None
     res = check_bounds(effect, w, h)
+    if res["ok"] is None:
+        return {"key": "bounds", "label": "the words are inside the frame and its safe area",
+                "ok": None, "detail": "skipped: " + res.get("error", "it could not be measured")}
     return {"key": "bounds", "label": "the words are inside the frame and its safe area",
             "ok": res["ok"],
             "detail": (f"inside the frame and its {SAFE_MARGIN * 100:.0f} % safe area" if res["ok"]
@@ -1972,7 +1983,11 @@ def check_bounds(effect: dict, w: int = 1920, h: int = 1080, safe: float = SAFE_
     `ok` False when the words (or any shape of a title) are cut by the frame or sit outside
     its title-safe area, or a shape crosses them. An effect with no text is `ok` (nothing
     to judge), with `text` None."""
-    m = measure(effect, w, h)
+    try:
+        m = measure(effect, w, h)
+    except Exception as exc:  # noqa: BLE001 — a spec that cannot be drawn is not a spec that fits
+        return {"ok": None, "safe": safe, "problems": [], "text": None,
+                "error": f"{type(exc).__name__}: {exc}"[:200]}
     probs = problems(m, safe)
     union = None
     if m:
@@ -2046,7 +2061,7 @@ def refit(effect: dict, segments: list[dict], clips: dict | None = None, *, w: i
     leaves a failing check, which is said so, never a "✓"."""
     res = check_bounds(effect, w, h)
     asked = 0
-    while not res["ok"] and asked < tries:
+    while res["ok"] is False and asked < tries:
         asked += 1
         if on_try:
             on_try(asked, res)

@@ -783,6 +783,7 @@
     el.innerHTML = `${head}
       ${res.summary ? `<div class="air-sum">${esc(named(res.summary))}</div>` : ''}
       <ol class="air-ops">${R.ops.map(rowHtml).join('')}${refused.map((x) => `<li class="air-op refused" data-testid="ai-op-refused" data-op="${esc(x.op || '')}"><span class="air-fam" aria-hidden="true">⊘</span><span class="air-line">${esc(String(x.op || 'an op').replace('_', ' '))} not applied: ${esc(named(x.why))}</span></li>`).join('')}</ol>
+      ${(res.notes || []).map((n) => `<div class="air-note" data-testid="ai-title-note">${esc(named(n))}</div>`).join('')}
       ${preview ? `<div class="air-preview">${preview}</div>` : ''}
       <div class="air-foot">
         <button type="button" class="air-btn" data-act="reject" data-testid="ai-reject-all" title="put everything back as it was — nothing is written (Esc)">Reject all</button>

@@ -95,6 +95,9 @@
     designOpen: false,       // "+ design another effect" pressed on this shot
     whyOpen: new Set(),      // cards whose "why? ▸" is open (the note, the checklist, links)
     momentsOpen: new Set(),  // accepted cards whose "adjust the moments ▸" is open
+    autoAccept: true,        // a title an accepted AI answer asked for is accepted with it (acceptWithAnswer)
+    handOpen: new Set(),     // cards whose "edit by hand ▸" (words, size, place, in / out) is open
+    guides: null,            // {id, until}: the title-safe guides on the monitor while a hand control is used
     checking: new Set(),     // effects whose free check is queued or running (server jobs)
     kicked: new Set(),       // proposals from before the check ran by itself, checked once
     jobs: new Map(),         // fx job id → state last seen
@@ -307,8 +310,11 @@
   async function act(name, e) {
     try {
       if (name === 'preview') preview(e);
-      else if (name === 'why' || name === 'moments') {
-        const set = name === 'why' ? S.whyOpen : S.momentsOpen;
+      else if (name === 'fit') {
+        await hand(e, { fit: true });
+      } else if (name === 'why' || name === 'moments' || name === 'hand') {
+        const set = name === 'why' ? S.whyOpen : name === 'hand' ? S.handOpen : S.momentsOpen;
+        if (name === 'hand') showGuides(e.id);
         if (set.has(e.id)) set.delete(e.id); else set.add(e.id);
         paint(true);
       } else if (name === 'iterate') {
@@ -652,9 +658,27 @@
       if (h.withdrawn) {
         if (it.fx) asks.gone.add(it.fx);
         track(it, h.dead ? discardOne(it) : withdrawOne(it)).then(() => { refresh(); tellAsks(h); });
+      } else if (it.fx && S.autoAccept) {
+        track(it, acceptWithAnswer(h, it)).then(() => { refresh(); tellAsks(h); });
       }
     }
     tellAsks(h);
+  }
+  /* One Accept for a title (wave 23, WORDS-15: "the title then appears as PROPOSED in a
+   * different tab with its own Accept"): the editor accepted the answer that asked for this
+   * design, so a title that landed inside the frame is accepted with it. The server decides
+   * (POST /api/fx/accept {auto}): only text the frame check passed, nothing that changes a
+   * shot; anything else stays a proposal for its own review. */
+  async function acceptWithAnswer(h, it) {
+    try {
+      const r = await api('POST', '/api/fx/accept', { id: it.fx, auto: true });
+      if (r && r.accepted === false) return false;
+      it.accepted = true;
+      say('the title is in the cut — it was accepted with the answer; Ctrl+Z takes it back');
+      return true;
+    } catch (err) {
+      return false;                                 // stays a proposal; its card says why
+    }
   }
   // a design whose request was taken back: its landing is not announced (the undo said it)
   const quietJob = (id) => { const a = asks.byJob.get(id); return !!(a && (a.h.withdrawn || a.it.job !== id)); };
@@ -1012,23 +1036,43 @@
     in_frame: ['every mark is on the picture', 'a mark is off the picture'],
     sync: ['the sound starts with the picture', 'the sound and the picture are out of step'],
     on_onset: ['each hit lands on a sharp sound', 'a hit misses the sharp sound'],
+    bounds: ['the words are inside the frame', 'the words run outside the frame'],
     audio_landed: ['the sound is heard', 'the sound is not heard'],
     picture_landed: ['it shows on the picture', 'it does not show where expected'],
     edits_apply: ['the change fits the cut', 'the change no longer fits the cut'],
     proof: ['a test render', 'no test render yet'],
   };
+  const SOUND_CHECKS = ['sync', 'audio_landed'];    // an effect with no sound has none to check
   function plain(c, bad) { const w = PLAIN[c.key]; return w ? w[bad ? 1 : 0] : String(c.label || c.key); }
 
   /* One line under the sentence: "✓ checked", or what is wrong — on an accepted effect
    * only when something is (it is answered), and "checking…" while the server's free
    * check runs. */
+  /* What the frame check found, in a few words (the full sentences are behind why? ▸). */
+  const BOUNDS_WORDS = {
+    text_outside: 'the words run outside the frame',
+    shape_outside: 'a bar is cut off by the edge of the frame',
+    cuts_text: 'a bar cuts across the words',
+    text_overlap: 'two lines of words sit on each other',
+  };
+  function boundsBad(e) { return e.bounds && e.bounds.ok === false && (e.bounds.problems || []).length ? e.bounds : null; }
+  function boundsLine(b) {
+    const p = b.problems[0];
+    return `<div class="fxcheck bad">✗ ${esc(BOUNDS_WORDS[p.kind] || 'the words are not inside the frame')}`
+      + ` <button class="fxlink" data-act="fit" title="shrink and move it, by hand, until the words are inside the safe area — no model is asked">Fit to frame</button></div>`;
+  }
   function checkLine(e) {
     if (e.status === 'removed') return '';
-    if (S.checking.has(e.id)) return `<div class="fxcheck wait">checking…</div>`;
+    const b = boundsBad(e);              // measured on the drawn pixels, at once, before the proof renders
+    if (S.checking.has(e.id)) return `<div class="fxcheck wait">checking…</div>` + (b ? boundsLine(b) : '');
+    if (b) return boundsLine(b);
     const v = e.verify;
     if (!v || !Array.isArray(v.checks)) return '';
     if (v.ok) return e.status === 'proposed' ? `<div class="fxcheck ok">✓ checked</div>` : '';
-    const bad = v.checks.find((c) => c.ok === false);
+    const bad = v.checks.find((c) => c.ok === false && (e.sound || !SOUND_CHECKS.includes(c.key)));
+    if (!bad && v.checks.every((c) => c.ok !== false || (!e.sound && SOUND_CHECKS.includes(c.key)))) {
+      return e.status === 'proposed' ? `<div class="fxcheck ok">✓ checked</div>` : '';
+    }
     return `<div class="fxcheck bad">✗ ${esc(bad ? plain(bad, true) : 'not checked')}</div>`;
   }
 
@@ -1037,6 +1081,86 @@
     const cls = c.ok === true ? 'ok' : c.ok === false ? 'bad' : 'skip';
     return `<li class="${cls}" title="${esc(c.detail || '')}"><span class="mark">${mark}</span>`
       + `<span class="lbl">${esc(c.ok === null ? `${plain(c, false)} — not checked` : plain(c, c.ok === false))}</span></li>`;
+  }
+
+  /* ------------------------------------------------------------ by hand (wave 23, TITLE) */
+  /* The words, the size, the place, where it starts and how long it stays — changed on the
+   * card, no model asked (POST /api/fx/hand). The frame check reads the new numbers at once
+   * (`bounds` in the answer), and the monitor shows the title-safe guides while a control is
+   * in use or a nudge is pressed. */
+  const SAFE = 0.05;
+  function textsOf(e) {
+    const out = [];
+    for (const s of ((e.overlay || {}).shapes || [])) if (s.type === 'text' && !out.includes(s.text)) out.push(s.text);
+    return out;
+  }
+  const canHand = (e) => !!(e && e.overlay && e.status !== 'removed');
+  function handHtml(e) {
+    if (!canHand(e) || !S.handOpen.has(e.id)) return '';
+    const ev = (e.events || [])[0] || { x: 0.5, y: 0.5, t: 0 };
+    const sg = seg(e.shot);
+    const into = sg ? Math.max(0, Number(ev.t) - Number(sg.in)) : 0;
+    const words = textsOf(e).map((t) => `<label class="fxh"><span>words</span>`
+      + `<textarea rows="${Math.min(4, t.split('\n').length)}" maxlength="80" data-hand="words" data-from="${esc(t)}">${esc(t)}</textarea></label>`).join('');
+    const num = (k, v, min, max, step, unit) => `<input type="number" data-hand="${k}" min="${min}" max="${max}" step="${step}" value="${v}" aria-label="${k}">${unit}`;
+    const arrows = [['←', -1, 0], ['↑', 0, -1], ['↓', 0, 1], ['→', 1, 0]]
+      .map(([a, dx, dy]) => `<button class="nudge" data-hand-nudge="${dx},${dy}" title="one percent of the frame">${a}</button>`).join('');
+    return `<div class="fxhand" data-hand-for="${esc(e.id)}">`
+      + words
+      + `<label class="fxh"><span>size</span><input type="range" data-hand="size" min="0.1" max="1.6" step="0.01" value="${Number(e.overlay.size)}">`
+      + `<output>${Number(e.overlay.size).toFixed(2)}</output></label>`
+      + `<div class="fxh"><span>place</span>x ${num('x', Math.round(ev.x * 100), 0, 100, 1, '%')} y ${num('y', Math.round(ev.y * 100), 0, 100, 1, '%')} ${arrows}</div>`
+      + `<div class="fxh"><span>in / out</span>in ${num('start', into.toFixed(2), 0, 3600, 0.04, ' s')} for ${num('length', Number(e.overlay.duration).toFixed(2), 0.1, 30, 0.1, ' s')}</div>`
+      + `<div class="fxh"><span></span><button data-act="fit" title="shrink and move it until the words are inside the safe area — no model is asked">Fit to frame</button>`
+      + `<span class="hint">no model call · the dashed line on the monitor is the title-safe area</span></div>`
+      + `</div>`;
+  }
+
+  async function hand(e, edit) {
+    try {
+      const n = await api('POST', '/api/fx/hand', { id: e.id, edit });
+      const k = S.effects.findIndex((x) => x.id === e.id);
+      if (k >= 0) S.effects[k] = n; else S.effects.push(n);
+      S.checking.add(e.id);
+      showGuides(e.id);
+      paint(true);
+      draw();
+      pollJobs();
+      return n;
+    } catch (err) {
+      say(err.message);
+      paint(true);
+      return null;
+    }
+  }
+
+  /* The title-safe area and where the words really are, on the monitor, for a few seconds
+   * after a hand control is used (and while one has the focus). */
+  let guideTimer = null;
+  function showGuides(id) {
+    S.guides = { id };
+    clearTimeout(guideTimer);
+    guideTimer = setTimeout(() => { S.guides = null; draw(); }, 4000);
+    draw();
+  }
+  function drawGuides(ctx, W, H) {
+    const e = S.guides && byId(S.guides.id);
+    ctx.save();
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = Math.max(2, W / 640);
+    ctx.setLineDash([W / 80, W / 120]);
+    ctx.strokeStyle = 'rgba(255,255,255,.85)';
+    ctx.strokeRect(SAFE * W, SAFE * H, (1 - 2 * SAFE) * W, (1 - 2 * SAFE) * H);
+    ctx.setLineDash([]);
+    ctx.fillStyle = 'rgba(255,255,255,.85)';
+    ctx.font = `${Math.max(10, Math.round(W / 70))}px system-ui, sans-serif`;
+    ctx.fillText('title-safe', SAFE * W + 6, SAFE * H + Math.max(12, W / 60));
+    const t = e && e.bounds && e.bounds.text;
+    if (t) {
+      ctx.strokeStyle = e.bounds.ok ? 'rgba(80,220,120,.9)' : 'rgba(255,90,90,.95)';
+      ctx.strokeRect(t[0] * W, t[1] * H, (t[2] - t[0]) * W, (t[3] - t[1]) * H);
+    }
+    ctx.restore();
   }
 
   /* Overlays and sounds land on moments; an edit-only proposal (the slow motion) has
@@ -1076,7 +1200,9 @@
       + (e.note ? `<div class="fxnote">“${esc(named(e.note))}”</div>` : '')
       + (e.says && e.why ? `<div class="hint">${esc(named(e.why))}</div>` : '')
       + (e.limits && e.status !== 'proposed' ? `<div class="hint">couldn't: ${esc(named(e.limits))}</div>` : '')
-      + (v && Array.isArray(v.checks) && v.checks.length ? `<ul class="fxchecks">${v.checks.map(checkRow).join('')}</ul>` : '')
+      + (v && Array.isArray(v.checks) && v.checks.length
+        ? `<ul class="fxchecks">${v.checks.filter((c) => e.sound || !SOUND_CHECKS.includes(c.key)).map(checkRow).join('')}</ul>` : '')
+      + (e.bounds && (e.bounds.problems || []).length ? `<ul class="fxchecks">${e.bounds.problems.map((p) => `<li class="bad"><span class="mark">✗</span><span class="lbl">${esc(p.detail)}</span></li>`).join('')}</ul>` : '')
       + (extras.length ? `<div class="fxextras hint">${extras.join(' · ')}</div>` : '')
       + (e.ref_url ? `<img class="fxrefimg" src="${esc(e.ref_url)}" alt="the reference drawn on the frame" title="the frame you drew on — the marks are the anchors">` : '')
       + `</div>`;
@@ -1093,7 +1219,8 @@
     const prev = Array.isArray(e.previous) ? e.previous.length : 0;
     const says = named(e.says || e.why || '');
     const moments = hasMoments(e) && !removed && (proposed || S.momentsOpen.has(e.id));
-    const why = `<button class="fxlink" data-act="why">why? ${S.whyOpen.has(e.id) ? '▾' : '▸'}</button>`;
+    const why = `<button class="fxlink" data-act="why">why? ${S.whyOpen.has(e.id) ? '▾' : '▸'}</button>`
+      + (canHand(e) ? `<button class="fxlink" data-act="hand" title="the words, the size, the place, in and out — by hand, no model asked">edit by hand ${S.handOpen.has(e.id) ? '▾' : '▸'}</button>` : '');
     const change = `<button data-act="iterate" title="tell the model what to change — the effect comes back as a proposal">`
       + `Change${revisePriced() ? ` · ${rcCost.tag(S.revisePrice.usd, S.revisePrice)}` : ''}</button>`;
     const btns = removed
@@ -1122,9 +1249,12 @@
       // what the model says it did not do, on the waiting card itself: "✓ checked" is the
       // free check of what was made, not of what was asked, and this shortfall is what
       // Accept vs Change turns on — behind why? ▸ it read as checked and complete
+      + (textsOf(e).length ? `<div class="fxreads" title="the words the effect draws — spelled as they are drawn; edit them by hand">reads ${textsOf(e).map((t) => `“${esc(t.replace(/\n/g, ' / '))}”`).join(' · ')}</div>` : '')
       + (proposed && e.limits ? `<div class="fxlimits">didn't: ${esc(named(e.limits))}</div>` : '')
+      + (proposed && Array.isArray(e.replaces) && e.replaces.length ? `<div class="fxlimits">replaces the earlier ${e.replaces.length === 1 ? 'one' : `${e.replaces.length}`} with the same words — Accept takes ${e.replaces.length === 1 ? 'it' : 'them'} out</div>` : '')
       + checkLine(e)
       + (moments ? momentsHtml(e) : '')
+      + handHtml(e)
       + btns + iter
       + (S.whyOpen.has(e.id) ? whyHtml(e) : '')
       + `</div>`;
@@ -1431,7 +1561,7 @@
       S.window && [S.window.t0, S.window.t1],
       S.peaks.length,
       S.sketch && [S.sketch.strokes.length, S.sketch.goal], [...S.iterOpen], S.place,
-      [...S.whyOpen], [...S.momentsOpen], [...S.checking], S.designOpen,
+      [...S.whyOpen], [...S.momentsOpen], [...S.handOpen], [...S.checking], S.designOpen,
       S.busy && [S.busy.id, S.busy.state, S.busy.detail, S.busy.milestone],
     ]);
   }
@@ -1535,6 +1665,11 @@
         put(eff.id, { events });
         return;
       }
+      if (btn.dataset.handNudge) {
+        const [dx, dy] = btn.dataset.handNudge.split(',').map(Number);
+        hand(eff, { nudge: { dx: dx * 0.01, dy: dy * 0.01 } });
+        return;
+      }
       if (btn.classList.contains('nudge')) {
         const li = btn.closest('.fxev');
         nudge(eff, Number(li.dataset.i), Number(btn.dataset.d));
@@ -1550,8 +1685,30 @@
     }
   }
 
+  function onHandInput(e) {
+    const t = e.target, k = t.dataset.hand;
+    const card = t.closest('.fxcard');
+    const eff = card ? byId(card.dataset.id) : null;
+    if (!eff || !k) return;
+    if (t.type === 'range') { const o = t.parentElement.querySelector('output'); if (o) o.textContent = Number(t.value).toFixed(2); }
+    if (e.type !== 'change') { showGuides(eff.id); return; }     // typed or dragged: guides now, the call on release
+    let edit = null;
+    if (k === 'words') {
+      const to = t.value.split('\n').map((l) => l.trim()).filter(Boolean).join('\n');
+      if (!to) { say('a title cannot be empty — remove the effect instead'); paint(true); return; }
+      if (to !== t.dataset.from) edit = { words: { [t.dataset.from]: to } };
+    } else if (k === 'size') edit = { size: Number(t.value) };
+    else if (k === 'x' || k === 'y') edit = { [k]: Number(t.value) / 100 };
+    else if (k === 'start') {
+      const sg = seg(eff.shot);
+      edit = { start: (sg ? Number(sg.in) : 0) + Number(t.value) };
+    } else if (k === 'length') edit = { length: Number(t.value) };
+    if (edit) hand(eff, edit);
+  }
+
   function onToolInput(e) {
     const t = e.target;
+    if (t.dataset && t.dataset.hand) { onHandInput(e); return; }
     if (t.id === 'fxNote') S.note = t.value;
     else if (t.id === 'fxPlace') S.place = !!t.checked;
     else if (t.id === 'fxGoal') { if (S.sketch) S.sketch.goal = t.value; }
@@ -1795,8 +1952,8 @@
     const sg = liveShot();
     const effs = sg ? drawnForShot(sg.id) : [];
     const on = !!(v && effs.length);
-    c.classList.toggle('live', on);
-    if (!on && !S.sketch) return;
+    c.classList.toggle('live', on || !!S.guides);
+    if (!on && !S.sketch && !S.guides) return;
     if (!v || !v.videoWidth || !v.videoHeight) return;   // no frame yet; the next one draws
     if (c.width !== v.videoWidth || c.height !== v.videoHeight) {
       c.width = v.videoWidth;
@@ -1808,6 +1965,7 @@
     ctx.clearRect(0, 0, W, H);
     if (sg) for (const e of effs) drawEffect(ctx, e, sg, v.currentTime, W, H);
     if (S.sketch) drawStrokes(ctx, W, H);
+    if (S.guides) drawGuides(ctx, W, H);
   }
 
   /* ------------------------------------------------------------ the sound */

@@ -241,6 +241,10 @@ class Board:
             "window.rcActions && window.rcAI && window.fx && fx.ready && window.tlLanes"
             " && typeof C !== 'undefined' && C && C.shots", timeout=15000)
         self.page.wait_for_selector(INPUT)
+        # wave 23: a title that lands inside the frame is accepted with the answer that asked
+        # for it. These tests are about the designs as proposals (taken back, set aside,
+        # redone); the accept-with-the-answer path has its own test below
+        self.page.evaluate("fx.state.autoAccept = false")
         # every toast the page shows, in order (a later one replaces the one before)
         self.page.evaluate("""() => {
           window.__toasts = [];
@@ -814,5 +818,42 @@ def test_the_board_names_ids_the_server_left_in(browser, live_server, project):
         assert "title on shot 1 (CLIP_A)" in text and "the continuation into shot 2 (CLIP_B)" in text, text
         assert "(shot 3)" in text, text
         assert _scan(p) == [], _scan(p)
+    finally:
+        b.close()
+
+
+# ---------------------------------------------------------------- wave 23, TITLE
+
+def test_a_title_is_accepted_with_the_answer_that_asked_for_it_and_ctrl_z_takes_both_back(browser, live_server, project):
+    """WORDS-15 / HANDS-17: "Accept all" then "Accept" again in Designed Effects. A title the
+    designer drew inside the frame is accepted with the answer: one Accept, the title in the
+    cut. Ctrl+Z takes the design back (the cut as it was, the design set aside), and
+    Ctrl+Shift+Z puts it back in the cut, with no model call."""
+    import server
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+        p.evaluate("fx.state.autoAccept = true")
+        b.ask([{"op": "design_effect", "id": A, "note": "a big white KILLINGTON title"}],
+              summary="a KILLINGTON title", text="put a big white KILLINGTON title on the first shot")
+        b.accept()
+        got = _until(p, lambda: [e for e in b.effects() if e["status"] == "accepted"], what="the title to be accepted with the answer")
+        b.designs_idle()
+        [first] = got
+        fx_id = first["id"]
+        assert first["bounds"]["ok"] is True
+        assert [e["id"] for e in b.settle().get("effects") or []] == [fx_id]       # in the cut, no second Accept
+        assert not [e for e in b.effects() if e["status"] == "proposed"]
+        calls = MODEL.calls
+        b.undo()
+        _until(p, lambda: b.effects() == [], what="the title to be taken back")
+        assert (b.settle().get("effects") or []) == []
+        assert [(e["id"], e["status"]) for e in _on_disk()] == [(fx_id, "withdrawn")]
+        b.redo()
+        again = _until(p, lambda: b.effects() or None, what="the title to come back")
+        assert [(e["id"], e["status"]) for e in again] == [(fx_id, "accepted")], again
+        assert [e["id"] for e in b.settle().get("effects") or []] == [fx_id]
+        p.wait_for_timeout(800)
+        assert MODEL.calls == calls
     finally:
         b.close()
