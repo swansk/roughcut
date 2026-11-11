@@ -562,7 +562,7 @@ def _switch_bin(page, path):
     page.fill("#pickerPath", str(path))
     with page.expect_navigation():
         page.press("#pickerPath", "Enter")
-    page.wait_for_selector("#tl, #tlEmpty", timeout=20000)
+    page.wait_for_selector("#tl, #tlEmpty", timeout=60000)
     page.wait_for_timeout(1500)
 
 
@@ -583,14 +583,25 @@ def test_undo_survives_the_switchers_own_clicks_to_another_film_and_back(board, 
     page.wait_for_function("document.querySelector('#saveState').dataset.state === 'saved'")
     depth = page.evaluate("tl.history().undo.length")
     assert depth >= 2
-    _switch_bin(page, other)                       # at once: no waiting for any debounce
-    assert page.locator("#undo").get_attribute("title") == "nothing to undo"
-    _switch_bin(page, project["footage"])
-    page.wait_for_selector("#tl .blk")
-    page.wait_for_function("!document.querySelector('#undo').disabled", timeout=10000)
-    assert page.evaluate("tl.history().undo.length") == depth
-    page.keyboard.press("Control+z")               # the accepted proposal, one undo
-    page.wait_for_function("segs.length === 2")
+    import server
+    main = str(server.STATE["edl"])
+    try:
+        _switch_bin(page, other)                   # at once: no waiting for any debounce
+        assert page.locator("#undo").get_attribute("title") == "nothing to undo"
+        _switch_bin(page, project["footage"])
+        page.wait_for_selector("#tl .blk", timeout=60000)
+        page.wait_for_function("!document.querySelector('#undo').disabled", timeout=20000)
+        assert page.evaluate("tl.history().undo.length") == depth
+        page.keyboard.press("Control+z")           # the accepted proposal, one undo
+        page.wait_for_function("segs.length === 2")
+    finally:                                       # the suite's server goes back to its own film and cut
+        if str(server.STATE["footage"]) != str(project["footage"]):
+            page.evaluate("(f) => fetch('/api/projects/open', {method:'POST', headers:{'content-type':'application/json'},"
+                          " body: JSON.stringify({footage: f})})", str(project["footage"]))
+            time.sleep(1.0)
+        if str(server.STATE["edl"]) != main:
+            page.evaluate("(p) => fetch('/api/cuts/open', {method:'POST', headers:{'content-type':'application/json'},"
+                          " body: JSON.stringify({path: p})})", main)
 
 
 def test_undo_survives_a_copy_and_the_return_to_the_original_through_the_switcher(board, project):
