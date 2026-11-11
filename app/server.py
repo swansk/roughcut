@@ -14176,6 +14176,8 @@ def module_static(name: str) -> Response:
 # editor as its own modules: the pass's verdicts in Selects, File › Project Settings…,
 # hold-to-speak in the AI prompt, and Window › Events (the index's journal).
 MODULE_FILES |= {"passreview.js", "projsettings.js", "voice.js", "events.js"}
+# wave 24 HANDS: where the keys go (focus rule, menus) and the typed timecode
+MODULE_FILES |= {"hands.js"}
 
 
 # ---------------------------------------------------------------- audio peaks (wave 3 TLAUDIO)

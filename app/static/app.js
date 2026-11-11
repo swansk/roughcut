@@ -222,7 +222,9 @@ function paintJob(row, j) {
         if (seen) strip.seen.set(j.id, { ...seen, state: 'cancelled' });
         row.style.display = 'none';
       };
-      row.appendChild(x);
+      // beside the icon, ahead of the bar and the countdown: those change length, the × must not
+      // move under the pointer (CLUMSY-10)
+      row.querySelector('.jlabel').after(x);
     }
   } else if (x) {
     x.remove();
@@ -2128,6 +2130,7 @@ function pauseCut() {
   player.vids.forEach((v) => { v.pause(); dropInFrame(v); });
   if (bed.el) bed.el.pause();
   player.playing = false;
+  player.single = false;
   // stopped on a frame whose playhead was not drawn (paintPos `quiet`): drawn where it is
   if (posQuiet && window.tl) { posQuiet = false; tl.setPlayhead(tl.state.playhead, { reveal: false }); }
   freshen(liveVideo());               // parked: a better kind of its media can go in now
@@ -3353,13 +3356,15 @@ function advance() {
   const g = ++player.gen;           // the shot we are leaving must not restart itself
   const next = player.idx + 1;
   if (player.single || next >= segs.length) {
+    const wasSingle = player.single;
     player.playing = false;
+    player.single = false;            // "this shot only" is over with the shot (HANDS-08: it stuck)
     if (posQuiet && window.tl) { posQuiet = false; tl.setPlayhead(tl.state.playhead, { reveal: false }); }
     if (bed.el) bed.el.pause();
     cancelAnimationFrame(player.raf);
     progPause();
     screenMsg('');
-    if (!player.single) { sel = 0; player.idx = -1; paint(); }   // the end: space restarts
+    if (!wasSingle) { sel = 0; player.idx = -1; paint(); }   // the end: space restarts
     paintTransport();
     return;
   }
@@ -3721,7 +3726,7 @@ function paintTransport() {
   const seg = segs[player.idx];
   // the clip by the name the editor reads (a generated clip: "Black Video", verdict 10)
   const what = seg
-    ? `${player.idx + 1}/${segs.length} · ${clipLabel(seg.clip)}${player.single ? ' · this shot only' : ''}`
+    ? `${player.idx + 1}/${segs.length} · ${clipLabel(seg.clip)}${player.single && player.playing ? ' · this shot only' : ''}`
     : '';
   // (written only when it changes: a cut calls this, and a new text node is a child-list
   // change the board's `:has()` rules re-match on, in the cut's own frame)
@@ -6890,7 +6895,7 @@ async function doRender(profile = 'preview') {
 }
 
 document.addEventListener('keydown', (e) => {
-  if (['INPUT', 'TEXTAREA'].includes(e.target.tagName) || e.target.isContentEditable) return;
+  if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName) || e.target.isContentEditable) return;
   const step = e.shiftKey ? 1.0 : 0.25;
   const k = e.key;
   if (k === 'j') { sel = Math.min(segs.length - 1, sel + 1); paint(); scrollSel(); }

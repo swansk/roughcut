@@ -1716,8 +1716,9 @@
       if (!b) return;
       const n = b.closest('.tl-thead').dataset.track, k = b.dataset.toggle;
       const v = k === 'eye' ? !trackState(n).eye : !trackState(n)[k];
+      const was = k === 'target' && v && n[0] === 'V' ? trackNames().filter((x) => x[0] === 'V' && x !== n && trackState(x).target) : [];
       setTrack(n, k, v);
-      toast(`${n} ${k === 'eye' ? (v ? 'shown' : 'hidden') : k === 'target' ? (v ? 'targeted' : 'not targeted')
+      toast(`${n} ${k === 'eye' ? (v ? 'shown' : 'hidden') : k === 'target' ? (v ? `targeted${was.length ? ` (${was.join(', ')} is not any more: one video target)` : ''}` : 'not targeted')
         : `${v ? '' : 'un'}${k === 'lock' ? 'locked' : k === 'mute' ? 'muted' : 'soloed'}`}`);
     });
   }
@@ -1756,6 +1757,16 @@
     } else v = !!value;
     if (t[key] === v) return false;
     state.tracks = { ...state.tracks, [name]: { ...t, [key]: v } };
+    // one video target at a time (HANDS-12): targeting V2 took V1's target away from V1 only
+    // by hand, and an overwrite meant for V2 went to V1 and A1. The sound's targets are the
+    // audio tracks' own.
+    if (key === 'target' && v && name[0] === 'V') {
+      for (const n of Object.keys(state.tracks)) {
+        if (n !== name && n[0] === 'V' && state.tracks[n].target) {
+          state.tracks = { ...state.tracks, [n]: { ...state.tracks[n], target: false } };
+        }
+      }
+    }
     paintHeads();
     renderA1(segs(), hooks && hooks.live ? hooks.live() : -1);
     applyMonitorAudio();
@@ -3006,8 +3017,39 @@
     return best;
   }
 
+  /* The playhead on the film's first or last frame (within half a frame) and no edit selected:
+   * the default transition goes on that end of the film as a one-sided fade — one undo entry,
+   * said in the usual line. Returns what it made, or null when this is not that case. */
+  function fadeEnd(which) {
+    const list = segs();
+    if (!list.length || (state.tsel && selectedEdit() >= 0)) return null;
+    const half = 0.5 / fps();
+    const ph = state.playhead || 0;
+    const head = ph <= half, tail = ph >= total() - half;
+    if (!head && !tail) return null;
+    const edge = head ? 'start' : 'end';
+    const shot = head ? 0 : list.length - 1;
+    const kinds = which === 'both' ? [transDefaults.video, transDefaults.audio]
+      : [which === 'audio' ? transDefaults.audio : transDefaults.video];
+    const own = begin(kinds.length > 1 ? 'fades' : `fade ${head ? 'in' : 'out'}`);
+    const made = kinds.map((kind) => addFade(shot, edge, kind)).filter(Boolean);
+    if (own) commit();
+    if (made.length) {
+      state.tsel = tkey(made[0]);
+      paintTransitions();
+      sayLaid(made, head ? 'fading the film in' : 'fading the film out');
+    } else {
+      toast(`no ${head ? 'fade in' : 'fade out'} made — the first shot may be too short or the track locked`);
+    }
+    return made;
+  }
+
   /* Ctrl+D (the default video transition), Shift+D (audio), Ctrl+Shift+D (both): one undo entry. */
   function applyTransition(which) {
+    // HANDS-18: with the playhead on the film's first or last frame and no edit chosen, the
+    // default transition is the fade in / out of that end (Premiere's), never the first cut's
+    const ends = fadeEnd(which);
+    if (ends) return ends;
     const k = editForTransition();
     if (k < 0) { toast('no edit to put a transition on — the sequence needs two shots'); return []; }
     const kinds = which === 'both' ? [transDefaults.video, transDefaults.audio]
@@ -4439,8 +4481,16 @@
 
   function onLaneDbl(e) {
     const b = e.target.closest('.blk, .ablk');
-    if (!b || e.shiftKey || e.metaKey || e.ctrlKey || !hooks.play) return;
-    hooks.play(indexOf(b.dataset.id));
+    if (!b || e.shiftKey || e.metaKey || e.ctrlKey) return;
+    // Premiere: a double-click on a timeline clip loads it in the Source at that frame (HANDS-03)
+    const id = b.dataset.id;
+    const seg = byId(id);
+    if (seg && typeof window.rcOpenShotInSource === 'function') {
+      const t = clamp(eventTime(e), filmStart(id), filmStart(id) + dur(seg));
+      const clipT = seg.in + (t - filmStart(id)) * speedOf(seg);
+      if (window.rcOpenShotInSource(seg.clip, clipT, seg.in, seg.out)) return;
+    }
+    if (hooks.play) hooks.play(indexOf(id));
   }
 
   function onRulerDown(e) {

@@ -773,3 +773,25 @@ a.floorbtn:hover { color: var(--text); background: var(--card-hi); border-color:
 @keyframes findspin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .findrunning .spin { animation-duration: 2.4s; } }
 .keep .clipname { color: var(--dim); font-variant-numeric: tabular-nums; margin-right: 2px; }
+
+/* ---- wave 24 HANDS: nothing under the pointer moves ---------------------------------------- */
+/* The transport's buttons sit in the middle of the row whatever the readouts beside them say
+   (COLD-14, FINDER-18: Play moved when the shot label changed, the Source's buttons slid left
+   once an In was set). The two side columns are equal and the buttons keep the middle one; a
+   readout that is longer than its column is cut with an ellipsis, its full text the hover. */
+.transport { grid-template-columns: minmax(max-content, 1fr) auto minmax(0, 1fr); }
+.transport .tcr { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.transport .btns { min-width: max-content; }
+#playCut { min-width: 74px; text-align: center; }
+#source .transport .tcr { overflow: visible; }
+@container (max-width: 520px) { #srcDur { display: none; } }
+/* a job's Stop × stands beside its icon, where nothing changes length (CLUMSY-10) */
+.job .jx { flex: none; width: 14px; text-align: center; }
+#firstpass .fp-x { order: -1; border-left: 0; border-right: 1px solid #3a3a48; }
+/* the timecode you can type into (hands.js) */
+.tc-typable { cursor: text; }
+.tc-typable:hover { text-decoration: underline dotted; text-underline-offset: 3px; }
+input.hands-tc { box-sizing: border-box; padding: 0 4px; background: #101013; color: var(--tc, #4a9df8);
+                 border: 1px solid var(--accent, #4a9df8); border-radius: 2px; outline: none;
+                 font-variant-numeric: tabular-nums; }
+input.hands-tc.bad { border-color: var(--bad, #e46a6a); }

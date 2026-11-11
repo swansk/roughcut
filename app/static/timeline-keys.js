@@ -46,6 +46,12 @@
  *   ⌘A  ⌘⌥D Esc  select every shot · duplicate the selection after itself · clear the
  *                selection and the marks. (Duplicate was ⌘D until wave 9: ⌘D is
  *                Premiere's, below.)
+ *   ⌘C ⌘X ⌘V     copy / cut / paste shots (wave 24, HANDS-10): the clipboard is this page's;
+ *                paste is an INSERT at the playhead on the targeted video track (what `,` does:
+ *                the shot under the playhead splits, nothing is covered), one undo entry, the
+ *                playhead left after what was pasted. Nothing copied: it says so.
+ *   ⌘G ⌘S        go to a timecode (hands.js draws the field; `parseTimecode` reads 40. 1:05
+ *                00:00:40:00 5108 +2. -10 at the sequence's rate) · save says Roughcut saves as you go.
  *   ⌘D ⇧D ⌘⇧D    Premiere's default transitions (verdict 6, punch 6): a 1 s Cross
  *                Dissolve, a Constant Power audio crossfade, both — at the selected edit
  *                (a click on its column, or a selected transition), else the edit nearest
@@ -94,6 +100,9 @@
     ['X ⇧Del', 'ripple delete the selection (⌫ Del: only a shot you chose)', '', 'trim'],
     ['⌘Z ⌘⇧Z', 'undo / redo', 'foundation', 'trim'],
     ['⌘A ⌘⌥D Esc', 'select all · duplicate · clear the selection and marks', '', 'trim'],
+    ['⌘C ⌘X ⌘V', 'copy · cut · paste shots: paste inserts at the playhead (ripple, as , does) on the targeted track', '', 'trim'],
+    ['⌘G', 'go to a timecode: type 40. (seconds), 1:05, 00:00:40:00, +2. or -10 (frames), then ↵', '', 'move'],
+    ['⌘S', 'save: Roughcut saves as you go, this only says so', '', 'move'],
     ['⌘D ⇧D ⌘⇧D', 'the default video · audio · both transitions, 1 s at the selected edit', '', 'trim'],
     ['M ⇧M ⌘⇧M', 'marker (M on one: edit it) · next · previous (⌘⌥M clears)', '', 'move'],
     ['S', 'the magnet on / off', 'trim', 'trim'],
@@ -782,6 +791,197 @@
     return true;
   }
 
+  /* ------------------------------------------------------------ copy, cut, paste: ⌘C ⌘X ⌘V */
+  /* The clipboard is the timeline's own (a list of shot records, ids dropped): it lives as
+   * long as the page. Paste is an INSERT at the playhead on the targeted video track: the
+   * shot under the playhead splits and the rest moves later, which is what `,` does, so the
+   * film's length grows by what was pasted and nothing is covered. (Premiere's plain ⌘V
+   * overwrites; ⌘⇧V inserts. Here the one the editor reaches for first is the one that cannot
+   * destroy a shot: an overwrite is `.`.) One undo step each. */
+  const clip = { shots: [], over: null };
+
+  function clipRecord(s) {
+    const r = JSON.parse(JSON.stringify(s));
+    delete r.id;
+    return r;
+  }
+
+  function selectedShots() {
+    return segs().filter((s) => tl.state.sel.has(s.id));
+  }
+
+  function textSelected() {
+    const g = window.getSelection ? window.getSelection() : null;
+    return !!g && !g.isCollapsed && String(g).trim().length > 0;
+  }
+
+  function copyShots(verb) {
+    const picked = selectedShots();
+    const oid = tl.state.osel;
+    if (!picked.length && oid != null && tl.overlayById && tl.overlayById(oid)) {
+      const o = tl.overlayById(oid);
+      clip.shots = [];
+      clip.over = { clip: o.clip, in: o.in, out: o.out, why: o.why || '', track: o.track };
+      say(`${verb} ${stem(o.clip)} from ${o.track || 'V2'} — ${L('⌘V')} lays it at the playhead`);
+      return true;
+    }
+    if (!picked.length) { say(`nothing selected — click a shot, then ${L(verb === 'copied' ? '⌘C' : '⌘X')}`); return true; }
+    clip.shots = picked.map(clipRecord);
+    clip.over = null;
+    return picked;
+  }
+
+  function copyKey() {
+    const r = copyShots('copied');
+    if (r === true) return true;
+    say(`copied ${r.length} shot${r.length > 1 ? 's' : ''} — ${L('⌘V')} inserts ${r.length > 1 ? 'them' : 'it'} at the playhead`);
+    return true;
+  }
+
+  function cutKey() {
+    const r = copyShots('cut');
+    if (r === true) {
+      if (clip.over && tl.state.osel != null && tl.removeOverlay) tl.removeOverlay(tl.state.osel);
+      return true;
+    }
+    tl.remove(r.map((s) => s.id));            // one undo entry; the film closes up
+    chosen = false;
+    say(`cut ${r.length} shot${r.length > 1 ? 's' : ''} — ${L('⌘V')} inserts ${r.length > 1 ? 'them' : 'it'} at the playhead, ${L('⌘Z')} puts ${r.length > 1 ? 'them' : 'it'} back`);
+    return true;
+  }
+
+  function pasteKey() {
+    if (!clip.shots.length && !clip.over) {
+      say(`nothing to paste — select shots and press ${L('⌘C')} (or ${L('⌘X')}) first`);
+      return true;
+    }
+    settle();
+    const at = clamp(tl.state.playhead, 0, tl.total());
+    if (clip.over) {
+      const o = clip.over;
+      const oid = tl.addOverlay({ clip: o.clip, in: o.in, out: o.out, why: o.why }, at, o.track || 'V2');
+      if (oid == null) { say(`could not lay that on ${o.track || 'V2'}`); return true; }
+      tl.setPlayhead(clamp(at + (o.out - o.in), 0, tl.total()));
+      say(`pasted ${stem(o.clip)} on ${o.track || 'V2'} at ${tl.tc(at)}`);
+      return true;
+    }
+    const tr = tl.tracks ? tl.tracks() : null;
+    const names = tl.trackNames ? tl.trackNames() : ['V2', 'V1', 'A1', 'A2'];
+    const upper = tr && !tr.V1.target
+      ? names.filter((n) => n[0] === 'V' && n !== 'V1').reverse().find((n) => tr[n] && tr[n].target) : null;
+    const made = [];
+    let end = at;
+    tl.batch(`paste ${clip.shots.length > 1 ? clip.shots.length + ' shots' : 'a shot'}`, () => {
+      for (const rec of clip.shots) {
+        const seg = JSON.parse(JSON.stringify(rec));
+        if (upper) {
+          const oid = tl.addOverlay(seg, end, upper);
+          if (oid == null) break;
+          made.push(oid);
+          end += tl.dur(seg);
+        } else {
+          const id = made.length ? tl.insert(seg, made[made.length - 1]) : tl.insertAt(seg, end);
+          if (id == null) break;
+          made.push(id);
+        }
+      }
+    });
+    if (!made.length) { say('could not paste there'); return true; }
+    if (!upper) {
+      chosen = true;
+      tl.select(made);
+      const last = made[made.length - 1];
+      end = tl.filmStart(last) + tl.dur(tl.byId(last));
+    }
+    tl.seek(clamp(end, 0, tl.total()));
+    tl.setPlayhead(clamp(end, 0, tl.total()));
+    say(`pasted ${made.length} shot${made.length > 1 ? 's' : ''} ${upper ? `on ${upper} ` : ''}at ${tl.tc(at)} — ${L('⌘Z')} takes ${made.length > 1 ? 'them' : 'it'} back`);
+    return true;
+  }
+
+  /* ⌘S: nothing to save by hand; say so, and let a late autosave go now. */
+  function saveKey() {
+    try { if (typeof saveTimer !== 'undefined' && saveTimer && typeof save === 'function') save(); } catch (_) { /* the header says */ }
+    say('saved: Roughcut saves as you go');
+    return true;
+  }
+
+  /* ------------------------------------------------------------ a typed timecode */
+  /* What the timecode fields accept (HANDS-08, CLUMSY-19, FINISH-12), at the SEQUENCE's rate
+   * (`tl.frame()`, nominal 24 for 23.976, as `tl.tc` writes it):
+   *   00:00:40:00   HH:MM:SS:FF — also 0:40:00 style short forms with 4 fields
+   *   40.  40.5     seconds
+   *   1:05  1:02:03 m:ss and h:mm:ss (two or three fields)
+   *   5108          digits only: Premiere's, filled from the right, 5108 = 00:00:51:08
+   *   +2.  -10  +1:05   relative to the playhead: a number with a point or colons is seconds
+   *                 (or m:ss), plain digits are frames, as in Premiere
+   * Returns {ok, t, why, relative}; t is film seconds on the frame grid, not yet clamped. */
+  function parseTimecode(text, from) {
+    const raw = String(text == null ? '' : text).trim().replace(/;/g, ':');
+    if (!raw) return { ok: false, why: 'type a timecode' };
+    const rel = /^[+-]/.test(raw) ? (raw[0] === '-' ? -1 : 1) : 0;
+    const body = rel ? raw.slice(1).trim() : raw;
+    const rate = 1 / tl.frame();
+    const nominal = Math.max(1, Math.round(rate));
+    const snap = (t) => Math.round(t * rate) / rate;
+    let secs = null, frames = null;
+    if (/^\d*\.\d*$/.test(body) && /\d/.test(body)) {
+      secs = parseFloat(body);                                   // 40.  40.5  .5
+    } else if (/^\d+(:\d+){1,3}$/.test(body)) {
+      const f = body.split(':').map(Number);
+      if (f.length === 4) {
+        if (f[3] >= nominal) return { ok: false, why: `frames go 0–${nominal - 1} at ${nominal} fps` };
+        if (f[2] >= 60 || f[1] >= 60) return { ok: false, why: 'minutes and seconds go 0–59' };
+        frames = ((f[0] * 60 + f[1]) * 60 + f[2]) * nominal + f[3];
+      } else {
+        if (f.length === 3 && (f[1] >= 60 || f[2] >= 60)) return { ok: false, why: 'minutes and seconds go 0–59' };
+        if (f.length === 2 && f[1] >= 60) return { ok: false, why: 'seconds go 0–59' };
+        secs = f.length === 3 ? f[0] * 3600 + f[1] * 60 + f[2] : f[0] * 60 + f[1];
+      }
+    } else if (/^\d+$/.test(body)) {
+      if (rel) frames = parseInt(body, 10);                      // +12: twelve frames
+      else {
+        if (body.length > 8) return { ok: false, why: 'too many digits for HH:MM:SS:FF' };
+        const d = body.padStart(8, '0');
+        const f = [d.slice(0, 2), d.slice(2, 4), d.slice(4, 6), d.slice(6, 8)].map(Number);
+        if (f[3] >= nominal) return { ok: false, why: `frames go 0–${nominal - 1} at ${nominal} fps` };
+        if (f[2] >= 60 || f[1] >= 60) return { ok: false, why: 'minutes and seconds go 0–59' };
+        frames = ((f[0] * 60 + f[1]) * 60 + f[2]) * nominal + f[3];
+      }
+    } else {
+      return { ok: false, why: `"${raw}" is not a timecode — try 40. or 1:05 or 00:00:40:00 or +2.` };
+    }
+    // typed seconds are timecode seconds: 40. is 00:00:40:00 (960 frames at 23.976, 40.04 s of
+    // film), as the field shows it, not 959 frames
+    if (secs != null) frames = Math.round(secs * nominal);
+    let t = frames / rate;
+    if (rel) t = (from == null ? tl.state.playhead || 0 : from) + rel * t;
+    return { ok: true, t: snap(t), relative: !!rel };
+  }
+
+  /* Park the playhead (and the Program) at a typed timecode; past either end it goes to the
+   * end and says so. Returns {ok, at, why}. */
+  function goToTimecode(text) {
+    const r = parseTimecode(text);
+    if (!r.ok) { say(r.why); return r; }
+    const list = segs();
+    const total = tl.total();
+    if (!list.length) { say('nothing on the timeline to go to'); return { ok: false, why: 'empty' }; }
+    settle();
+    pauseMon();
+    const last = Math.max(0, total - tl.frame());          // the last frame
+    let t = r.t, note = '';
+    if (t > total + tl.frame() / 2) { t = last; note = ` — past the end of the film (${tl.tc(total)}), went to its last frame`; }
+    else if (t < -tl.frame() / 2) { t = 0; note = ' — before the start, went to the first frame'; }
+    t = clamp(t, 0, last);
+    const at = tl.shotAt(t);
+    tl.seek(t);
+    tl.setPlayhead(t);
+    if (at) tl.select([at.id]);
+    say(`${tl.tc(t)}${note}`);
+    return { ok: true, at: t, note: note || null };
+  }
+
   /* ------------------------------------------------------------ the map */
   function keysPanel() {
     for (const h of document.querySelectorAll('.panel h2')) {
@@ -848,6 +1048,11 @@
       if (e.code === 'KeyM' && e.shiftKey) handled = jumpMarker(-1);
       else if (e.code === 'KeyX' && e.shiftKey) handled = clearInOut();
       else if (k === 'a' && !e.shiftKey) handled = selectAll();
+      else if (k === 'c' && !e.shiftKey) handled = textSelected() ? false : copyKey();
+      else if (k === 'x' && !e.shiftKey) handled = textSelected() ? false : cutKey();
+      else if (k === 'v' && !e.shiftKey) handled = pasteKey();
+      else if (k === 's' && !e.shiftKey) handled = saveKey();
+      else if (k === 'g' && !e.shiftKey) handled = openTimecode();
       else if (k === 'd') handled = transition(e.shiftKey ? 'both' : 'video');
       else if (k === 'k' && !e.shiftKey) handled = addEdit();
       // ⌘Z / ⌘⇧Z are the foundation's; they are not bound twice
@@ -949,6 +1154,13 @@
   };
   if (tl.el && tl.el.root) init({});
 
-  window.tlKeys = { KEYS, marks, shuttle: sh, renderMap, clearMarks, sourceShot,
+  /* ⌘G: the timeline's timecode field (hands.js draws it) */
+  function openTimecode() {
+    if (window.rcHands && typeof window.rcHands.editTimecode === 'function') window.rcHands.editTimecode('timeline');
+    else say('click the timecode to type one');
+    return true;
+  }
+
+  window.tlKeys = { saveKey, insertFromSource: () => editFromSource('insert'), overwriteFromSource: () => editFromSource('overwrite'), parseTimecode, goToTimecode, copyKey, cutKey, pasteKey, clipboard: clip, KEYS, marks, shuttle: sh, renderMap, clearMarks, sourceShot,
                     get lastPanel() { return lastPanel; } };
 })();

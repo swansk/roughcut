@@ -26,6 +26,11 @@
     <div class="menu" data-menu="edit"><button type="button" class="mtop">Edit</button><div class="mdrop" role="menu">
       <button type="button" data-cmd="undo">Undo <span class="k">Ctrl+Z</span></button>
       <button type="button" data-cmd="redo">Redo <span class="k">Ctrl+Shift+Z</span></button>
+      <hr><button type="button" data-cmd="cut" data-testid="menu-cut">Cut shots <span class="k">Ctrl+X</span></button>
+      <button type="button" data-cmd="copy" data-testid="menu-copy">Copy shots <span class="k">Ctrl+C</span></button>
+      <button type="button" data-cmd="paste" data-testid="menu-paste">Paste at the playhead <span class="k">Ctrl+V</span></button>
+      <hr><button type="button" data-cmd="gototc" data-testid="menu-gototc">Go to timecode… <span class="k">Ctrl+G</span></button>
+      <button type="button" data-cmd="savenote" data-testid="menu-save">Save <span class="k">Ctrl+S</span></button>
       <hr><button type="button" data-cmd="keys">Keyboard shortcuts <span class="k">?</span></button>
     </div></div>
     <div class="menu" data-menu="clip"><button type="button" class="mtop">Clip</button><div class="mdrop" role="menu">
@@ -391,6 +396,7 @@
 <script src="/cli.js"></script>
 <script src="/switcher.js"></script>
 <script src="/dock.js"></script>
+<script src="/modules/hands.js"></script>
 <script src="/flow.js"></script>
 <script src="/timeline/timeline.js"></script>
 <script src="/timeline/timeline-trim.js"></script>

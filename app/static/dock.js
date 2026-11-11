@@ -407,6 +407,11 @@
     // Window › Events: the index's journal, as /open showed it behind its how line
     events: () => { if (window.rcEvents) window.rcEvents.open(); },
     export: () => open('out'),
+    cut: () => { if (window.tlKeys) tlKeys.cutKey(); },
+    copy: () => { if (window.tlKeys) tlKeys.copyKey(); },
+    paste: () => { if (window.tlKeys) tlKeys.pasteKey(); },
+    gototc: () => { if (window.rcHands) setTimeout(() => rcHands.editTimecode('timeline'), 0); },
+    savenote: () => { if (window.tlKeys) tlKeys.saveKey(); },
     undo: () => { const b = $('#undo'); if (b) b.click(); },
     redo: () => { const b = $('#redo'); if (b) b.click(); },
     keys: () => keys(true),
@@ -1426,6 +1431,28 @@
     return true;
   }
 
+  /* A timeline shot, double-clicked (HANDS-03, Premiere's "match the source"): its clip opens
+   * in the Source monitor, its In and Out the shot's, parked on `at` (the frame that was
+   * clicked), paused. */
+  function openShotInSource(clipName, at, a, b) {
+    const c = clipByName(clipName);
+    if (!c) { toastSay('this clip is not in the footage folder'); return false; }
+    if (typeof ensureClip === 'function') ensureClip(c.clip);
+    source.marks[c.clip] = [source.snap(a, c), source.snap(b, c)];
+    store.set(MARKS_KEY, source.marks);
+    const same = source.clip && source.clip.clip === c.clip;
+    source.shuttle(0);
+    source.load(c, { at });
+    if (same && source.v && source.v.readyState >= 1) source.v.currentTime = at;
+    source.paint();
+    source.publish();
+    setSel(`c|${clipName}`);
+    flashPanel('#pSource');
+    toastSay(`${c.clip} in the Source at ${tcode(at, c.fps)}, its In and Out set to this shot (${tcode(source.snap(b, c) - source.snap(a, c), c.fps)})`);
+    return true;
+  }
+  window.rcOpenShotInSource = openShotInSource;
+
   /* A sequence: the open one is the Timeline's already; another opens through the
    * switcher's own path (POST /api/cuts/open, unsaved edits written first). */
   async function openSeq(it) {
@@ -1781,7 +1808,7 @@
     box.addEventListener('dblclick', (e) => {
       if (e.target.closest('[data-tw], th, [data-import]')) return;
       const r = e.target.closest('[data-key]');
-      if (r) { act(r, true, true); return; }
+      if (r) { act(r, true, false); return; }     // it opens in the Source, paused (HANDS-03)
       // Premiere: a double-click on an empty part of the bin is Import
       if (project.read && !e.target.closest('.pempty')) importMedia();
     });
@@ -2143,7 +2170,7 @@
         v.src = url;
         v.load();
         clearTimeout(this.retry);
-        const at = keepAt != null ? keepAt : a;
+        const at = opts.at != null ? opts.at : keepAt != null ? keepAt : a;
         v.addEventListener('loadedmetadata', () => { v.currentTime = at; }, { once: true });
       }
       // no In marked: the card's own frame (pre-built, and not the black first frame
@@ -2156,9 +2183,49 @@
       this.publish();
       if (opts.play) this.play();
     },
+    /* J K L on the Source (HANDS-04): L plays forward (again 2× 4× 8×), J backward (a
+     * requestAnimationFrame walk: Chromium does not play backwards), K stops. */
+    shuttle(dir) {
+      const v = this.v;
+      if (!v || !this.clip) return;
+      cancelAnimationFrame(this._raf);
+      this._raf = 0;
+      if (dir === 0) { this.shRate = 0; v.pause(); v.playbackRate = 1; this.paint(); return; }
+      const mag = Math.sign(this.shRate || 0) === dir ? Math.min(8, Math.abs(this.shRate) * 2) : 1;
+      this.shRate = dir * mag;
+      if (dir > 0) {
+        const dur = v.duration || this.clip.duration || 0;
+        if (dur && v.currentTime >= dur - 0.05) v.currentTime = 0;
+        v.playbackRate = mag;
+        v.play().catch(() => { /* the monitor shows its wait */ });
+        return;
+      }
+      v.pause();
+      let last = performance.now();
+      const tick = (now) => {
+        const dt = (now - last) / 1000;
+        last = now;
+        v.currentTime = Math.max(0, v.currentTime - dt * mag);
+        this.paint();
+        if (v.currentTime <= 0) { this.shRate = 0; this._raf = 0; return; }
+        this._raf = requestAnimationFrame(tick);
+      };
+      this._raf = requestAnimationFrame(tick);
+    },
+    edge(end) {
+      const v = this.v;
+      if (!v || !this.clip) return;
+      this.shuttle(0);
+      v.currentTime = end ? Math.max(0, (v.duration || this.clip.duration || 0) - 1 / this.fps()) : 0;
+      this.paint();
+    },
     play() {
       const v = this.v;
       if (!v || !this.clip) return;
+      cancelAnimationFrame(this._raf);
+      this._raf = 0;
+      this.shRate = 0;
+      v.playbackRate = 1;
       if (!v.paused) { v.pause(); return; }
       const [, b] = this.marksFor(this.clip);
       if (v.currentTime >= b - 0.05) v.currentTime = this.marksFor(this.clip)[0];
@@ -2187,6 +2254,9 @@
       const c = this.clip;
       if (!c) return toastSay('pick a clip in the Project panel first');
       if (typeof window.rcInsertFromSource === 'function') return window.rcInsertFromSource(window.rcSource);
+      // the button does what `,` does: the same insert at the playhead, the same target
+      // tracks, and the playhead left after the new shot (FINDER-19: the next one stacked in front)
+      if (window.tlKeys && typeof window.tlKeys.insertFromSource === 'function') return window.tlKeys.insertFromSource();
       const [a, b] = this.marksFor(c);
       if (b - a < 0.2) return toastSay('mark an In and an Out first');
       // any clip goes in at once: one the index has not heard yet goes in with an empty
@@ -2337,6 +2407,8 @@
     ['I O', 'mark In / Out (Source focused)', 'source'],
     ['space', 'play / stop the source clip (Source focused)', 'source'],
     ['← →', 'step a frame (Source focused)', 'source'],
+    ['J K L', 'shuttle the source clip: L forward (again 2× 4× 8×), J back, K stop (Source focused)', 'source'],
+    ['Home End', 'the source clip’s first / last frame (Source focused)', 'source'],
   ];
   function keyTable() {
     const box = $('#keyTable');
@@ -2446,7 +2518,10 @@
         const k = e.key.toLowerCase();
         const act = k === 'i' ? () => source.mark('in') : k === 'o' ? () => source.mark('out')
           : k === ' ' ? () => source.play() : k === 'arrowleft' ? () => source.step(-1)
-            : k === 'arrowright' ? () => source.step(1) : null;
+            : k === 'arrowright' ? () => source.step(1)
+              : k === 'j' ? () => source.shuttle(-1) : k === 'k' ? () => source.shuttle(0)
+                : k === 'l' ? () => source.shuttle(1)
+                  : k === 'home' ? () => source.edge(false) : k === 'end' ? () => source.edge(true) : null;
         if (act) { e.preventDefault(); e.stopImmediatePropagation(); act(); }
       }
     }, true);
