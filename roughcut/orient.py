@@ -23,7 +23,23 @@ from __future__ import annotations
 # below it on purpose: not conclusive, so its -180 flag stays honoured as it was.
 CONCLUSIVE = 0.5
 
-MODES = ("auto", "none")      # auto: the file's flag is applied; none: it is ignored
+# auto: the file's flag is applied; none: it is ignored; turnN: the flag is ignored and the
+# picture is turned N degrees counter-clockwise (90 = a quarter turn left, 270 = right).
+TURNS = ("turn90", "turn180", "turn270")
+MODES = ("auto", "none", *TURNS)
+ALIASES = {"left": "turn90", "right": "turn270", "flip": "turn180", "180": "turn180",
+           "90": "turn90", "270": "turn270"}
+
+
+def override_degrees(mode: str | None) -> int | None:
+    """The rotation a mode forces: None for auto (the file's flag), 0 for none, N for turnN."""
+    if mode in (None, "auto"):
+        return None
+    if mode == "none":
+        return 0
+    if isinstance(mode, str) and mode.startswith("turn") and mode[4:].isdigit():
+        return int(mode[4:]) % 360
+    return None
 
 
 def flag_degrees(rotation) -> int:
@@ -94,6 +110,10 @@ def decide(rotation, up=None, mount=None, convention: dict | None = None,
 
 def words(rec: dict | None) -> str:
     """The decision in the editor's words; "" when the file has no flag to talk about."""
+    if rec and rec.get("why") == "hand" and str(rec.get("mode", "")).startswith("turn"):
+        n = override_degrees(rec["mode"])
+        way = {90: "90° left", 180: "180°", 270: "90° right"}.get(n, f"{n}°")
+        return f"Turned {way} by you; the file's own rotation flag is ignored."
     if not rec or not rec.get("flag"):
         return ""
     flag, why, sensor = rec["flag"], rec.get("why"), rec.get("sensor")

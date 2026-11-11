@@ -414,8 +414,8 @@
     const name = esc(stem(r.clip));
     const tuned = r.tuned ? `<span class="tuned" title="its next look reads one frame every ${Number(r.interval_s)} s (the bin: ${Number(IX.rep.interval_s)} s)">${Number(r.interval_s)} s</span>` : '';
     const junk = r.junk ? '<span class="junk" title="marked junk: its looks are skipped">junk</span>' : '';
-    const rot = r.orient && r.orient.flag && r.orient.mode === 'none' && r.orient.text
-      ? `<span class="rotign" title="${esc(r.orient.text)}">flag ignored</span>` : '';
+    const rot = r.orient && (r.orient.flag || r.orient.hand) && r.orient.mode !== 'auto' && r.orient.text
+      ? `<span class="rotign" title="${esc(r.orient.text)}">${r.orient && r.orient.mode === 'none' ? 'flag ignored' : 'turned by you'}</span>` : '';
     return `<tr class="row${sel}${r.missing ? ' missing' : ''}" data-clip="${esc(r.clip)}" data-testid="index-row">`
       + `<td class="name" title="${esc(r.clip)}"><span class="n">${name}</span>${tuned}${junk}${rot}</td>`
       + cols().map(([k]) => cell(r, k)).join('')
@@ -486,13 +486,15 @@
     /* (wave 23 FILM) which way up this clip is shown, in words, and the editor's word over it */
     const o = r.orient;
     let rotLine = '';
-    if (o && o.flag) {
+    if (o && (o.flag || o.hand) && o.text) {
       const opt = (v, t, on) => `<option value="${v}"${on ? ' selected' : ''}>${t}</option>`;
       const cur = o.hand || 'sensor';
       rotLine = `<div class="ix-dl ix-rot" data-stage="rotation" data-testid="index-rotation"><span class="k">Rotation</span><span class="v">${esc(o.text)}`
         + ` <select class="ix-rotsel" data-clip="${esc(r.clip)}" aria-label="Which way up is ${esc(stem(r.clip))}">`
         + opt('sensor', 'let the sensor decide', cur === 'sensor') + opt('auto', 'use the file\'s flag', cur === 'auto')
-        + opt('none', 'ignore the flag', cur === 'none') + '</select></span></div>';
+        + opt('none', 'ignore the flag', cur === 'none')
+        + opt('turn90', 'turn 90° left', cur === 'turn90') + opt('turn270', 'turn 90° right', cur === 'turn270')
+        + opt('turn180', 'turn 180°', cur === 'turn180') + '</select></span></div>';
     }
     el.innerHTML = head + lines + rotLine + '<div class="ix-found" data-testid="index-found"></div>';
     paintFound(el, r);

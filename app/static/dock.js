@@ -717,6 +717,31 @@
                     cuts: null, cutsSig: '', cutsSoon: null, proposal: null, propSig: '',
                     subs: new Map(), subsSig: '', cols: '', colList: null };
 
+  /* (wave 23 FILM) A clip's rotation decision moved (the sensor was read, or the editor turned
+     it): its proxy / preview / poster are made again under the new rule, and a tab that already
+     played the old file must take the new one without a reload. The server revalidates every
+     media response (`cache-control: no-cache`); a <video> that holds the old source is emptied
+     here, and the monitor sets its source again at its next cue. */
+  const rotRev = new Map();
+  function rotationSeen(clips) {
+    const moved = [];
+    clips.forEach((c) => {
+      const r = c.orient ? Number(c.orient.rev || 0) : null;
+      if (r == null) return;
+      if (rotRev.has(c.stem) && rotRev.get(c.stem) !== r) moved.push(c.stem);
+      rotRev.set(c.stem, r);
+    });
+    if (!moved.length) return;
+    document.querySelectorAll('video').forEach((v) => {
+      const s = String(v.dataset.src || v.currentSrc || v.getAttribute('src') || '');
+      if (!moved.some((m) => s.includes(`/${m}.`))) return;
+      v.dataset.src = '';
+      v.removeAttribute('src');
+      try { v.load(); } catch (e) { /* a detached element */ }
+    });
+    window.dispatchEvent(new CustomEvent('rc:rotation-changed', { detail: { stems: moved } }));
+  }
+
   async function loadClips() {
     clearTimeout(project.timer);
     let j = null;
@@ -725,6 +750,7 @@
       if (!r.ok) throw new Error(String(r.status));
       j = await r.json();
       project.clips = Array.isArray(j.clips) ? j.clips : [];
+      rotationSeen(project.clips);
       project.read = true;
       project.failed = false;
     } catch (e) {
@@ -1194,10 +1220,8 @@
      said on the row; one that is simply obeyed is a quiet glyph. Nothing for an unflagged clip. */
   const rotBadge = (it) => {
     const o = it.type === 'clip' && it.c ? it.c.orient : null;
-    if (!o || !o.flag || !o.text) return '';
-    return o.mode === 'none'
-      ? `<b class="pbadge rot ign" title="${esc(o.text)}">flag ignored</b>`
-      : `<i class="rot" title="${esc(o.text)}" aria-label="${esc(o.text)}">↻</i>`;
+    if (!o || !o.text || !(o.flag || o.hand)) return '';
+    return `<i class="rot${o.mode === 'auto' ? '' : ' ign'}" title="${esc(o.text)}" aria-label="${esc(o.text)}">${o.mode === 'auto' ? '↻' : '⟲'}</i>`;
   };
   // a cell's text never widens its cell (test_workspace's OVERFLOW_JS): it ellipsizes inside
   const ell = (s) => `<span class="ell">${s}</span>`;
@@ -2045,7 +2069,7 @@
       + 'Set Selected as Default Transition</button>';
     m.hidden = false;
     m.style.left = `${Math.min(e.clientX, innerWidth - 240)}px`;
-    m.style.top = `${Math.min(e.clientY, innerHeight - 40)}px`;
+    m.style.top = `${Math.min(e.clientY, innerHeight - 70)}px`;
   }
 
   function initEffects() {
@@ -2108,6 +2132,67 @@
       it.addEventListener('dragend', () => { it.classList.remove('dragging'); window.rcDragTransition = null; }, { once: true });
     });
   }
+
+  /* ================================================================ rotate clip (wave 23 FILM)
+   * Right-click a clip in the Project panel or the Source monitor: Rotate clip › as decided
+   * (the sensor decides), 90° left, 90° right, 180°. The clip-level override the server keeps
+   * (POST /api/clips/<clip>/orient): every picture and the export follow it; the shot's own
+   * Effect Controls rotation is independent and still applies on top. One Undo on the toast. */
+  const ROT_ITEMS = [['sensor', 'As decided (automatic)'], ['turn90', '90° left'],
+    ['turn270', '90° right'], ['turn180', '180°']];
+  async function rotateClip(name, mode, undo) {
+    let d = null;
+    try {
+      const r = await fetch(`/api/clips/${encodeURIComponent(name)}/orient`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mode }) });
+      d = await r.json();
+      if (!r.ok) throw new Error(typeof d.detail === 'string' ? d.detail : String(r.status));
+    } catch (e) {
+      if (typeof window.toast === 'function') window.toast(`could not turn ${name}: ${e.message}`, 4000);
+      return null;
+    }
+    await loadClips();
+    window.dispatchEvent(new CustomEvent('rc:clips-changed', { detail: {} }));
+    if (!undo && typeof window.toast === 'function') {
+      const label = (ROT_ITEMS.find((x) => x[0] === mode) || [0, mode])[1];
+      window.toast(`${name}: ${label.toLowerCase()}`, 6000, {
+        action: { label: 'Undo', run: () => rotateClip(name, d.previous || 'sensor', true) } });
+    }
+    return d;
+  }
+  function rotMenu(x, y, name) {
+    let m = $('#rotMenu');
+    if (!m) {
+      m = document.createElement('div');
+      m.id = 'rotMenu';
+      m.className = 'tl-ctx';
+      m.setAttribute('role', 'menu');
+      document.body.appendChild(m);
+      m.addEventListener('click', (ev) => {
+        const b = ev.target.closest('button[data-rot]');
+        if (!b) return;
+        m.hidden = true;
+        rotateClip(m.dataset.clip, b.dataset.rot);
+      });
+      document.addEventListener('pointerdown', (ev) => { if (!m.contains(ev.target)) m.hidden = true; }, true);
+      document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') m.hidden = true; }, true);
+    }
+    const c = clipByName(name);
+    const cur = (c && c.orient && c.orient.hand) || 'sensor';
+    m.dataset.clip = name;
+    m.innerHTML = '<div class="tl-ctx-h" style="padding:3px 12px;opacity:.6">Rotate clip</div>'
+      + ROT_ITEMS.map(([k, t]) => `<button type="button" role="menuitem" data-rot="${k}" data-testid="rot-${k}">${cur === k ? '✓ ' : ''}${t}</button>`).join('');
+    m.hidden = false;
+    m.style.left = `${Math.min(x, innerWidth - 200)}px`;
+    m.style.top = `${Math.min(y, innerHeight - 150)}px`;
+  }
+  document.addEventListener('contextmenu', (e) => {
+    const row = e.target.closest && e.target.closest('#projList [data-clip]');
+    if (!row || !clipByName(row.dataset.clip)) return;
+    e.preventDefault();
+    rotMenu(e.clientX, e.clientY, row.dataset.clip);
+  });
+  project.rotateClip = rotateClip;
 
   /* ================================================================ the source monitor */
   const MARKS_KEY = 'roughcut.ws.marks';
@@ -2346,13 +2431,19 @@
           m.id = 'srcMenu';
           m.className = 'tl-ctx';
           m.setAttribute('role', 'menu');
-          m.innerHTML = '<button type="button" role="menuitem" data-testid="src-transcript">Transcript…</button>';
+          m.innerHTML = '<button type="button" role="menuitem" data-testid="src-transcript">Transcript…</button>'
+            + '<button type="button" role="menuitem" data-testid="src-rotate">Rotate clip…</button>';
           document.body.appendChild(m);
-          m.addEventListener('click', () => { m.hidden = true; COMMANDS.transcript(); });
+          m.addEventListener('click', (ev) => {
+            m.hidden = true;
+            if (ev.target.closest('[data-testid=src-rotate]')) rotMenu(m._x || 0, m._y || 0, this.clip.clip);
+            else COMMANDS.transcript();
+          });
           document.addEventListener('pointerdown', (ev) => { if (!m.contains(ev.target)) m.hidden = true; }, true);
           document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') m.hidden = true; }, true);
         }
         m.hidden = false;
+        m._x = e.clientX; m._y = e.clientY;
         m.style.left = `${Math.min(e.clientX, innerWidth - 160)}px`;
         m.style.top = `${Math.min(e.clientY, innerHeight - 40)}px`;
       });
