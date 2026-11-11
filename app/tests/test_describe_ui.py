@@ -199,3 +199,26 @@ def test_a_selects_row_names_its_clip_in_a_narrow_panel(page):
         assert page.locator("#library .keep").first.locator('[data-testid="keep-clip"]').inner_text() == "CLIP_A"
     # the label the older tests read is untouched by it
     assert "CLIP_A" not in page.locator("#library .keep .w").first.inner_text()
+
+
+def test_a_slow_answer_to_an_older_search_does_not_land_under_the_newer_question(page):
+    """COLD-14: "a dog" was queued behind the GPU; its guess ("looks like “a dog”") appeared under
+    the banner of the next search ("someone drinking from the milk jug")."""
+    page.evaluate("""() => {
+        window.__f = fetch;
+        window.fetch = (u, o) => {
+          if (String(u).includes('/api/find') && o && o.method === 'POST' && JSON.parse(o.body).query === 'a dog') {
+            return new Promise((res) => setTimeout(() => window.__f(u, o).then(res), 4000));
+          }
+          return window.__f(u, o);
+        };
+    }""")
+    _find(page, "a dog")
+    page.wait_for_selector('[data-testid="find-running"]', timeout=3000)
+    page.locator("#findQ").fill("goodbye")
+    page.locator("#findQ").press("Enter")
+    page.wait_for_selector("#findResults .cand", timeout=15000)
+    page.wait_for_timeout(5000)                       # the dog answer lands now, and is dropped
+    txt = page.locator("#findResults").inner_text()
+    assert "goodbye" in txt.lower() and "dog" not in txt.lower()
+    assert page.locator("#findResults .cand").count() >= 1

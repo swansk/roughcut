@@ -3783,6 +3783,20 @@ def _ask_clips(segments: list[dict] | None = None, *,
                  "summary": v["summary"], "captured": v.get("captured"),
                  "visual": v.get("visual")}
              for c, v in payload["clips"].items()}
+    # the project's own words about its moments: the first pass's picks and the cut's shot reasons
+    # (Find reads them: wave 23, the jug the editor's own cut described and Find could not find)
+    try:
+        for p in bin_picks():
+            t = " ".join(str(x) for x in (p.get("note"), p.get("why")) if x)
+            if p.get("clip") in clips and t:
+                clips[p["clip"]].setdefault("notes", []).append(
+                    {"start": p["start"], "end": p["end"], "text": t, "kind": "pick"})
+    except Exception:                                   # noqa: BLE001  no picks is not an error
+        pass
+    for s in payload["segments"]:
+        if isinstance(s, dict) and s.get("clip") in clips and s.get("why"):
+            clips[s["clip"]].setdefault("notes", []).append(
+                {"start": s["in"], "end": s["out"], "text": str(s["why"]), "kind": "cut"})
     if drop_junk:
         used = {s.get("clip") for s in (segments if segments is not None
                                         else payload["segments"]) if isinstance(s, dict)}
@@ -4004,8 +4018,19 @@ async def api_find(request: Request) -> JSONResponse:
         local_search=lambda t, k=3, **_: localvlm.search_ex(t, k, ctx=ctx),
         weak=bool(body.get("weak")))
     policy = find.rerank_policy(verify_state()["mode"])
+    floor = dict(found.get("floor", {}))
+    # Find ran before the 3080 has looked at every clip: say so instead of "nothing convincing"
+    try:
+        have = {Path(c).stem for c, _, _ in localvlm.load_items(ctx.dir)} if found["local"].get("used") or localvlm.available()["ok"] else None
+    except Exception:                                   # noqa: BLE001
+        have = None
+    if have is not None:
+        want = [Path(c).stem for c in clips]
+        done = sum(1 for c in want if c in have)
+        if done < len(want):
+            floor["indexing"] = {"done": done, "total": len(want)}
     resp: dict = {"matches": _match_rows(found["matches"]), "job": None, "local": found["local"],
-                  "floor": found.get("floor", {}),
+                  "floor": floor,
                   "deep_projected_usd": find.projected_usd(clips),
                   "rerank": {**policy, "usd": find.rerank_projected_usd()}, **config.cost_terms()}
     if body.get("rerank") and body.get("deep"):

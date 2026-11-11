@@ -123,6 +123,14 @@ def _affirmed_tokens(text: str) -> list[str]:
     return out
 
 
+def _root(w: str) -> str:
+    """A crude English root: drinking / drinks / drink, jumped / jumps / jump."""
+    for suf in ("ing", "ed", "es", "s"):
+        if w.endswith(suf) and len(w) - len(suf) >= 4:
+            return w[: -len(suf)]
+    return w
+
+
 def _matched(query_tokens: list[str], text: str, *, denies: bool = False) -> set[str]:
     """Which query tokens this text answers for. Equality, or a prefix either way
     once the stem is long enough — the cheap kind of stemming, and enough for
@@ -133,7 +141,7 @@ def _matched(query_tokens: list[str], text: str, *, denies: bool = False) -> set
     hit: set[str] = set()
     for q in query_tokens:
         for w in words:
-            if q == w:
+            if q == w or (min(len(q), len(w)) >= MIN_STEM + 1 and _root(q) == _root(w)):
                 hit.add(q)
                 break
             short, long_ = (q, w) if len(q) <= len(w) else (w, q)
@@ -148,7 +156,8 @@ def _clip_text(c: dict) -> tuple[str, str]:
     its denials taken out ("no jumps, falls or crashes" does not make a clip a jumping clip)."""
     vis = c.get("visual") or {}
     seen = " ".join([str(vis.get("description") or vis.get("summary") or "")]
-                    + [str(m.get("what", "")) for m in vis.get("moments") or []])
+                    + [str(m.get("what", "")) for m in vis.get("moments") or []]
+                    + [str(n.get("text", "")) for n in c.get("notes") or []])
     return " ".join(str(u.get("text", "")) for u in c.get("transcript") or []), seen
 
 
@@ -267,6 +276,20 @@ def lexical(query: str, clips: dict[str, dict], *, floor: float = 0.0) -> list[d
                          "score": len(got) / len(q) * 0.9 + (0.25 if m.get("notable") else 0.0),
                          "base": strength * 0.9, "tokens": got})
 
+        # What the project itself wrote about its moments (wave 23): the first pass's picks and
+        # the cut's shot reasons ("he raises the jug and drinks once more"). They are the best text
+        # there is about a moment, and the Copper editor's own cut described the jug while Find
+        # said there was none. `c["notes"]` = [{start, end, text, kind}], built by the server.
+        for n in c.get("notes") or []:
+            got = _matched(q, str(n.get("text", "")), denies=True)
+            if not got:
+                continue
+            lo, hi = window(float(n["start"]), float(n["end"]))
+            hits.append({"clip": clip, "start": lo, "end": hi, "what": str(n.get("text", "")).strip()[:200],
+                         "why": "the cut's own note" if n.get("kind") == "cut" else "the first pass's note",
+                         "source": "noted", "score": len(got) / len(q) * 0.9,
+                         "base": cover(got), "tokens": got})
+
     # One moment, one row: a line and the frames that show it land within seconds of
     # each other and should reinforce a match rather than crowd the list with twins.
     hits.sort(key=lambda h: (h["clip"], h["start"]))
@@ -315,7 +338,8 @@ def lexical(query: str, clips: dict[str, dict], *, floor: float = 0.0) -> list[d
                        "tokens": got})
     merged = [r for r in merged if r["base"] >= floor]
     for row in merged:
-        row.pop("tokens", None)
+        row["nmatch"] = len([t for t in row.pop("tokens", ()) if t not in FILLER])
+        row["nq"] = len([t for t in q if t not in FILLER])
         row["score"] = round(row["score"], 3)
         row["base"] = round(row["base"], 3)
         row["start"] = round(row["start"], 2)
@@ -451,7 +475,7 @@ def find(query: str, clips: dict[str, dict], events: list[dict] | None = None,
 
 # What a person reads next to a result. `seen` is the Claude visual pass's moments; `local` is
 # the 3080's frame search; `model` is a Claude Find.
-SOURCE_LABEL = {"heard": "heard", "felt": "felt", "seen": "seen by Claude", "local": "seen by the 3080",
+SOURCE_LABEL = {"heard": "heard", "felt": "felt", "seen": "seen in the frames", "local": "matches the picture", "noted": "the first pass's notes",
                 "model": "Claude"}
 
 # Reciprocal-rank fusion. K=10 and the 8 + 5 depths sit on a plateau of the Killington sweep
@@ -556,6 +580,19 @@ def union(lexical_rows: list[dict], local: list[dict], *, k: int = FUSE_K, n_lex
     return out[:limit]
 
 
+# Prepositions that stay in the query tokens (so rank is unchanged) but do not count towards
+# "answers for more than half of the query".
+FILLER = {"from", "about", "over", "under", "through", "across", "near", "after", "before"}
+
+
+def _convincing(row: dict) -> bool:
+    """A words match that can stand on its own: it clears the weighted floor AND answers for more
+    than half of a multi-word query ("someone wipes out and falls" is not answered by "the shadow
+    falls across the snow")."""
+    nq = int(row.get("nq") or 1)
+    return row.get("base", 1.0) >= LEXICAL_FLOOR and (nq <= 1 or int(row.get("nmatch") or 0) * 2 > nq)
+
+
 def search(query: str, clips: dict[str, dict], *, local: bool = True,
            local_search: Callable[..., dict] | None = None, weak: bool = False) -> dict:
     """The free Find: lexical, plus the 3080 when it is there.
@@ -573,7 +610,7 @@ def search(query: str, clips: dict[str, dict], *, local: bool = True,
     floor = {"lexical": LEXICAL_FLOOR, "local": LOCAL_FLOOR, "confident": False, "weak_rows": 0,
              "hidden": 0, "weak": weak}
     if not local:
-        floor["confident"] = any(r.get("base", 1.0) >= LEXICAL_FLOOR for r in lex)
+        floor["confident"] = any(_convincing(r) for r in lex)
         floor["weak_rows"] = len(lex)
         return {"matches": [dict(r, label=_label(r["source"]),
                                  evidence=[_evidence(r, r["source"], i)]) for i, r in enumerate(lex)],
@@ -587,7 +624,7 @@ def search(query: str, clips: dict[str, dict], *, local: bool = True,
                    and k["start"] <= row["end"] + FUSE_GAP_S and k["end"] >= row["start"] - FUSE_GAP_S
                    for k in kept)
 
-    floor["confident"] = (any(r.get("base", 1.0) >= LEXICAL_FLOOR or corroborated(r) for r in lex)
+    floor["confident"] = (any(_convincing(r) or (r.get("base", 1.0) >= LEXICAL_FLOOR and corroborated(r)) for r in lex)
                           or any(float(k.get("score") or 0.0) >= LOCAL_FLOOR for k in kept))
     floor["weak_rows"] = len(lex) + len(kept)
     if not kept:

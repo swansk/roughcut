@@ -40,10 +40,10 @@ def test_a_moment_both_sources_find_beats_one_only_one_does():
     assert top["clip"] == "CLIP_A.MP4"
     assert {e["source"] for e in top["evidence"]} == {"heard", "local"}
     assert top["source"] == "heard+local"
-    assert top["label"] == "heard · seen by the 3080"
+    assert top["label"] == "heard · matches the picture"
     # the local-only row is still there, after it, with its own label and a clip NAME (not a stem)
     other = next(m for m in got["matches"] if m["clip"] == "CLIP_B.MP4")
-    assert other["label"] == "seen by the 3080" and other["score"] < top["score"]
+    assert other["label"] == "matches the picture" and other["score"] < top["score"]
     assert got["local"] == {"used": True, "why": ""}
 
 
@@ -67,7 +67,7 @@ def test_felt_and_seen_keep_their_words_in_the_label():
     lex = [{"clip": "CLIP_A.MP4", "start": 5.0, "end": 6.0, "what": "air", "why": "", "source": "felt+heard", "score": 1.0}]
     row = find.union(lex, [])[0]
     assert row["label"] == "felt · heard"
-    assert find._label("seen") == "seen by Claude" and find._label("model") == "Claude"
+    assert find._label("seen") == "seen in the frames" and find._label("model") == "Claude"
 
 
 # ------------------------------------------------------------------ fallbacks

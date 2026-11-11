@@ -362,3 +362,36 @@ def test_find_names_its_floor_and_takes_weak(described):
     assert r["floor"]["lexical"] == find.LEXICAL_FLOOR and r["matches"]
     none = c.post("/api/find", json={"query": "porcupine", "local": False}).json()
     assert none["matches"] == [] and none["floor"]["confident"] is False
+
+
+# ------------------------------------------------------------------ the project's own notes; stale captions
+
+def test_the_first_passs_and_the_cuts_own_notes_are_searched():
+    """COLD-14: the AI's own cut said "he raises the jug and drinks once more" for a clip, and Find
+    said there was no one drinking from the jug."""
+    clips = _clips()
+    clips["GX4.MP4"]["visual"] = {"moments": [], "unusable": [], "description": "A group on the snow."}
+    clips["GX4.MP4"]["notes"] = [{"start": 20.0, "end": 26.0, "kind": "cut",
+                                  "text": "Final button: he raises the jug and drinks once more"}]
+    rows = find.lexical("someone drinking from the milk jug", clips)
+    assert rows and rows[0]["clip"] == "GX4.MP4" and rows[0]["source"] == "noted"
+    assert rows[0]["start"] == pytest.approx(20.0) and "cut" in rows[0]["why"]
+    assert _search("someone drinking from the milk jug", clips)["floor"]["confident"] is True
+
+
+def test_a_result_never_carries_another_querys_words():
+    clips = _clips()
+    pic = [{"clip": "GX4", "start": 3.0, "end": 5.0, "score": 0.24}]
+    first = _search("a dog", clips, pic)
+    second = _search("someone drinking from the milk jug", clips, pic)
+    assert all("dog" in r["what"] for r in first["matches"] if r["source"] == "local")
+    for r in second["matches"]:
+        assert "dog" not in r["what"] and all("dog" not in e["what"] for e in r["evidence"])
+    assert any("milk jug" in r["what"] for r in second["matches"])
+
+
+def test_find_reads_the_cuts_shot_reasons_through_the_endpoint(described):
+    c, _ = described
+    r = c.post("/api/find", json={"query": "second", "local": False}).json()
+    row = next(m for m in r["matches"] if m["clip"] == "CLIP_B.MP4")
+    assert "noted" in row["source"] and row["why"] == "the cut's own note"

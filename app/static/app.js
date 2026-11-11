@@ -6535,16 +6535,20 @@ function renderFindResults(rows, note, meta) {
   box.innerHTML = '';
   $('#findDeep').hidden = false;          // under any find: the priced search, plain
   if (note) box.insertAdjacentHTML('beforeend', `<div class="hint" style="padding:4px 0">${escapeHtml(note)}</div>`);
-  const q = ($('#findQ').value || '').trim();
+  const q = ((meta && meta.query) || '').trim();
   const qq = q ? `“${escapeHtml(q)}”` : 'that';
   if (!rows.length) {
-    box.insertAdjacentHTML('beforeend',
-      `<div class="hint" data-testid="find-nothing">Nothing like ${qq} in this footage. Try other words, or Ask the model.</div>`);
+    box.insertAdjacentHTML('beforeend', meta && meta.indexing
+      ? `<div class="hint" data-testid="find-indexing">Still indexing the pictures: ${meta.indexing.done} of ${meta.indexing.total} clips. Nothing found yet in the words; this may change when it is done.</div>`
+      : `<div class="hint" data-testid="find-nothing">Nothing like ${qq} in this footage. Try other words, or Ask the model.</div>`);
     return;
   }
   // wave 23: when nothing clears the confidence floors, say so above the hits (they are still
   // listed: a floor that removed hits lost a real one on Killington)
-  if (meta && meta.confident === false) {
+  if (meta && meta.confident === false && meta.indexing) {
+    box.insertAdjacentHTML('beforeend',
+      `<div class="hint" data-testid="find-indexing">Still indexing the pictures: ${meta.indexing.done} of ${meta.indexing.total} clips. This answer may change when it is done.</div>`);
+  } else if (meta && meta.confident === false) {
     box.insertAdjacentHTML('beforeend',
       `<div class="hint" data-testid="find-nothing">Nothing convincing like ${qq} in this footage. These are only the closest guesses.</div>`);
   }
@@ -6651,11 +6655,13 @@ function followFind(job) {
   }, 1000);
 }
 
+let findSeq = 0;                 // the newest search: an older answer arriving late is dropped
 async function doFind(deep = false, weak = false) {
   const q = $('#findQ').value.trim();
   if (!q) return toast('describe the moment you are looking for');
   if (deep && !findPriced) return toast('the model search has no price yet — not asking');
   finding = true;
+  const seq = ++findSeq;
   $('#findDeep').disabled = true;
   // A running search says so: what it is doing and for how long, and the list holds a
   // placeholder instead of the last search's answers (wave 23; it said "searching…" and nothing else).
@@ -6675,8 +6681,11 @@ async function doFind(deep = false, weak = false) {
       throw new Error(d.detail || `HTTP ${r.status}`);
     }
     const data = await r.json();
+    // an answer to an older search (a slow one, queued behind the GPU) must not land under the
+    // newer question: COLD-14 showed the "a dog" guess under "milk jug"
+    if (seq !== findSeq) return;
     paintFindDeepPrice(data.deep_projected_usd, data);
-    renderFindResults(data.matches, '', { confident: (data.floor || {}).confident });
+    renderFindResults(data.matches, '', { confident: (data.floor || {}).confident, indexing: (data.floor || {}).indexing, query: q });
     $('#findState').textContent = (data.floor || {}).confident === false || !data.matches.length ? ''
       : `${data.matches.length} match${data.matches.length > 1 ? 'es' : ''} in the words and the frames`;
     if (data.job) {
@@ -6685,12 +6694,14 @@ async function doFind(deep = false, weak = false) {
       return;                       // buttons come back when the job settles
     }
   } catch (e) {
+    if (seq !== findSeq) return;
     $('#findState').textContent = '';
     $('#findResults').innerHTML = '';
     toast(`find failed: ${e.message}`, 6000);
   } finally {
     clearInterval(ticker);
   }
+  if (seq !== findSeq) return;
   finding = false;
   $('#findDeep').disabled = !findPriced;
 }
