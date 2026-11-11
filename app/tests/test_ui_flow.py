@@ -246,11 +246,16 @@ def test_trimming_the_in_point_moves_the_poster_without_one_frame_per_nudge(page
 
 def test_the_strip_has_no_trim_buttons_and_the_trim_keys_need_a_shot(page):
     """INTAKE M16 decision 5: the four in/out ± buttons are gone — trims are the block's
-    edges and [ ] { }. With nothing selected (the start) a trim key does nothing."""
+    edges and the keys [ ] (in-point) and Alt+[ Alt+] (out-point), a frame a press, Shift five.
+    With nothing selected (the start) a trim key does nothing."""
     before = page.evaluate("JSON.stringify(segs)")
-    page.keyboard.press("}")
+    for key in ("BracketRight", "Alt+BracketRight"):
+        page.keyboard.press(key)
     assert page.evaluate("JSON.stringify(segs)") == before, "nothing selected, nothing trimmed"
     select_shot(page, 0)
+    out0 = page.evaluate("segs[0].out")
+    page.keyboard.press("Alt+BracketRight")
+    assert page.evaluate("segs[0].out") == pytest.approx(out0 + 1 / 24, abs=2e-3), "a selected shot does trim"
     assert page.locator("#inspector button[data-act=in], #inspector button[data-act=out]").count() == 0
     assert page.locator("#inspector .speedrow").count() == 0
 
@@ -258,7 +263,9 @@ def test_the_strip_has_no_trim_buttons_and_the_trim_keys_need_a_shot(page):
 def test_keyboard_trim_matches_button_trim(page):
     select_shot(page, 0)
     before = total_text(page)
-    page.keyboard.press("}")                       # extend out by 0.25
+    out0 = page.evaluate("segs[0].out")
+    page.keyboard.press("Alt+BracketRight")        # extend the out-point one frame
+    assert page.evaluate("segs[0].out") == pytest.approx(out0 + 1 / 24, abs=2e-3)
     after_key = total_text(page)
     assert after_key != before
     page.locator("#undo").click()
@@ -1207,7 +1214,9 @@ def test_the_versions_list_says_which_render_is_the_cut_on_the_board(page, proje
 
     # trim the timeline and the render is no longer what is on the board
     select_shot(page, 0)
-    page.keyboard.press("}")
+    out0 = page.evaluate("segs[0].out")
+    page.keyboard.press("Alt+BracketRight")        # the out-point one frame later
+    assert page.evaluate("segs[0].out") == pytest.approx(out0 + 1 / 24, abs=2e-3)
     assert not page.locator("#filmNewest").is_visible(), \
         "an edited timeline is not the rendered one any more"
     assert page.locator("#filmSince").inner_text().startswith("changed since your last film")
