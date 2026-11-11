@@ -112,6 +112,7 @@
     job: null, text: '', scope: null, t0: 0, timer: 0, tick: 0, gen: 0, planTimer: 0,
     result: null,           // the finished GET /api/assist/{job}, plus its job id
     error: '', hint: '',    // a failure's words, and what to do about it
+    handSel: null,          // the ids of the last selection the editor made by hand, else null
     override: null, overrideKey: '',   // a scope chosen on the chip: kept until the editor changes it or what it names is gone
     lastPanel: 'timeline',  // the panel in use before the prompt took the focus
     hist: store.get(HIST_KEY, []), histAt: -1, draft: '',
@@ -136,6 +137,14 @@
       .sort((a, b) => order.indexOf(a) - order.indexOf(b));
   }
 
+  /* The shots the editor selected themselves. A selection the app made for them (playback walking
+   * through the shots, j/k: tl.select's source "app") is not a choice, so the default scope
+   * ignores it (WORDS-02: pressing Play on a fresh board flipped "Sequence" to "Shot 1"). */
+  function handSelectedIds() {
+    const ids = selectedIds();
+    return ids.length && AI.handSel && ids.every((id) => AI.handSel.has(id)) ? ids : [];
+  }
+
   function rangeScope() {
     const t = TL();
     if (!t || (t.state.seqIn == null && t.state.seqOut == null)) return null;
@@ -156,7 +165,7 @@
   /* What the scope would be with nothing chosen on the chip: the selection, else the
    * In/Out, else the Source clip while the Source monitor is in use, else the sequence. */
   function autoScope() {
-    const ids = selectedIds();
+    const ids = handSelectedIds();
     if (ids.length) return { kind: 'selection', ids };
     const r = rangeScope();
     if (r) return r;
@@ -548,7 +557,7 @@
     chip.dataset.chosen = chosen ? '1' : '';
     const how = chosen ? ' You chose this; it stays until you change it.'
       : s.kind === 'sequence' ? ''
-      : ' It is following what is selected (and the playhead, when you play).';
+      : ' It is following the shots you selected; playing the film does not change it.';
     const t = `The AI works on ${w.title}.${how} Click to change it: the selected clips, the In/Out,`
       + ' the Source clip or the whole sequence.';
     if (chip.title !== t) chip.title = t;
@@ -562,7 +571,7 @@
       // while it looks at frames the line says what, how many, and what it costs (wave 24 EYES)
       const lk = AI.look;
       const c = lk && lk.cost && lk.cost.words ? costOf(lk.cost) : costOf(null);
-      const lookSay = lk ? `Looking at ${lk.words}${lk.stage === 'cutting' && lk.frames ? ` · cutting ${lk.cut || 0}/${lk.frames}` : ' · reading them'}` : '';
+      const lookSay = lk ? `Looking at ${lk.words}${lk.stage === 'planning' ? ' · choosing the frames' : lk.stage === 'cutting' && lk.frames ? ` · cutting ${lk.cut || 0}/${lk.frames}` : ' · reading them'}` : '';
       html = '<i class="aip-spin" aria-hidden="true"></i>'
         + `<span class="aip-what" title="${esc(`“${AI.text}” — on ${scopeWords(AI.scope || { kind: 'sequence' }).title}`)}">Working <b class="aip-time">${clock(Date.now() - AI.t0)}</b></span>`
         + (lk ? `<span class="aip-look" data-testid="ai-look" title="${esc('The AI asked to see these frames before it answers. Stop drops it; nothing changes.')}">${esc(lookSay)}</span>` : '')
@@ -734,6 +743,29 @@
     if (p) p.hidden = true;
   }
 
+  /* The answer never sits on the buttons that answer a waiting proposal (WORDS-13: it covered
+   * "Reject all" and left the blue "Accept" free, the easy mis-click). Moved up, then sideways,
+   * to the first place that overlaps none of them. */
+  function keepClear(p) {
+    const guards = [...document.querySelectorAll('.air button, #proposal button')]
+      .filter((b) => /accept|reject|discard/i.test(b.textContent) && b.offsetParent !== null)
+      .map((b) => b.getBoundingClientRect());
+    if (!guards.length) return;
+    const hit = (r) => guards.some((g) => !(r.right <= g.left || r.left >= g.right || r.bottom <= g.top || r.top >= g.bottom));
+    if (!hit(p.getBoundingClientRect())) return;
+    const f = field.getBoundingClientRect();
+    const w = p.offsetWidth, h = p.offsetHeight, vw = window.innerWidth, vh = window.innerHeight;
+    const tries = [[f.left, f.top - h - 4], [f.right - w, f.bottom + 4], [f.right - w, f.top - h - 4],
+      [vw - w - 8, 8], [8, 8], [vw - w - 8, vh - h - 8], [8, vh - h - 8]];
+    for (const [x, y] of tries) {
+      const left = Math.max(8, Math.min(x, vw - w - 8)), top = Math.max(8, Math.min(y, vh - h - 8));
+      if (!hit({ left, top, right: left + w, bottom: top + h })) {
+        p.style.left = `${left}px`; p.style.top = `${top}px`;
+        return;
+      }
+    }
+  }
+
   /* The answer in words, or a failure and what to do — under the field. */
   function showPop(what) {
     const p = floating('aip-pop', 'ai-answer');
@@ -759,6 +791,7 @@
     p.dataset.what = what;
     p.hidden = false;
     place(p, field.getBoundingClientRect());
+    keepClear(p);
     p.onclick = (e) => {
       const b = e.target.closest('[data-pop]');
       if (!b) return;
@@ -1479,7 +1512,11 @@
     window.addEventListener('rc:assist-answered', onAnswered);
     window.addEventListener('rc:ai-designs', onDesigns);
     if (window.tl && typeof tl.on === 'function') {
-      tl.on('select', paintScope);
+      tl.on('select', (ev) => {
+        // a selection the app made while playing or stepping is not the editor's choice
+        AI.handSel = ev && ev.source === 'app' ? null : new Set((ev && ev.ids) || []);
+        paintScope();
+      });
       tl.on('markers', paintScope);
       tl.on('change', paintScope);
       tl.on('change', onUndoStack);

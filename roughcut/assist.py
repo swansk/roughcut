@@ -82,6 +82,7 @@ LOOK_SCHEMA = {
 AFTER_LOOK_SCHEMA = {
     **OUTPUT_SCHEMA,
     "saw": "what the frames showed, each claim with the film time of the frame it is on (0:40.6)",
+    "confirmed": [{"shot": 9, "film_time": 40.6, "what": "what the frames show of that shot, only what is true"}],
 }
 
 
@@ -108,8 +109,9 @@ APP_GUIDE = (
     "Panels (the Window menu): " + ", ".join(WINDOW_PANELS) + ". Menus: File, Edit, Clip, Sequence, "
     "AI, Window, Help. Undo and redo are Edit › Undo (Ctrl+Z) and Edit › Redo (Ctrl+Shift+Z), "
     "and the arrows at the top right. There is no History panel, no undo list and no version "
-    "list; you cannot undo or redo anything yourself. To take an accepted edit back the editor "
-    "uses Undo, or asks for the opposite edit and you propose it. Name only panels and commands "
+    "list. You can take the cut back N of your own accepted changes with the take_back op (it is "
+    "reviewed like any edit and one Undo cancels it); anything else the editor takes back with "
+    "Undo, or asks for the opposite edit and you propose it. Name only panels and commands "
     "from this list.")
 
 # Words that mean an edit rests on what the picture shows. The index gives the AI a written
@@ -133,19 +135,67 @@ PLAIN_WORDS = re.compile(
     r"delete shot|remove shot|speed up|duplicate|rename)\b", re.I)
 
 
-def look_allowed(text: str) -> bool:
+def look_allowed(text: str, history: list[str] | None = None) -> bool:
     """Whether the AI may ask to look at frames for these words. Not when the ask is plainly
     about the cut's structure or its sound and says nothing about the picture ("swap the
     last two shots", "trim shot 3 to 5 seconds", "end on the funniest line"): the index
-    answers those, and a look costs time. Everything else the model decides."""
+    answers those, and a look costs time. A short answer to the AI's own offer ("the second
+    one", "do both") is about whatever the offer was about: when its last turn rested on the
+    picture, it may look. Everything else the model decides."""
     text = text or ""
     pic = bool(PICTURE_WORDS.search(text) or SEEN_WORDS.search(text))
-    return pic or not PLAIN_WORDS.search(text)
+    if pic:
+        return True
+    if PLAIN_WORDS.search(text):
+        last = (history or [""])[-1]
+        return len(text.split()) <= 10 and bool(
+            re.search(r"looked at|frames|picture|description|opening|opens|open on", last, re.I)
+            or PICTURE_WORDS.search(last) or SEEN_WORDS.search(last))
+    return True
+
+
+# An ask that names something by what it shows ("the lift scene", "where he waves"): the
+# descriptions rarely settle which shot that is, and a guess from the playhead is the miss
+# the director caught (WORDS-17). Said about a spoken line it is not a picture.
+NAMES_PICTURE = re.compile(
+    r"\b(?:the|that|this) (?:[\w'-]+ ){0,2}(?:scene|moment|part|bit)\b|"
+    r"\bwhere (?:he|she|they|someone|somebody|it|the \w+) \w+|"
+    r"\bwhen (?:he|she|they|someone|somebody) \w+", re.I)
+SPOKEN_WORDS = re.compile(r"\b(say|says|said|saying|joke|line|word|words|quote|sentence|talk\w*|speech)\b", re.I)
+
+
+def names_something_seen(text: str) -> bool:
+    text = text or ""
+    return bool(NAMES_PICTURE.search(text)) and not SPOKEN_WORDS.search(text)
 
 
 FROM_TEXT = ("From the written descriptions and the transcript; I have not looked at these frames. ")
 LOOKED_WORDS = re.compile(r"not looked|have not seen|haven't looked|did not look|from the description|"
-                          r"written description", re.I)
+                          r"written description|frames i looked|looked at|from the frames|i looked", re.I)
+
+
+# A length the editor says is the length of the whole film ("make it about 75 seconds"). Not
+# a second deliverable ("a 20 second vertical version"), and not a shot's own length.
+LENGTH_WORDS = re.compile(
+    r"(?<![\d:.])(\d{1,3}(?:\.\d+)?)\s*(seconds?|secs?|s|minutes?|mins?)\b|(?<![\d:])(\d{1,2}):(\d{2})(?![\d:])", re.I)
+OTHER_DELIVERABLE = re.compile(r"vertical|instagram|tiktok|reel|short version|teaser|trailer|copy|another version|"
+                               r"separate|new cut|shot \d|clip|trim|second shot|third shot|last shot|first shot", re.I)
+
+
+def length_asked(text: str) -> float | None:
+    """The film length in seconds the editor named for the whole cut, else None."""
+    text = text or ""
+    if OTHER_DELIVERABLE.search(text):
+        return None
+    m = LENGTH_WORDS.search(text)
+    if not m:
+        return None
+    if m.group(1):
+        v = float(m.group(1))
+        v *= 60 if m.group(2).lower().startswith("m") else 1
+    else:
+        v = int(m.group(3)) * 60 + int(m.group(4))
+    return v if 10 <= v <= 3600 else None
 
 
 # ---------------------------------------------------------------- the prompt
@@ -416,14 +466,118 @@ def clips_block(clips: dict) -> str:
     return "\n".join(rows) if rows else "  (no clips)"
 
 
-def history_block(history: list[str] | None) -> str:
-    """The earlier turns of this cut, oldest first, as the server wrote them."""
-    if not history:
+WORDS_BLOCK_MAX = 3000                 # characters of word timings in a prompt
+WORDS_PER_SHOT = 70
+_TOKEN = re.compile(r"[a-z0-9']+")
+_STOP = {"the", "a", "an", "and", "or", "to", "of", "on", "in", "at", "it", "is", "that", "this", "out", "cut",
+         "words", "word", "add", "then", "with", "for", "so", "up", "me", "my", "i", "you"}
+
+
+def _norm(w: str) -> str:
+    return "".join(_TOKEN.findall(str(w).lower()))
+
+
+def word_timings_block(text: str, scope: dict | None, state: dict, clips: dict) -> str:
+    """The transcript's word timings (clip seconds) for the shots the ask is about, bounded: the
+    shots in scope, and any shot whose speech holds a run of two to four of the editor's own
+    words ("cut out on 'it's over'"). Whisper timed every word; without them the AI can only
+    say it has "no word timings" (WORDS-16). Empty when no such shot has timed words."""
+    segs = state.get("segments") or []
+    sc = scope if isinstance(scope, dict) else {}
+    want: dict[int, tuple[float, float] | None] = {}      # row -> clip-second window, None = all of it
+    if sc.get("kind") == "selection":
+        for sid in sc.get("ids") or []:
+            for i, s in enumerate(segs):
+                if str(s.get("id")) == str(sid):
+                    want[i] = None
+    elif sc.get("kind") == "range":
+        try:
+            a, b = float(sc["in"]), float(sc["out"])
+        except (KeyError, TypeError, ValueError):
+            a = b = None
+        t = 0.0
+        for i, s in enumerate(segs):
+            d = actions.dur(s)
+            if a is not None and t < b and t + d > a:
+                want[i] = None
+            t += d
+    asked = [_norm(w) for w in _TOKEN.findall((text or "").lower())]
+    asked = [w for w in asked if w]
+    grams = {tuple(asked[i:i + n]) for n in (4, 3, 2) for i in range(len(asked) - n + 1)
+             if any(w not in _STOP for w in asked[i:i + n])}
+    for i, s in enumerate(segs):
+        if i in want and want[i] is None:
+            continue
+        words = _timed_words(clips, s)
+        if not words or not grams:
+            continue
+        norm = [_norm(w["w"]) for w in words]
+        for n in (4, 3, 2):
+            hit = next((k for k in range(len(norm) - n + 1) if tuple(norm[k:k + n]) in grams), None)
+            if hit is not None:
+                want[i] = (words[hit]["t"] - 4.0, words[hit + n - 1]["e"] + 4.0)
+                break
+    lines: list[str] = []
+    used = 0
+    for i in sorted(want)[:8]:
+        s = segs[i]
+        words = _timed_words(clips, s)
+        if want[i] is not None:
+            lo, hi = want[i]
+            words = [w for w in words if w["e"] >= lo and w["t"] <= hi]
+        if not words:
+            continue
+        cells = [f"{w['w'].strip()} {w['t']:.2f}-{w['e']:.2f}" for w in words[:WORDS_PER_SHOT]]
+        line = f"{shot_label(i, s)} [id {s.get('id')}]: " + " | ".join(cells)
+        if used + len(line) > WORDS_BLOCK_MAX:
+            break
+        lines.append(line)
+        used += len(line)
+    if not lines:
         return ""
-    return ("## Earlier in this conversation (this cut only, oldest first)\n"
-            "Shot numbers are as they were when each turn happened; the sequence below is how it "
-            "is now. \"Both\", \"the second one\", \"put it back\", \"what did you just change\" "
-            "refer to these turns.\n" + "\n".join(history) + "\n\n")
+    return ("## Word timings (clip seconds: word start-end) for the shots this ask is about\n"
+            "Every word is timed. To cut on a word, set a trim's `out` to the word's end (or `in` to its "
+            "start), or razor at it, using these times. Never say you have no word timings.\n"
+            + "\n".join(lines) + "\n\n")
+
+
+def _timed_words(clips: dict, seg: dict) -> list[dict]:
+    """The timed words of the clip that fall inside the shot's source range."""
+    c = (clips or {}).get(seg.get("clip")) or {}
+    try:
+        a, b = float(seg["in"]), float(seg["out"])
+    except (KeyError, TypeError, ValueError):
+        return []
+    out = []
+    for u in c.get("transcript") or []:
+        for w in (u.get("words") or []) if isinstance(u, dict) else []:
+            try:
+                if float(w["e"]) >= a and float(w["t"]) <= b:
+                    out.append({"w": str(w["w"]), "t": float(w["t"]), "e": float(w["e"])})
+            except (KeyError, TypeError, ValueError):
+                continue
+    return out
+
+
+def history_block(history: list[str] | None, ctx: dict | None = None) -> str:
+    """The earlier turns of this cut, oldest first, as the server wrote them, and above them the
+    complete list of changes accepted on this cut (the conversation is bounded; the list is not)."""
+    ctx = ctx or {}
+    out = ""
+    if ctx.get("changes"):
+        out += ("## Every change accepted on this cut this session (complete, oldest first)\n"
+                "Count from this list, not from the conversation below, when asked what you changed. "
+                "\"in\" = it is in the cut now; \"undone\" and \"taken back\" = it is not.\n"
+                + "\n".join(ctx["changes"]) + "\n\n")
+    if history:
+        out += ("## Earlier in this conversation (this cut only, oldest first)\n"
+                + (f"My record of what we said goes back to {ctx['horizon']}; the list of changes above is "
+                   "complete. When the editor asks about anything earlier than that, say so first.\n"
+                   if ctx.get("horizon") else "")
+                + "Shot numbers are as they were when each turn happened; the sequence below is how it "
+                "is now. \"Both\", \"the second one\", \"put it back\", \"what did you just change\" "
+                "refer to these turns.\n" + "\n".join(history) + "\n\n")
+    return out
 
 
 SEE_BLIND = """## What you can and cannot see
@@ -455,6 +609,12 @@ To look, answer `kind: "look"` instead of an answer, with:
   - or `scan: true` for a question about the whole cut ("every bit where the camera points at
     the ground or the sky", "every shot where nobody is in frame"): every shot is looked at,
     about a frame a second.
+When the editor names a shot or moment by what it shows ("the lift scene", "where he waves",
+"the second one" of two openings you described by their pictures) and the descriptions do not
+settle which shot or moment it is, look first and place the edit on what the frames show; never
+pick it from the playhead or from a word in the audio. Where an edit starts a shot (above all
+the shot that opens the film), read what the description says is in its first frames (a sleeve,
+a glove, a black frame) and start after it.
 A question about "the biggest", "the best" or "every" something in the picture, with no time
 or shot named, is a scan: someone saying "jump" in the audio is not a jump in the frames, so
 do not pick shots from the words alone. A named time or shot is a range.
@@ -467,7 +627,9 @@ it, and take a wide enough range: their time is approximate. If you do not look,
 do not cut on it: answer (kind "answer") that you cannot find it in what you know. Any edit that rests on the
 picture sets `from_picture` to true and says in the first words of `summary` that it comes from
 the descriptions and not from the frames. Never say you saw something you
-did not look at. A clip the description marks as unconfirmed stays unconfirmed unless the
+did not look at. Never say both that you have not looked and that you looked: if you looked
+earlier in this conversation, say where and when ("from the frames I looked at at 11:20"), and
+if you did not, say you did not. A clip the description marks as unconfirmed stays unconfirmed unless the
 frames you look at settle it.
 If the request contradicts itself ("make it longer but cut half the shots"), answer with the
 conflict and ask which matters more, instead of doing one of them.
@@ -494,17 +656,18 @@ Now answer for real. Say what the frames show, and put the film time of the fram
 each thing you say you saw ("the camera jolts at 0:40.6"). Claim nothing about a time you
 did not look at. If you looked and did not find what the editor described, answer
 (kind "answer") that you looked at those times and did not find it, and say what you did see;
-propose no edit. Put what the frames showed, with their times, in `saw`. Your ops use the
+propose no edit. Put what the frames showed, with their times, in `saw`, and in `confirmed` each shot whose frames
+you looked at with what they show (only what you saw and is true of that shot; leave out what you did not see). Your ops use the
 shot ids and clip seconds from the tables above (a film time is the shot's film start plus
 the offset into it). You cannot look again.
 """
 
 
 def build_prompt(text: str, scope: dict | None, state: dict, clips: dict,
-                 history: list[str] | None = None, look_ok: bool = False) -> str:
+                 history: list[str] | None = None, look_ok: bool = False, ctx: dict | None = None) -> str:
     looks = ", ".join(state.get("looks") or []) or "(none)"
     presets = ", ".join(f"{k} ({v})" for k, v in (state.get("presets") or {}).items()) or "(none)"
-    return f"""{history_block(history)}The editor asked now:
+    return f"""{history_block(history, ctx)}The editor asked now:
 “{text}”
 
 ## Scope (what the editor had selected when they asked; act there unless the words plainly say otherwise)
@@ -513,7 +676,7 @@ def build_prompt(text: str, scope: dict | None, state: dict, clips: dict,
 ## The sequence
 {sequence_block(state)}
 
-## The clips in the project (clip seconds; what is said and seen)
+{word_timings_block(text, scope, state, clips)}## The clips in the project (clip seconds; what is said and seen)
 {clips_block(clips)}
 
 ## The library
@@ -610,6 +773,23 @@ def validate_answer(payload: Any, allow_look: bool = False, after_look: bool = F
             raise ValueError("`saw` must say what the frames showed with the film time of each "
                              "frame (like 0:40.6) when you propose an edit from them")
         out["saw"] = fit(saw, SAW_MAX)
+        out["confirmed"] = [c for c in (payload.get("confirmed") or []) if isinstance(c, dict)][:12]
+    return out
+
+
+def clean_confirmed(items: Any, segments: list[dict]) -> list[dict]:
+    """What a look settled about a shot, as the board can keep it: `{clip, in, out, what}` of the
+    shot the frames were of (its whole clip range), from the model's `{shot, what}`."""
+    out = []
+    for c in items or []:
+        try:
+            i = int(c.get("shot")) - 1
+            seg = segments[i]
+        except (TypeError, ValueError, IndexError, AttributeError):
+            continue
+        what = fit(str(c.get("what") or ""), 160)
+        if what and seg.get("clip") is not None:
+            out.append({"clip": str(seg["clip"]), "in": float(seg["in"]), "out": float(seg["out"]), "what": what})
     return out
 
 
@@ -645,7 +825,8 @@ def estimate_cost(prompt: str) -> dict:
 
 
 def run(text: str, scope: dict | None, state: dict, clips: dict,
-        history: list[str] | None = None, looker: Callable[[dict, str], dict | None] | None = None) -> dict:
+        history: list[str] | None = None, looker: Callable[[dict, str], dict | None] | None = None,
+        ctx: dict | None = None) -> dict:
     """One call, or two when the ask rests on the picture. Returns `{kind, summary, ops?,
     lines?, refused?, preview?, families?, text?, note?, cost, looked?}`; raises
     `inference.InferenceError` / `ValueError` on a failed call (the server's job marks
@@ -655,13 +836,33 @@ def run(text: str, scope: dict | None, state: dict, clips: dict,
     frames under the cap, tells the editor, cuts the sheets and returns `{plan, sheets,
     images, block, record}` (or raises `look.Stopped`). Without one, or when `look_allowed`
     says the words need no picture, the model is not offered the look at all."""
-    look_ok = looker is not None and look_allowed(text)
-    prompt = build_prompt(text, scope, state, clips, history, look_ok=look_ok)
+    look_ok = looker is not None and look_allowed(text, history)
+    prompt = build_prompt(text, scope, state, clips, history, look_ok=look_ok, ctx=ctx)
     result = complete(prompt, role=ROLE, schema=LOOK_SCHEMA if look_ok else OUTPUT_SCHEMA, system=SYSTEM,
                       validate=lambda p: validate_answer(p, allow_look=look_ok), retries=1)
     calls = [result]
     got = dict(result.content)
     looked = None
+    new_footage = got["kind"] == "ops" and any(
+        isinstance(o, dict) and o.get("op") in ("insert", "overwrite", "append") for o in got.get("ops") or [])
+    if look_ok and ((got["kind"] in ("ops", "plan") and names_something_seen(text)) or new_footage):
+        # it named something by what it shows and went straight to an edit, or it chose seconds of new
+        # footage from a description (the opening that began on a sleeve, WORDS-06): which shot or
+        # moment, which seconds, was a guess from the descriptions or the playhead. Ask again, to look first.
+        why = ("The editor named something by what it shows. Which shot or moment it is was not settled "
+               "by the descriptions, so do not place the edit yet: answer kind \"look\" for the shots that "
+               "might be it (a few shots, `density` coarse or medium)."
+               if names_something_seen(text) else
+               "You chose seconds of a clip from its description. Do not place them yet: answer kind "
+               "\"look\" at the clip seconds you would use (`clip` with `in` and `out`, a little wider "
+               "on both sides, `density` medium), so the first frames are ones you have seen.")
+        again = complete(prompt + "\n\n## Your first answer\n" + json.dumps(
+            {"kind": got["kind"], "summary": got.get("summary"), "ops": got.get("ops")}) + "\n\n" + why,
+            role=ROLE, schema=LOOK_SCHEMA, system=SYSTEM,
+            validate=lambda p: validate_answer(p, allow_look=True), retries=1)
+        calls.append(again)
+        if again.content.get("kind") == "look":
+            got = dict(again.content)
     if got["kind"] == "look":
         req = {"scan": got["scan"], "looks": got["looks"]}
         seen = looker(req, prompt)
@@ -672,7 +873,8 @@ def run(text: str, scope: dict | None, state: dict, clips: dict,
                               validate=lambda p: validate_answer(p, after_look=True))
             calls.append(second)
             got = dict(second.content)
-            looked = {**seen["record"], "saw": got.get("saw") or ""}
+            looked = {**seen["record"], "saw": got.get("saw") or "",
+                      "confirmed": clean_confirmed(got.get("confirmed"), state.get("segments") or [])}
         else:
             second = complete(prompt + "\n\n## Your first answer (a request to look)\n" + json.dumps(req)
                               + "\n\nNone of the ranges you named is in the cut, so nothing was looked at. "

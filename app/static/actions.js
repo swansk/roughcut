@@ -111,9 +111,10 @@
     set: 'effect_controls', keys: 'effect_controls', effect: 'effect_controls',
     curve: 'lumetri', wheel: 'lumetri', vignette: 'lumetri', look: 'lumetri', match: 'lumetri',
     transition: 'transitions', fade: 'transitions', design_effect: 'designed_effects', export: 'export',
+    take_back: 'history',
   };
   const FAMILY_NAME = { timeline: 'Timeline', effect_controls: 'Effect Controls', lumetri: 'Lumetri Color',
-                        transitions: 'Transitions', designed_effects: 'Designed Effects', export: 'Export' };
+                        transitions: 'Transitions', designed_effects: 'Designed Effects', export: 'Export', history: 'Undo history' };
   // one glyph per family (14 px, currentColor), in the panels' own icon style
   const ICON = {
     timeline: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="4" width="6" height="3.5" rx=".6"/><rect x="8.5" y="4" width="6" height="3.5" rx=".6"/><rect x="1.5" y="9.5" width="13" height="3" rx=".6"/></svg>',
@@ -122,6 +123,7 @@
     transitions: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="4" width="7" height="8" rx=".8"/><rect x="7.5" y="4" width="7" height="8" rx=".8" opacity=".55"/><path d="M7.5 4l1 8"/></svg>',
     designed_effects: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M8 1.8l1.5 3.6 3.7 1.1-3.7 1.2L8 11.3 6.5 7.7 2.8 6.5l3.7-1.1z"/><path d="M12.5 11.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z"/></svg>',
     export: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 2v8M5 7l3 3 3-3"/><path d="M2.5 11v2.5h11V11"/></svg>',
+    history: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a5 5 0 1 0 1.6-3.7"/><path d="M3 2.5v3h3"/></svg>',
   };
 
   /* ------------------------------------------------------------ the cut's arithmetic */
@@ -386,6 +388,16 @@
     if (!t || typeof t.batch !== 'function') {
       return { applied: 0, refused: list.map((_, i) => ({ i, why: 'the timeline is not loaded' })), after: Promise.resolve([]) };
     }
+    const back = list.find((o) => o && o.op === 'take_back');
+    if (back) {                      // "put it back": one entry of its own, never inside a batch
+      if (typeof t.takeBack !== 'function') {
+        return { applied: 0, refused: [{ i: 0, why: 'this timeline cannot take changes back' }], after: Promise.resolve([]) };
+      }
+      const label = opts.label || labelFor([back]);
+      const r = t.takeBack(Number(back.n) || 1, label);
+      if (!r.ok) return { applied: 0, refused: [{ i: list.indexOf(back), why: r.why }], after: Promise.resolve([]) };
+      return { applied: 1, refused: [], after: Promise.resolve([]), label, committed: true, designs: 0 };
+    }
     const label = withDesigns(opts.label || labelFor(list), list);
     const ctx = makeCtx();
     const refused = [];
@@ -456,6 +468,7 @@
     look: ['colour change', 'colour changes'], match: ['colour change', 'colour changes'],
     transition: ['transition', 'transitions'], fade: ['fade', 'fades'],
     design_effect: ['effect', 'effects'], export: ['export', 'exports'],
+    take_back: ['change taken back', 'changes taken back'],
     effect: ['video effect', 'video effects'],
     vignette: ['vignette', 'vignettes'],
   };
