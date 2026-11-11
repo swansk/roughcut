@@ -47,8 +47,8 @@ PLAN_MAX = 6000                        # a re-cut's brief: whole, cut at a sente
 HISTORY_CHARS = 6000                   # earlier turns the prompt carries (~1,500 tokens), newest first
 TURN_CHARS = 1100                      # one earlier turn, at most
 SEG_ROWS_MAX = 400                     # shots listed in full; the rest are counted
-CLIP_LINE_MAX = 220                    # characters of what is said / seen per clip
-CLIPS_BLOCK_MAX = 12000                # characters for the whole clip inventory
+CLIPS_BLOCK_MAX = 12000                # the most characters the whole clip inventory may take
+CLIPS_BLOCK_FIT = 9000                 # what the tiers below aim at (it was ~5,700 on 26 clips when every line was cut at 220)
 OUT_TOKENS_TYPICAL = 1200              # an op list or a short answer (priced before the call)
 ETA_S = 40.0                           # a short call on the deep role, for the working line
 
@@ -449,28 +449,61 @@ def _said(clip: dict) -> str:
     return words.strip()
 
 
+DESC_MAX = 450                         # a clip's description (the index's), whole up to this
+DESC_MINE_MAX = 900                    # the editor's own description: whole up to this
+SAID_MAX = 200                         # what is said in a clip: trimmed first
+MOMENTS_MAX = 4
+
+
+def clip_text(text: str, limit: int) -> str:
+    """`text` within `limit` characters, cut at a word and ended with an ellipsis, never mid-word
+    and never silently (FINDER-08: "the rest of that description is cut off")."""
+    text = " ".join(str(text or "").split())
+    if len(text) <= limit:
+        return text
+    head = text[:limit - 1]
+    cut = len(head) if text[limit - 1] == " " else head.rfind(" ")      # the last word whole, or not at all
+    return (head[:cut] if cut > limit // 2 else head).rstrip(" ,;:.-") + "…"
+
+
+def _clip_line(name: str, c: dict, desc_max: int, mine_max: int, said_max: int,
+               n_moments: int = MOMENTS_MAX, moment_chars: int = 90) -> str:
+    d = c.get("duration")
+    head = f"  {name}  {float(d):.2f} s" if isinstance(d, (int, float)) else f"  {name}"
+    bits = []
+    vis = c.get("visual") if isinstance(c.get("visual"), dict) else {}
+    desc = str(vis.get("description") or vis.get("summary") or "").strip()
+    if desc:
+        if vis.get("description_by") == "editor":
+            bits.append(f"EDITOR'S DESCRIPTION: {clip_text(desc, mine_max)}")
+        else:
+            bits.append(f"described: {clip_text(desc, desc_max)}")
+    said = _said(c)
+    if said:
+        bits.append(f"says: “{clip_text(said, said_max)}”")
+    moments = [m for m in vis.get("moments") or [] if isinstance(m, dict)]
+    if moments:
+        bits.append("moments: " + "; ".join(
+            clip_text(f"{float(m.get('t', 0)):.1f} s {str(m.get('what') or m.get('label') or m.get('kind') or '')}".strip(),
+                      moment_chars)
+            for m in moments[:n_moments]))
+    return head + (" — " + " · ".join(bits) if bits else "")
+
+
 def clips_block(clips: dict) -> str:
+    """One line per clip: its description first (the editor's own marked as theirs, whole up to a
+    sensible bound), then what is said (trimmed first when the block is full), then its moments.
+    The block stays within CLIPS_BLOCK_MAX: when it would not, the caps tighten, the transcript
+    first, and only then are the last clips listed by name alone."""
+    names = sorted(clips)
+    for tier in ((DESC_MAX, DESC_MINE_MAX, SAID_MAX, 3, 70), (350, DESC_MINE_MAX, 100, 2, 60),
+                 (260, 700, 60, 2, 50), (200, 500, 40, 1, 50)):
+        lines = [_clip_line(n, clips[n] or {}, *tier) for n in names]
+        if sum(len(x) + 1 for x in lines) <= CLIPS_BLOCK_FIT:
+            break
     rows: list[str] = []
     used = 0
-    names = sorted(clips)
-    for k, name in enumerate(names):
-        c = clips[name] or {}
-        d = c.get("duration")
-        head = f"  {name}  {float(d):.2f} s" if isinstance(d, (int, float)) else f"  {name}"
-        bits = []
-        said = _said(c)
-        if said:
-            bits.append(f"says: “{said}”")
-        vis = c.get("visual") if isinstance(c.get("visual"), dict) else {}
-        if vis.get("summary"):
-            bits.append(f"seen: {vis['summary']}")
-        moments = [m for m in vis.get("moments") or [] if isinstance(m, dict)]
-        if moments:
-            bits.append("moments: " + "; ".join(
-                f"{float(m.get('t', 0)):.1f} s {str(m.get('what') or m.get('label') or m.get('kind') or '')}".strip()
-                for m in moments[:4]))
-        line = head + (" — " + " · ".join(bits) if bits else "")
-        line = line[:CLIP_LINE_MAX]
+    for k, line in enumerate(lines):
         if used + len(line) > CLIPS_BLOCK_MAX:
             rows.append(f"  … and {len(names) - k} more clips: " + ", ".join(names[k:k + 40]))
             break
@@ -690,6 +723,7 @@ def build_prompt(text: str, scope: dict | None, state: dict, clips: dict,
 {sequence_block(state)}
 
 {word_timings_block(text, scope, state, clips)}## The clips in the project (clip seconds; what is said and seen)
+A clip marked EDITOR'S DESCRIPTION was written or corrected by the editor: it outranks "described" (the index's text) and the transcript wherever they differ. An ellipsis (…) marks text shortened for room; never say a description is cut off.
 {clips_block(clips)}
 
 ## The library
