@@ -214,7 +214,7 @@ def _assert_held(c, server, looked) -> None:
     cost = s["new_cost"]
     assert cost["looks"] == 2 and cost["close"] == 2 and cost["usd"] > 0
     assert cost["words"] == "free on your plan" and cost["charged"] is False
-    assert f"~${cost['usd']:.2f} if it went through the API" in cost["hover"]
+    assert cost["hover"] == "free on your plan" and f"about ${cost['usd']:.2f} if the same calls" in cost["api_note"]
     assert "Index the rest" in s["would"]["steps"][0]["will"]
     assert s["would"]["steps"][0]["cost"]["usd"] >= cost["usd"]
 

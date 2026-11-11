@@ -16,9 +16,10 @@
   <span class="brand" title="Roughcut"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M8 5v4M13 5v4M18 5v4"/></svg>Roughcut</span>
   <nav id="menubar" aria-label="menus">
     <div class="menu" data-menu="file"><button type="button" class="mtop">File</button><div class="mdrop" role="menu">
-      <button type="button" data-cmd="import" data-testid="menu-import">Import… <span class="k">Ctrl+I</span></button>
+      <button type="button" data-cmd="newfilm" data-testid="menu-new-film" title="Start a film from a folder of video clips">New film from a folder…</button>
+      <hr><button type="button" data-cmd="import" data-testid="menu-import">Import… <span class="k">Ctrl+I</span></button>
       <button type="button" data-cmd="mediabrowser" data-testid="menu-media-browser">Import from Media Browser…</button>
-      <hr><button type="button" data-cmd="open">Open bin or cut… <span class="k">O</span></button>
+      <hr><button type="button" data-cmd="open" data-testid="menu-open" title="Switch to another film (a bin: one folder of footage) or another cut of this one">Open a film (bin) or cut… <span class="k">O</span></button>
       <button type="button" data-cmd="index" data-testid="menu-file-index">Index…</button>
       <button type="button" data-cmd="projsettings" data-testid="menu-project-settings">Project Settings…</button>
       <hr><button type="button" data-cmd="export">Export… <span class="k">Export panel</span></button>
@@ -82,7 +83,9 @@
       <hr><button type="button" data-cmd="reset">Reset workspace layout</button>
     </div></div>
     <div class="menu" data-menu="help"><button type="button" class="mtop">Help</button><div class="mdrop" role="menu">
-      <button type="button" data-cmd="tour" data-testid="menu-tour">Learn Roughcut…</button>
+      <button type="button" data-cmd="newfilm" data-testid="menu-help-new-film">Start a new film</button>
+      <button type="button" data-cmd="fpexplain" data-testid="menu-help-firstpass">What the first pass does</button>
+      <hr><button type="button" data-cmd="tour" data-testid="menu-tour">Learn Roughcut…</button>
       <button type="button" data-cmd="keys">Keyboard shortcuts <span class="k">?</span></button>
     </div></div>
   </nav>
@@ -354,10 +357,10 @@
                     title="the bin's own frame rate, up to 4K, never upscaled — slower, bigger, for the final file">Final 4K · ~17 min</button>
           </div>
           <div id="filmNewest" hidden>
+            <a class="dl" id="filmDownload" data-testid="film-download">↓ Download</a>
             <video id="previewA" controls preload="metadata"></video>
             <div class="hint" id="labelA"></div>
             <div class="hint" id="stateA"></div>
-            <a class="dl" id="filmDownload">↓ Download</a>
           </div>
           <details id="olderFilms" hidden>
             <summary></summary>
@@ -407,6 +410,8 @@
 <dialog id="exportDialog" data-testid="export-dialog"></dialog>
 <script src="/cli.js"></script>
 <script src="/switcher.js"></script>
+<link rel="stylesheet" href="/modules/newfilm.css">
+<script src="/modules/newfilm.js"></script>
 <script src="/dock.js"></script>
 <script src="/modules/hands.js"></script>
 <script src="/flow.js"></script>

@@ -237,7 +237,7 @@ def test_cost_words_per_backend(monkeypatch, backend, words):
     c = firstpass.cost_words(1.249)
     assert c["words"] == words and c["usd"] == 1.25
     assert c["charged"] is (backend == "anthropic_api") and c["backend"] == backend
-    assert "$1.25" in c["hover"]
+    assert "$1.25" in c["api_note"] and (backend == "anthropic_api" or "$1.25" not in c["hover"])
 
 
 # ------------------------------------------------------------------ the API
@@ -378,7 +378,7 @@ def test_get_says_never_run_and_what_a_run_would_do(fp, monkeypatch):
     assert ix["counts"]["pct"] <= int(flow.honest_pct(ix["counts"]) * 100)
     assert w["steps"][2]["originate"] is True
     assert w["cost"]["words"] == "free on your plan" and w["cost"]["charged"] is False
-    assert "$" in w["cost"]["hover"]
+    assert w["cost"]["hover"] == "free on your plan" and "$" in w["cost"]["api_note"]
     assert all(st["cost"]["words"] == "free on your plan" for st in w["steps"])
     assert s["backend"] == "claude_cli" and s["charged"] is False
 

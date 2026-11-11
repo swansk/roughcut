@@ -746,10 +746,16 @@ def cost_words(usd: float) -> dict:
     usd = round(max(0.0, float(usd or 0.0)), 2)
     charged = config.charges_money()
     terms = config.cost_terms()
+    # Wave 24 START (COLD-05, -07, FINISH-23): one wording. On the plan it is "free on your
+    # plan" in the words AND the hover; the API-equivalent figure is `api_note`, which the
+    # board shows only under a Details disclosure, never in a tooltip beside "free".
     return {**terms, "usd": usd,
             "words": f"~${usd:.2f}" if charged else "free on your plan",
             "hover": (f"~${usd:.2f}, billed per call on the API" if charged
-                      else f"~${usd:.2f} if it went through the API — no charge on your plan")}
+                      else "free on your plan"),
+            "api_note": (f"~${usd:.2f}, billed per call on the API" if charged
+                         else f"about ${usd:.2f} if the same calls were billed through the API; "
+                              "nothing is charged on your plan")}
 
 
 # ------------------------------------------------------------------ a run that ended early

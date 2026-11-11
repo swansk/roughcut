@@ -3938,7 +3938,7 @@ function emptyState() {
       placeholder="optional — a sentence is enough"></textarea>
     <div class="firstRow" style="display:flex;gap:10px;align-items:center;justify-content:center;margin-top:10px;flex-wrap:wrap">
       <button id="firstCut" data-next-for="cut"${unpricedAttr(firstMode())}>${firstLabel()}${priceTag(firstMode())}</button>
-      <span class="hint" id="firstAims">${escapeHtml(aimsFor())}</span>
+      <span class="hint" id="firstAims" data-aims="1" role="button" tabindex="0" title="Change how long the film should be">${escapeHtml(aimsFor())}</span>
     </div>
     <div class="hint" id="firstState" style="margin-top:8px"></div>`;
   // The first pass makes a first cut too, so the empty Timeline offers ONE AI action
@@ -3985,9 +3985,26 @@ function firstLabel() {
  * "target 2:00.0–3:00.0", far from what it governs. */
 function aimsFor() {
   const [lo, hi] = (P && P.target) || [120, 180];
+  // wave 24 START: a length asked for as one number reads as one ("aims for about 1 min"),
+  // and the words are a button that changes it (newfilm.js `rcLength`)
+  const want = P && Number(P.target_want_s);
+  if (want) {
+    return want % 60 === 0 ? `aims for about ${want / 60} min`
+      : want < 90 ? `aims for about ${Math.round(want)} s` : `aims for about ${clock(want)}`;
+  }
   const mins = lo >= 60 && lo % 60 === 0 && hi % 60 === 0;
   return mins ? `aims for ${lo / 60}–${hi / 60} min` : `aims for ${clock(lo)}–${clock(hi)}`;
 }
+/* The length changed (rcLength, or a first pass sent with one): the two places it is printed. */
+window.rcAimsChanged = (d) => {
+  if (!P || !d) return;
+  P.target = d.target;
+  P.target_want_s = d.target_want_s;
+  document.querySelectorAll('[data-aims]').forEach((el) => { el.textContent = aimsFor(); });
+  const a = $('#askAims'), f = $('#firstAims');
+  if (a) a.textContent = aimsFor();
+  if (f) f.textContent = aimsFor();
+};
 
 function render() {
   // The empty state is rebuilt on every render — it reads the project's status, which
@@ -4009,6 +4026,8 @@ function render() {
   $('#askStory').hidden = !segs.length;
   $('#askFirst').hidden = !!segs.length;
   $('#askAims').textContent = aimsFor();
+  $('#askAims').dataset.aims = '1';
+  $('#askAims').title = 'Change how long the film should be';
 
   // Nothing in the header acts on an empty timeline, so nothing in the header shows.
   // (Undo and redo are the timeline's: they stay while there is anything to take back, an

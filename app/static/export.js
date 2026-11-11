@@ -631,6 +631,9 @@
         </div>
       </div>`;
     dlg.querySelector('#exFoot').innerHTML = `
+      ${result.url && /^\/media\/render\//.test(result.url)
+        ? `<a class="ex-btn primary" id="exDownload" data-testid="export-download" href="${esc(result.url.replace('/media/render/', '/media/download/render/'))}"` +
+          ' download title="Save the film to this computer" style="text-decoration:none">↓ Download</a>' : ''}
       <input type="button" class="ex-btn" id="exPlay" value="Play">
       <input type="button" class="ex-btn" id="exShow" value="Show file">
       <span class="ex-grow"></span>

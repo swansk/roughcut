@@ -260,6 +260,7 @@
       const amount = be && be.spent_usd != null
         ? `${money(be.spent_usd)}${be.budget_usd != null ? ` of ${money(be.budget_usd)} cap` : ''}` : null;
       sp.textContent = amount == null ? ''
+        : window.rcCost && rcCost.free(be) ? `AI on this project: ${rcCost.total(amount, be)}`
         : `${window.rcCost ? rcCost.total(amount, be) : `spent ${amount}`} on this project`;
       sp.title = amount == null || !window.rcCost ? '' : rcCost.totalNote(be.spent_usd, be);
     }
@@ -289,8 +290,8 @@
     }
     if (S.bins) {
       bl.innerHTML = S.bins.projects.map(binRow).join('')
-        || '<span class="hint small">no bins known yet — type a folder below</span>';
-      $('#pickerSub').textContent = plural(S.bins.projects.length, 'bin');
+        || '<span class="hint small">no films yet — start one from a folder below</span>';
+      $('#pickerSub').textContent = plural(S.bins.projects.length, 'film');
     }
   }
 
@@ -327,9 +328,10 @@
         <button type="submit" id="copyGo">Save copy</button>
       </form>
       <hr>
-      <div class="lbl">Bins <span id="pickerSub" class="sub"></span></div>
+      <div class="lbl">Films <span class="sub">(a bin is one folder of footage)</span> <span id="pickerSub" class="sub"></span></div>
       <div id="pickerList"></div>
-      <input id="pickerPath" type="text" placeholder="open a folder… (its path, typed or pasted)" spellcheck="false" autocomplete="off">`;
+      <div class="hint small" style="display:flex;gap:8px;align-items:baseline"><button type="button" id="pickerNew" class="act" style="font-size:11px" title="Start a film from a folder of video clips, with a folder browser">New film from a folder…</button><span>or type or paste a folder's path:</span></div>
+      <input id="pickerPath" type="text" placeholder="/path/to/the/folder/with/your/clips" spellcheck="false" autocomplete="off">`;
     document.body.appendChild(el);
     wirePanel(el);
   }
@@ -405,7 +407,7 @@
   // The page's word: write what is unsaved, then re-point. Every move goes through
   // here so no page can forget the flush.
   async function move(fn, after, opts = {}) {
-    if (S.busy) return;
+    if (S.busy) return { ok: false, error: 'busy' };
     S.busy = true;
     busy(true);
     try {
@@ -428,15 +430,18 @@
         await window.roughcutReopen();
         await refresh();
         if (land && typeof window.rcOpenIndex === 'function') window.rcOpenIndex();
+        return { ok: true, r };
       } else {
         try { sessionStorage.setItem('rc.toast', after(r)); } catch (e) { /* private mode */ }
         if (land) {
           try { history.replaceState(null, '', `${location.pathname}${location.search}#do=${land}`); } catch (e) { /* fine */ }
         }
         location.reload();
+        return { ok: true, r };
       }
     } catch (e) {
       say(String(e.message || e), 5000);        // 400 / 404 / 409: the server's word; the panel stays
+      return { ok: false, error: String(e.message || e) };
     } finally {
       S.busy = false;
       busy(false);
@@ -456,12 +461,15 @@
     }
   }
 
-  function openBin(footage) {
+  /* `opts.land` false: do not open the Index panel on a bin nothing of which is indexed
+   * (the New film dialog lands on the first-pass panel instead, the next step). Resolves
+   * {ok, r} or {ok: false, error}: the dialog says a refusal in its own words. */
+  function openBin(footage, opts = {}) {
     const path = String(footage || '').trim();
-    if (!path) return;
+    if (!path) return Promise.resolve({ ok: false, error: 'give the folder that holds your clips' });
     return move(() => send('/api/projects/open', { footage: path }),
-                (r) => `opened ${r.name}${r.edl_created ? ' · new project' : ''}`
-                  + (r.cut && !r.edl_created ? ` · ${r.cut}` : ''), { land: true });
+                (r) => `opened ${r.name}${r.edl_created ? ' · new film' : ''}`
+                  + (r.cut && !r.edl_created ? ` · ${r.cut}` : ''), { land: opts.land !== false });
   }
 
   /* A place row (`footage`, `pass` or `cut`): its panel, in the editor (wave 17: the
@@ -561,6 +569,10 @@
       if (row && e.key === 'Enter') { e.preventDefault(); openCut(row.dataset.path); }
     });
     $('#copyForm', el).addEventListener('submit', (e) => { e.preventDefault(); saveCopy(); });
+    $('#pickerNew', el).addEventListener('click', () => {
+      close();
+      if (window.rcNewFilm) window.rcNewFilm.open();
+    });
     $('#pickerPath', el).addEventListener('keydown', (e) => {
       if (e.key !== 'Enter') return;
       e.preventDefault();

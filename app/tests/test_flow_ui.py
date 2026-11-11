@@ -377,8 +377,8 @@ def test_the_menu_is_the_way_to_the_footage_and_the_pass_with_the_projects_facts
     pg.wait_for_function("document.querySelector('#placeSpent').textContent !== ''", timeout=5000)
     amount = f"${b['spent_usd']:.2f}{cap}"
     if b.get("charged") is False:   # on the plan the $ are an API-equivalent estimate (REDESIGN-GOAL S)
-        tail = " (API-equivalent)" if cap else " API-equivalent"
-        want = f"~{amount}{tail} · free on your plan on this project"
+        # wave 24 START: one wording, the API-equivalent figure only in the hover
+        want = f"AI on this project: free on your plan{' · cap $' + format(b['budget_usd'], '.2f') + ' (API-equivalent)' if cap else ''}"
     else:
         want = f"spent {amount} on this project"
     assert pg.locator("#placeSpent").inner_text() == want

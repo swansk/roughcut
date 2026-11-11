@@ -136,11 +136,14 @@
   else poll();
 })();
 
-/* How a price reads (Karl, 2026-10-05). On the default `claude_cli` backend a model call
- * runs `claude -p` on Karl's Claude plan and bills nothing; the dollars every price
- * endpoint returns are the estimated cost *if* the same calls went through the API. So a
- * button never shows a bare "$" there — it says "free on your plan", and the estimate
- * lives in its title, labelled as the API's. A bare "~$0.58" made an agent driving the
+/* How a price reads (Karl, 2026-10-05; one wording since wave 24 START). On the default
+ * `claude_cli` backend a model call runs `claude -p` on Karl's Claude plan and bills
+ * nothing; the dollars every price endpoint returns are the estimated cost *if* the same
+ * calls went through the API. So nothing shows a bare "$" there, and (COLD-05, COLD-07,
+ * FINISH-23: "free" and "$36.04" in one tooltip made a newcomer hesitate) nothing shows the
+ * figure beside "free" either: it says "free on your plan" in every button, tooltip, total
+ * and toast. The API-equivalent figure is `detail()`, which the board draws only under a
+ * Details disclosure, labelled as the API's. A bare "~$0.58" once made an agent driving the
  * board read the audit as spending money and stop for a human. Every price response
  * carries `charged` (server `config.cost_terms()`); anything but an explicit `false` is
  * shown as a real charge, so a response that forgot to say is never passed off as free. */
@@ -155,23 +158,27 @@ window.rcCost = (function () {
     free,
     /* the short words on a button or in a toast */
     tag: (usd, p) => (free(p) ? 'free on your plan' : `~${dollars(usd)}`),
-    /* the title: the estimate, said to be the API's when nothing is billed */
-    note: (usd, p) => (free(p)
-      ? `free on your Claude plan — about ${dollars(usd)} estimated cost if using the API`
-      : `about ${dollars(usd)}, billed to the API key`),
+    /* the title: the same words on the plan; the figure only when it is a real charge */
+    note: (usd, p) => (free(p) ? 'free on your plan' : `about ${dollars(usd)}, billed to the API key`),
+    /* the API-equivalent figure, for a Details disclosure (never a tooltip beside "free") */
+    detail: (usd, p) => (free(p)
+      ? `about ${dollars(usd)} if the same calls were billed through the API; nothing is charged on your plan`
+      : `${dollars(usd)}, billed to the API key`),
     /* a measured spend after the fact */
-    spent: (usd, p) => (free(p) ? `~${dollars(usd)} if using the API · free on your plan`
-      : `cost ${dollars(usd)}`),
+    spent: (usd, p) => (free(p) ? 'free on your plan' : `cost ${dollars(usd)}`),
     /* a running total — this project's so far; `amount` is already formatted and may
-     * carry "of $5.00 cap". "spent" only when the backend bills: on the plan it is an
-     * API-equivalent estimate and the word never shows (REDESIGN-GOAL S). */
-    total: (amount, p) => (free(p) ? `~${amount}${planTail(amount)}`
-      : `spent ${amount}`),
+     * carry "of $5.00 cap". "spent" only when the backend bills: on the plan it is the same
+     * "free on your plan", the figure in its title (`totalNote`) (REDESIGN-GOAL S). */
+    total: (amount, p) => {
+      if (!free(p)) return `spent ${amount}`;
+      const cap = /of (\$[\d.,]+) cap/.exec(String(amount));
+      return cap ? `free on your plan · cap ${cap[1]} (API-equivalent)` : 'free on your plan';
+    },
     /* what follows the number on the plan (the how line on /open draws its own number) */
     planTail,
-    /* the title behind a total */
+    /* the title behind a total: what "free" means, with the estimate as the API's */
     totalNote: (usd, p) => (free(p)
-      ? `free on your Claude plan — nothing was billed; this project's model calls would have cost about ${dollars(usd)} through the API`
+      ? `free on your plan — nothing was billed; this project's model calls would have cost about ${dollars(usd)} through the API`
       : `${dollars(usd)} billed to the API key for this project`),
   };
 }());

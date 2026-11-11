@@ -188,7 +188,8 @@ def test_the_panel_shows_what_ran_retunes_a_clip_and_reruns_a_selection(page, li
                          arg=want, timeout=5000)
     price = pg.locator(PRICE)
     assert price.inner_text() == "free on your plan"          # section S, on the plan
-    assert f"${want:.2f}" in price.get_attribute("title")     # the API estimate in the hover
+    assert "$" not in price.get_attribute("title")            # wave 24 START: no figure in a tooltip beside "free"
+    assert f"${want:.2f}" in pg.locator("[data-testid=index-details]").get_attribute("title")   # the API estimate, under Details
     assert calls["looks"] == [], "nothing runs before Run"
     before = _journal(live).clips["CLIP_B.MP4"]["stages"]["look"]["finished"]
     pg.locator(RUN).click()
@@ -323,7 +324,7 @@ def test_run_has_the_ai_hover_card_what_it_replaces_and_its_price(page, live):
     assert card["for"] == "index-rerun", card
     assert card["name"] == "Look again — CLIP_B", card
     assert "one frame every 2 s (10 sheets)" in card["what"], card
-    assert card["cost"] == f"free on your Claude plan — about ${want:.2f} estimated cost if using the API", card
+    assert card["cost"] == "free on your plan", card          # one wording; the figure is under Details
     assert card["change"].startswith("Replaces CLIP_B’s looked-at moments (the 4 s look → 2 s); its picks are"
                                      " re-ranked; its close looks are kept from the old look"), card
     assert "The cut does not change" in card["change"], card

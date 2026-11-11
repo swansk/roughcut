@@ -677,7 +677,9 @@ a.floorbtn:hover { color: var(--text); background: var(--card-hi); border-color:
 #filmWhat { margin-bottom: 10px; }
 .filmGo { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
 #filmNewest video { width: 100%; background: #000; display: block; aspect-ratio: 16/9; }
-#filmNewest .dl { display: block; margin-top: 8px; padding: 4px 10px; text-align: center;
+/* wave 24 START (COLD-20): the Download is above the player, so it is on screen at 1280x720 and
+   1536x864, where the player used to push it to the panel's bottom edge */
+#filmNewest .dl { display: block; margin: 0 0 8px; padding: 5px 10px; text-align: center; font-weight: 600;
                   color: var(--accent); text-decoration: none; border: 1px solid var(--line);
                   border-radius: 4px; background: var(--card); }
 #filmNewest .dl:hover { border-color: var(--accent); background: var(--card-hi); }

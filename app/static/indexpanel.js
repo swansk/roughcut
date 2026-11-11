@@ -64,6 +64,8 @@
   ];
   const PRICED = new Set(['look', 'close']);
   const POLL_MS = 10000, FAST_MS = 1000;
+  /* the Details of who looks stay open once opened (wave 24 START: closed on a first visit) */
+  function detailsWas() { try { return localStorage.getItem('rc.ix.details') === '1'; } catch (e) { return false; } }
   const IX = {
     rep: null, sig: '', sel: new Set(), anchor: null, focus: null, what: 'look', interval: null,
     quote: null, quoteKey: '', busy: false, err: '', timer: 0, qtimer: 0, mounted: false, job: null,
@@ -105,7 +107,7 @@
    * on your plan" with the API estimate in the hover (section S), or its dollars */
   function costWords(usd, priced) {
     if (!priced || !(usd > 0)) return { text: priced ? (free() ? 'free' : dollars(0)) : 'free', title: priced ? '' : 'runs on this machine: no model call' };
-    if (free()) return { text: 'free', title: `free on your Claude plan — about ${dollars(usd)} if using the API` };
+    if (free()) return { text: 'free', title: 'free on your plan' };
     return { text: dollars(usd), title: `${dollars(usd)} billed to the API key` };
   }
 
@@ -268,6 +270,7 @@
     if (!sec || IX.mounted) return sec;
     IX.mounted = true;
     sec.innerHTML = `
+      <div class="ix-plain" data-testid="index-plain">What the AI knows about each clip: what was said, and what the picture shows (a frame every few seconds, a closer look where a lot happens). Run first pass fills this in for you; you only need this table to look again at one clip.</div>
       <div class="ix-sum" data-testid="index-summary"></div>
       <div class="ix-list" tabindex="0"><table class="plist ixt">
         <colgroup></colgroup><thead><tr></tr></thead>
@@ -282,7 +285,8 @@
         <button type="button" class="ix-run" data-testid="index-rerun">Run</button>
         <button type="button" class="ix-stop" data-testid="index-stop" hidden title="stop the index: what finished is kept">Stop</button>
       </div>
-      <div class="ix-mode" data-testid="index-modebar" hidden>
+      <div class="ix-mode${detailsWas() ? ' open' : ''}" data-testid="index-modebar" hidden>
+        <button type="button" class="ix-dtoggle" data-testid="index-details" aria-expanded="${detailsWas()}">Details ${detailsWas() ? '▾' : '▸'}</button>
         <select id="ixMode" class="ix-modesel" data-testid="index-mode" aria-label="Understanding: who looks at the footage in this bin"></select>
         <span class="ix-modeline" data-testid="index-modeline"></span>
       </div>`;
@@ -330,6 +334,14 @@
       }
     });
     $('.ix-modesel', sec).addEventListener('change', (e) => setMode(e.target.value));
+    $('.ix-dtoggle', sec).addEventListener('click', () => {
+      const m = $('.ix-mode', sec);
+      const on = !m.classList.contains('open');
+      m.classList.toggle('open', on);
+      $('.ix-dtoggle', sec).setAttribute('aria-expanded', String(on));
+      $('.ix-dtoggle', sec).textContent = `Details ${on ? '▾' : '▸'}`;
+      try { localStorage.setItem('rc.ix.details', on ? '1' : '0'); } catch (e) { /* private window */ }
+    });
     const what = $('.ix-what', sec);
     what.value = IX.what;
     what.addEventListener('change', () => { IX.what = what.value; paintFoot(); requote(); });
@@ -625,6 +637,15 @@
     price.textContent = pw.text;
     price.title = pw.title;
     price.dataset.usd = IX.quote && IX.quote.usd != null ? String(IX.quote.usd) : '';
+    // the API-equivalent figure lives under Details, never in a tooltip beside "free" (wave 24 START)
+    const dtog = $('.ix-dtoggle', sec);
+    if (dtog) {
+      dtog.title = 'Which models look at the footage' + (IX.quote && IX.quote.usd > 0 && free() && window.rcCost
+        ? `. Cost of the run above: ${rcCost.detail(IX.quote.usd, terms())}.` : '');
+    }
+    const plainEl = $('.ix-plain', sec);
+    const s0 = (rep && rep.summary) || {};
+    if (plainEl) plainEl.hidden = !!(rep && s0.clips && s0.looked >= s0.clips && s0.heard >= s0.clips);
     price.dataset.local = IX.quote && IX.quote.local ? '1' : '';
     const run = $('.ix-run', sec);
     const none = !!(IX.quote && !IX.quote.local && Array.isArray(IX.quote.clips) && !IX.quote.clips.length);
@@ -723,7 +744,7 @@
     $('.ix-sum', sec).title = rep ? [
       summaryWords(),
       `telemetry ${s.telemetry || 0}${s.no_telemetry ? ` (${s.no_telemetry} without a sensor stream)` : ''} · previews ${s.previews || 0}`,
-      free() ? `~${dollars(s.cost_usd)} if using the API · free on your plan` : `spent ${dollars(s.cost_usd)}`,
+      free() ? 'free on your plan' : `spent ${dollars(s.cost_usd)}`,
       rep.journal ? `journal: ${rep.path}` : 'no journal yet: the files on disk',
       rep.job_label ? `now: ${rep.job_label}` : ''].filter(Boolean).join('\n') : '';
     paintHead(sec);
