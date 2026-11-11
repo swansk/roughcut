@@ -138,6 +138,11 @@ def check(spec: dict, on_progress: Progress = _quiet) -> dict:
     t0 = time.perf_counter()
     v = fx.verify(e, seg, onset=spec.get("onset"), hz=float(spec.get("hz") or fx.ONSET_HZ),
                   part=out, base=base, impact=bool(spec.get("impact")))
+    row = fx.bounds_check(e, int(spec["w"]), int(spec["h"]))
+    if row is not None:                    # wave 23: measured on the renderer's pixels
+        at = next((i + 1 for i, c in enumerate(v["checks"]) if c.get("key") == "in_frame"), 0)
+        v["checks"].insert(at, row)
+        v["ok"] = bool(v["ok"]) and row["ok"] is not False
     stats["measure_s"] = round(time.perf_counter() - t0, 2)
     on_progress("measure", 1.0, True)
     return {"verify": v, "stats": stats}

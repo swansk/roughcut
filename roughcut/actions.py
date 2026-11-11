@@ -1469,6 +1469,11 @@ def check(ops: Any, state: dict) -> dict:
            "families": sorted({FAMILY_OF[o["op"]] for o in accepted})}
     if any(o["op"] in CUT_OPS for o in accepted):
         out["preview"] = {"segments": [dict(s) for s in sim.segs]}
+        if state.get("effects"):                  # a title travels with its shot: say where to
+            from . import fx
+            notes = fx.title_notes(state["effects"], state.get("segments") or [], sim.segs)
+            if notes:
+                out["notes"] = notes
     return out
 
 
@@ -1476,6 +1481,7 @@ def state_from(payload: dict, *, looks: Iterable[str] = (), presets: dict | None
     """The validation state from GET /api/project's payload (server.project_payload)."""
     return {
         "segments": payload.get("segments") or [],
+        "effects": payload.get("effects") or [],
         # each clip's length, and its own rate when known (a first clip sets the timebase
         # of a sequence that has none)
         "clips": {k: {"duration": (v or {}).get("duration"),
