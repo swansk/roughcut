@@ -204,7 +204,8 @@
       if (!el || el.dataset.handsTc) continue;
       el.dataset.handsTc = '1';
       el.classList.add('tc-typable');
-      el.setAttribute('role', 'button');
+      // no role=button: it is the same readout, typable, not one more control on the screen (the
+      // screens budget counts controls in view; the hover and the cursor say it can be typed into)
       const was = el.title;
       el.title = `${was ? was + ' · ' : ''}click to type a timecode (Ctrl+G)`;
     }
