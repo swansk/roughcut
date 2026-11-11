@@ -251,7 +251,10 @@ def test_ask_review_accept_and_one_ctrl_z_through_the_real_server(browser, live_
         assert "Review" in result.inner_text()
         # the result line carries the measured call's words (section S): no bill on the plan
         assert "$" not in st.inner_text()
-        assert "API" in (result.get_attribute("title") or "")
+        # one wording on the plan (wave 24 START): "free on your plan" in the hover too, and
+        # never a figure beside it; the API-equivalent estimate lives in `api_note`
+        title = result.get_attribute("title") or ""
+        assert "free on your plan" in title and "$" not in title
         b.shot("2-result")
         # the review opened by itself, one row per op, the asked words at its head
         review = pg.locator("[data-testid=ai-review]")
@@ -528,7 +531,8 @@ def test_the_price_is_the_assists_own_before_and_while_it_runs(browser, live_ser
         assert "shot-c" in priced[-1] and "selection" in priced[-1]
         q = priced[-1].split("?", 1)[1]
         price = pg.evaluate("(q) => fetch('/api/assist/price?' + q).then(r => r.json())", q)
-        assert price["words"] == "free on your plan" and "API" in price["hover"]
+        assert price["words"] == "free on your plan" and price["hover"] == "free on your plan"
+        assert price["charged"] is False and "API" in price["api_note"]
         pg.wait_for_function(f"(w) => (document.querySelector('{STATUS} .aip-cost') || {{}}).textContent === w",
                              arg=price["words"])
         assert cost.get_attribute("title") == price["hover"]
@@ -545,3 +549,17 @@ def test_the_price_is_the_assists_own_before_and_while_it_runs(browser, live_ser
         b.wait_state("done")
     finally:
         b.close()
+
+
+def test_an_api_backend_still_says_it_bills_through_the_api(monkeypatch):
+    """The plan's one wording ("free on your plan") is a claim about the plan only: on the
+    API backend the same call words a price and says API, never "free"."""
+    from roughcut import firstpass as fpmod
+    monkeypatch.setenv("ROUGHCUT_BACKEND", "anthropic_api")
+    w = fpmod.cost_words(0.42)
+    assert w["charged"] is True and w["words"] == "~$0.42"
+    assert "API" in w["hover"] and "free" not in w["hover"] + w["words"]
+    monkeypatch.setenv("ROUGHCUT_BACKEND", "claude_cli")
+    w = fpmod.cost_words(0.42)
+    assert w["words"] == "free on your plan" and w["hover"] == "free on your plan"
+    assert "API" in w["api_note"]
