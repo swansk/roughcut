@@ -10,6 +10,9 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+
+- The prompt-box AI looks before it cuts on what the picture shows (wave 24, lane EYES; WORDS-08, -12, -13, -17). When an ask rests on the picture (a wobble at 0:40, "the biggest jump", "every bit where the camera points at the ground or the sky") the model may answer "I need to look": named shots or film / clip times with a reason and a density, or a scan of the whole cut. The server (new `roughcut/look.py`) caps it (45 frames for ranges, 90 for a scan, thinning the density and saying so), shows the editor "Looking at shots 9-11 (0:38.0-0:43.0): 24 frames; free on your plan" with a Stop, cuts labelled 3x3 contact sheets from the proxies, and calls the model once more with the images and the same conversation; one look round per ask. The proposal says what it saw with the film time of each frame, "What it saw" shows it, a look that finds nothing proposes nothing, the record keeps what was looked at and the next turn's history says so. Plain asks (a swap, a length, a spoken line) are never offered a look; the "I have not looked" line stays for anything it did not look at.
+
 - Wave 24 opened (judge/WAVE24.md) with lane EYES: the prompt-box AI looks at the frames before it cuts on what the picture shows.
 - Wave 23 gains a sixth lane, DESCRIBE (the look prompt, a readable transcript, Find that names the clip and can say nothing).
 - The editor-trial kit takes its trial folder (RC_ROOT) and the code under test (RC_SNAP) from the environment and launches a software-WebGL browser by default; screenshot numbering no longer counts temporary looks.

@@ -16203,6 +16203,7 @@ def api_upload_cancel(batch: str) -> JSONResponse:
 
 from roughcut import actions as actionsmod  # noqa: E402
 from roughcut import assist as assistmod  # noqa: E402
+from roughcut import look as lookmod  # noqa: E402
 
 ASSISTS: dict[str, progress.Job] = {}
 ASSIST_SCOPES = ("selection", "range", "sequence", "clip")
@@ -16307,6 +16308,10 @@ def _turn_text(rec: dict, plan_state: Callable[[str], str] | None = None) -> str
     sc = (rec.get("scope") or {}).get("kind") or "sequence"
     out = [f"[{when}] The editor asked ({sc}): “{rec.get('text', '')}”"]
     kind = res.get("kind")
+    lk = res.get("looked") if isinstance(res.get("looked"), dict) else None
+    if lk:
+        out.append(f"  The AI looked at {lk.get('where')} ({lk.get('frames')} frames) and saw: "
+                   f"{lk.get('saw') or '(it did not say)'}")
     if kind == "answer":
         out.append(f"  The AI answered: {res.get('text') or res.get('summary') or ''}")
     elif kind == "ops":
@@ -16372,6 +16377,60 @@ def assist_history(cut: str, budget: int = assistmod.HISTORY_CHARS) -> list[str]
     return list(reversed(kept))
 
 
+def looks_home(job: str) -> Path:
+    """Where one ask's contact sheets are kept (per bin, like the proxies they are cut
+    from), and the frames cut for them (shared by every ask in the bin)."""
+    return STATE["work"] / "looks" / STATE["footage"].name / job
+
+
+def _assist_looker(job: str, entry, state: dict):
+    """The look step of an ask (roughcut/look.py), as the assist calls it when the model
+    answers "I need to look at these ranges": plan the frames under the server's cap, put
+    the plan (frames, sheets, price) on the job where the prompt box shows it with its
+    Stop, cut the sheets from the proxies, hand the images back. Stop between frames
+    raises `lookmod.Stopped`; the half-built sheets are removed."""
+    def stop() -> bool:
+        return entry.get("state") == "cancelled"
+
+    def proxy_of(clip: str) -> Path:
+        p = STATE["proxy_dir"] / f"{Path(clip).stem}.mp4"
+        if not p.exists():
+            raise RuntimeError(f"{clip} has no proxy to cut frames from yet")
+        return p
+
+    def looker(req: dict, prompt: str) -> dict | None:
+        if stop():
+            raise lookmod.Stopped()
+        p = lookmod.plan(state, req)
+        entry["look"] = {"stage": "cutting", "words": p["words"], "frames": len(p["frames"]),
+                         "sheets": p["sheets"], "capped": p["capped"], "cap": p["cap"], "scan": p["scan"],
+                         "cut": 0, "cost": lookmod.price(p, len(prompt))}
+        if not p["frames"]:
+            entry.note("nothing in the cut to look at")
+            return None
+        entry.note(f"looking at {p['words']}")
+        out_dir = looks_home(job)
+
+        def progress_(done: int, total: int) -> None:
+            entry["look"] = {**entry["look"], "cut": done}
+        try:
+            sheets = lookmod.build_sheets(p, proxy_of, STATE["work"] / "looks" / STATE["footage"].name / "frames",
+                                          out_dir, stop=stop, on_progress=progress_)
+        except lookmod.Stopped:
+            shutil.rmtree(out_dir, ignore_errors=True)
+            raise
+        entry["look"] = {**entry["look"], "stage": "reading", "cut": len(p["frames"])}
+        entry.note("reading the frames")
+        record = {"where": lookmod.where_of(p), "words": p["words"], "frames": len(p["frames"]),
+                  "sheets": [Path(x["file"]).name for x in sheets], "dir": str(out_dir),
+                  "scan": p["scan"], "capped": p["capped"], "cap": p["cap"], "ranges": p["ranges"],
+                  "cells": [c["label"] for x in sheets for c in x["cells"]], "request": req,
+                  "at": time.time()}
+        return {"plan": p, "sheets": sheets, "images": [Path(x["file"]) for x in sheets],
+                "block": lookmod.sheets_block(p, sheets), "record": record}
+    return looker
+
+
 def _assist_job(job: str, text: str, scope: dict) -> None:
     entry = ASSISTS[job]
     record = {"job": job, "created": time.time(), "text": text, "scope": scope,
@@ -16381,13 +16440,17 @@ def _assist_job(job: str, text: str, scope: dict) -> None:
         state = assist_state(payload)
         history = assist_history(record["cut"])
         entry["cost"] = assistmod.estimate_cost(
-            assistmod.build_prompt(text, scope, state, clips, history))
+            assistmod.build_prompt(text, scope, state, clips, history,
+                                   look_ok=assistmod.look_allowed(text)))
         entry.note("asking the model")
-        res = assistmod.run(text, scope, state, clips, history)
+        res = assistmod.run(text, scope, state, clips, history,
+                            looker=_assist_looker(job, entry, state))
         if entry.get("state") == "cancelled":
             return                                   # stopped: the answer is not wanted
         if res["kind"] == "plan":
             res["plan_ask"] = _assist_start_ask(res.get("note") or text, text)
+    except lookmod.Stopped:
+        return                                       # Stop during the look: the job reads cancelled already
     except HTTPException as exc:
         if entry.get("state") == "cancelled":
             return
@@ -16412,7 +16475,8 @@ def _assist_job(job: str, text: str, scope: dict) -> None:
     except Exception as exc:  # noqa: BLE001 — a thread that dies must still end its job
         if entry.get("state") == "cancelled":
             return
-        msg = f"{type(exc).__name__}: {exc}"[:300]
+        msg = (f"Could not cut the frames to look at: {exc}" if entry.get("look") and isinstance(exc, RuntimeError)
+               else f"{type(exc).__name__}: {exc}")[:300]
         entry.update(error=msg, code=500)
         entry.finish("failed", detail=msg)
         _assist_write(job, {**record, "status": "failed", "error": msg})
@@ -16451,10 +16515,12 @@ def _assist_view(job: str) -> dict:
                "eta_s": snap.get("eta_s")}
         if status == "running" and entry.get("cost"):
             out["cost"] = entry["cost"]
+        if status == "running" and entry.get("look"):
+            out["look"] = entry["look"]
     if rec is not None and rec.get("answer"):
         out["answer"] = rec["answer"]
     for k in ("kind", "ops", "lines", "refused", "index", "families", "preview", "plan_ask",
-              "text", "note", "summary", "cost", "from_picture", "from_descriptions"):
+              "text", "note", "summary", "cost", "from_picture", "from_descriptions", "looked"):
         if k in res:
             out[k] = res[k]
     if out.get("plan_ask") and out["plan_ask"] in ASKS:
@@ -16583,8 +16649,9 @@ def api_assist_price(text: str = "", scope: str = "") -> JSONResponse:
     except ValueError:
         sc = None
     clips, state = _price_inputs()
-    prompt = assistmod.build_prompt(text.strip()[:assistmod.TEXT_MAX] or "…", clean_scope(sc),
-                                    state, clips, assist_history(assist_cut()))
+    words = text.strip()[:assistmod.TEXT_MAX] or "…"
+    prompt = assistmod.build_prompt(words, clean_scope(sc), state, clips, assist_history(assist_cut()),
+                                    look_ok=assistmod.look_allowed(words))
     return JSONResponse(assistmod.estimate_cost(prompt))
 
 

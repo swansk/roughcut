@@ -117,6 +117,7 @@
     hist: store.get(HIST_KEY, []), histAt: -1, draft: '',
     price: null,            // GET /api/assist/price: {usd, charged, words, hover, …} before a run
     runCost: null,          // the running job's own estimate (GET /api/assist/{job} `cost`)
+    look: null,             // while it looks at frames: {stage, words, frames, cut, cost} (the job's `look`)
     stoppedGen: 0,          // the ask Stop was pressed on (its job id may not be back yet)
     back: null,             // the element to give the focus back to on Esc
     ready: false,
@@ -558,9 +559,13 @@
     status.dataset.state = AI.state;
     let html = '';
     if (AI.state === 'working') {
-      const c = costOf(null);
+      // while it looks at frames the line says what, how many, and what it costs (wave 24 EYES)
+      const lk = AI.look;
+      const c = lk && lk.cost && lk.cost.words ? costOf(lk.cost) : costOf(null);
+      const lookSay = lk ? `Looking at ${lk.words}${lk.stage === 'cutting' && lk.frames ? ` · cutting ${lk.cut || 0}/${lk.frames}` : ' · reading them'}` : '';
       html = '<i class="aip-spin" aria-hidden="true"></i>'
         + `<span class="aip-what" title="${esc(`“${AI.text}” — on ${scopeWords(AI.scope || { kind: 'sequence' }).title}`)}">Working <b class="aip-time">${clock(Date.now() - AI.t0)}</b></span>`
+        + (lk ? `<span class="aip-look" data-testid="ai-look" title="${esc('The AI asked to see these frames before it answers. Stop drops it; nothing changes.')}">${esc(lookSay)}</span>` : '')
         + (c.words ? `<span class="aip-cost" title="${esc(c.title)}">${esc(c.words)}</span>` : '')
         + '<button type="button" class="aip-btn" data-ai="stop" data-testid="ai-stop" title="Stop waiting for this ask — nothing changes">Stop</button>';
     } else if (AI.state === 'done' && AI.result) {
@@ -637,6 +642,7 @@
     return `<span class="aip-result" data-testid="ai-result" data-kind="${esc(d.kind || '')}" title="${esc(title)}">`
       + `<span class="aip-ok" aria-hidden="true">✓</span>${esc(r.line)}`
       + (r.act ? `<span class="aip-sep">·</span><button type="button" class="aip-link" data-ai="${r.what}" data-testid="ai-result-open">${esc(r.act)}</button>` : '')
+      + (d.looked ? `<span class="aip-sep">·</span><button type="button" class="aip-link" data-ai="saw" data-testid="ai-saw" title="${esc(`Looked at ${d.looked.words}`)}">What it saw</button>` : '')
       + (r.hint ? `<span class="aip-sep">·</span><span class="aip-dim" data-testid="ai-undo-hint" title="one undo takes the whole accept back (Edit › Undo, the header's ↶)">${esc(r.hint)}</span>` : '')
       + '</span><button type="button" class="aip-x" data-ai="dismiss" aria-label="dismiss" title="dismiss">×</button>';
   }
@@ -652,7 +658,7 @@
     else if (what === 'dismiss') { AI.state = 'idle'; AI.result = null; closePop(); paintStatus(); }
     else if (what === 'review') review(AI.result);
     else if (what === 'plan') showPlan(AI.result);
-    else if (what === 'answer') showPop('answer');
+    else if (what === 'answer' || what === 'saw') showPop('answer');
     else if (what === 'fx' && window.dock && typeof dock.open === 'function') dock.open('fx');
   }
 
@@ -736,6 +742,10 @@
     } else {
       const d = AI.result || {};
       body = `<p>${esc(d.text || d.summary || '')}</p>`;
+      if (d.looked) {                    // what it looked at, and what the frames showed (with their times)
+        body += `<p class="aip-dim" data-testid="ai-looked">Looked at ${esc(d.looked.words)}.</p>`
+          + (d.looked.saw ? `<p data-testid="ai-saw-text">${esc(named(d.looked.saw))}</p>` : '');
+      }
     }
     p.innerHTML = `<div class="aip-phead">${ICON}<b>${esc(head)}</b>`
       + `<span class="aip-pq" title="${esc(AI.text)}">“${esc(AI.text)}”</span>`
@@ -780,6 +790,7 @@
     AI.result = null;
     AI.error = '';
     AI.runCost = null;
+    AI.look = null;
     paintStatus();                      // the working state, before anything goes out
     remember(text);
     clearInterval(AI.tick);
@@ -838,6 +849,10 @@
       AI.state = 'stopped';
       paintStatus();
       return;
+    }
+    if (d && d.look && JSON.stringify(d.look) !== JSON.stringify(AI.look)) {
+      AI.look = d.look;                  // it asked to look: the frames, the sheets, the price
+      paintStatus();
     }
     if (d && d.cost && d.cost.words && (!AI.runCost || AI.runCost.words !== d.cost.words
         || AI.runCost.hover !== d.cost.hover)) {
