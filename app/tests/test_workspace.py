@@ -1259,30 +1259,33 @@ def test_source_in_out_land_on_the_clips_own_frames(live_server, project, browse
 
 
 @pytest.mark.parametrize("key", [".", ","])
-def test_overwrite_or_insert_past_the_end_leaves_a_gap(live_server, project, browser, key):
-    """Verdict 5, punch 8: `.` with the playhead past the film's end clamped to the end.
-    As in Premiere the playhead sits past the end, and `.` (or `,`) there leaves a gap of
-    exactly that length on V1, the clip after it."""
+def test_overwrite_or_insert_past_the_end_goes_to_the_end_and_leaves_no_gap(live_server, project, browser, key):
+    """Verdict 5, punch 8 asked for a gap; wave 25 changed it on purpose (REDESIGN-GOAL rubric log,
+    2026-11-11 (1); the Copper finder's first insert into an emptied cut landed behind 34 s of black):
+    `.` or `,` with the playhead past the film's end puts the shot at the END of the film, no gap
+    on V1, the film exactly the shot longer, and one undo takes the shot away."""
     pg = _open(browser, live_server, project, (1440, 900))
     tot = pg.evaluate("tl.total()")
     src = _source_marks(pg, "CLIP_C.MP4", 1.0, 3.0)
     assert [src["inPoint"], src["outPoint"]] == [1.0, 3.0]
     pg.locator("#pTimeline .ws-head").click()
     pg.evaluate(f"tl.seek({tot} + 10)")
-    assert pg.evaluate("tl.state.playhead") == pytest.approx(tot + 10, abs=1e-6), "past the end"
-    pg.wait_for_timeout(200)                                  # a render keeps it there
-    assert pg.evaluate("tl.state.playhead") == pytest.approx(tot + 10, abs=1e-6)
+    pg.wait_for_timeout(200)                                  # a render must not change what follows
     n = pg.evaluate("segs.length")
+    before = pg.evaluate("JSON.stringify(segs)")
     pg.keyboard.press(key)
-    pg.wait_for_function(f"segs.length === {n + 2}", timeout=8000)
-    gap, shot = pg.evaluate("[segs[segs.length - 2], segs[segs.length - 1]]"
-                            ".map(s => ({clip: s.clip, in: s.in, out: s.out, gap: !!s.gap}))")
-    assert gap["gap"] is True and gap["out"] - gap["in"] == pytest.approx(10, abs=0.5 / 24), gap
-    assert shot == {"clip": "CLIP_C.MP4", "in": 1.0, "out": 3.0, "gap": False}, shot
-    assert pg.evaluate("tl.total()") == pytest.approx(tot + 10 + 2, abs=0.05)
-    # one undo takes the gap and the clip away together
+    pg.wait_for_function(f"segs.length === {n + 1}", timeout=8000)
+    last = pg.evaluate("segs[segs.length - 1]")
+    assert {"clip": last["clip"], "in": last["in"], "out": last["out"], "gap": bool(last.get("gap"))} == \
+        {"clip": "CLIP_C.MP4", "in": 1.0, "out": 3.0, "gap": False}, last
+    assert pg.evaluate("segs.some(s => s.gap)") is False, "no gap anywhere"
+    assert pg.evaluate("tl.total()") == pytest.approx(tot + 2, abs=0.05)
+    # the film before it is untouched
+    assert pg.evaluate("JSON.stringify(segs.slice(0, segs.length - 1))") == before
+    # one undo takes the shot away and nothing else
     pg.keyboard.press("Control+z")
     pg.wait_for_function(f"segs.length === {n}", timeout=5000)
+    assert pg.evaluate("JSON.stringify(segs)") == before
     assert pg.errors == []
     pg.context.close()
 

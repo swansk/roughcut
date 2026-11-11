@@ -15,6 +15,7 @@ same commit. Releases move entries into a dated version section.
 - Wave 24 GATEFIX, twelve tests the merged lanes broke: the Program's catch-up after an edit no longer collapses the editor's selection to the shot under the playhead (a split's two halves stay selected, an inserted shot stays the selection; `tl.cueQuiet`); a click on a ghost shot keeps the monitor's "proposal · …" line; Next's "Refine" chip is shown again over a cut (the first-cut hide is for the "Cut" offer only); a quiet board writes no undo history (nothing to take back, nothing sent). Tests: the Index panel keeps >= 8 rows at 1440x900 with the clip's found block (10 at 1080), the chip walk holds no cut, two reads made race-free, and the AI scope chip test hands the chip back to the selection ("Follow my selection again") after asking about a clip, as wave 23 DIRECT made a chosen scope stay.
 
 ### Fixed
+test: insert and overwrite past the end pin the wave 25 behaviour (the shot lands at the end, no gap, one undo)
 test: the empty-timeline tests follow the New film line (not an AI action) and a delete that leaves nothing selected
 test: the selection tests follow HANDS round three (a delete leaves nothing selected, the arrow keys move only the playhead, a shot is selected by clicking it, the typing guard's eight quick keys stay out of the lens test)
 test: the trim-step tests follow the one-frame [ ] and Alt+] steps HANDS round three made on purpose (colour block, keys on the media, poster per settle, edits to disk)
