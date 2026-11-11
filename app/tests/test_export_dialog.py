@@ -587,7 +587,7 @@ def test_parts_carry_pcm_and_the_film_one_aac_stream(project, tmp_path):
                         str(project["footage"]), "--parts-dir", str(parts), "--keep-parts",
                         "-o", str(out)], check=True, capture_output=True, text=True)
         for part in sorted(parts.glob("part_*.mp4")):
-            assert ("audio", "pcm_s16le") in streams(part), (part, streams(part))
+            assert ("audio", "pcm_f32le") in streams(part), (part, streams(part))
         got = streams(out)
         assert [s for s in got if s[0] == "audio"] == [("audio", "aac")], got
 

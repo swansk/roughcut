@@ -18,6 +18,8 @@ import math
 import subprocess
 from pathlib import Path
 
+from roughcut import limiter
+
 MAX_GAIN_DB = 12.0          # a bed louder than the film is a bug, not a choice
 MIN_GAIN_DB = -60.0
 
@@ -313,8 +315,13 @@ def add_music(film: Path, spec: dict, out: Path,
     film_s = probe_duration(film)
     graph = (bed_only_filter(s, film_s, speech) if bed_only
              else music_filter(s, film_s, speech))
+    out_label = "[aout]"
+    if not bed_only:
+        # the sound's last stage (wave 23 FILM): the mix, true-peak limited at -1 dBTP
+        graph += f";[aout]{limiter.audio_filter()}[alim]"
+        out_label = "[alim]"
     cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin", "-i", str(film), "-i", str(track),
-           "-filter_complex", graph, "-map", "[aout]"]
+           "-filter_complex", graph, "-map", out_label]
     if not bed_only:
         cmd += ["-map", "0:v:0", "-c:v", "copy"]
     else:

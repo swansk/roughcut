@@ -121,3 +121,9 @@ button.ix-open-link:hover { background: transparent; text-decoration: underline;
 .ix-modeline.bad { color: var(--bad, #e46a6a); }
 table.ixt col.c-local { width: 92px; }
 table.ixt td.s-unavailable { color: var(--dim); font-style: italic; }
+
+/* (wave 23 FILM) a flag the sensor or the editor overruled, said on the row; the rotation line of the detail */
+table.ixt .rotign { margin-left: 6px; color: var(--dim); font-size: 10px; border: 1px solid currentColor; border-radius: 999px; padding: 0 5px; }
+.ix-dl.ix-rot { grid-column: 1 / -1; white-space: normal; }
+.ix-dl.ix-rot .v { overflow: visible; }
+.ix-rotsel { font-size: 11px; margin-left: 6px; }

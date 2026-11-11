@@ -1174,8 +1174,18 @@
     const lead = !tree ? (it.type === 'sub' ? '<span class="tw"></span>' : '')
       : it.type === 'clip' ? twisty(it, false)
         : it.type === 'sub' ? '<span class="tw"></span><span class="tw"></span>' : '<span class="tw"></span>';
-    return `<td class="name"><span class="n">${lead}${swatch(it)}${iconOf(it)}<span class="nm">${esc(it.name)}</span></span></td>`;
+    return `<td class="name"><span class="n">${lead}${swatch(it)}${iconOf(it)}<span class="nm">${esc(it.name)}</span>${rotBadge(it)}</span></td>`;
   }
+  /* (wave 23 FILM) which way up the clip is shown, in words: GET /api/clips' `orient` is the
+     per-clip rotation decision. A flag the camera's sensor (or the editor) overruled is
+     said on the row; one that is simply obeyed is a quiet glyph. Nothing for an unflagged clip. */
+  const rotBadge = (it) => {
+    const o = it.type === 'clip' && it.c ? it.c.orient : null;
+    if (!o || !o.flag || !o.text) return '';
+    return o.mode === 'none'
+      ? `<b class="pbadge rot ign" title="${esc(o.text)}">flag ignored</b>`
+      : `<i class="rot" title="${esc(o.text)}" aria-label="${esc(o.text)}">↻</i>`;
+  };
   // a cell's text never widens its cell (test_workspace's OVERFLOW_JS): it ellipsizes inside
   const ell = (s) => `<span class="ell">${s}</span>`;
   function cell(k, it, tree) {

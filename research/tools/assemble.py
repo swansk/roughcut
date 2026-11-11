@@ -64,6 +64,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from roughcut import colour, edits, effects, fx    # noqa: E402  (after sys.path)
+from roughcut import limiter                       # noqa: E402  (wave 23 FILM: the true-peak stage)
 from roughcut import tracks as tracksmod           # noqa: E402
 from roughcut import vfx as vfxmod                 # noqa: E402
 
@@ -96,12 +97,69 @@ MATCH_MAX_W, MATCH_MAX_H = 8192, 8192
 AUDIO_RATE = 48000
 
 # The sound is AAC-encoded exactly once (verdict 4, punch 6). Every part carries its
-# sound as 16-bit PCM — lossless, so levelling, retiming and the effects' sounds cost no
+# sound as PCM — lossless, so levelling, retiming and the effects' sounds cost no
 # generation — and the join encodes it, unless a later pass re-lays it anyway (A1 rebuilt
 # from the parts, a music bed mixed under it): then the join writes PCM too and that pass
 # is the one encode. An AAC part re-encoded at the join was two generations, and a third
 # with a bed under it.
-AUDIO_PCM = ["-c:a", "pcm_s16le", "-ac", "2", "-ar", str(AUDIO_RATE)]
+# 32-bit float since wave 23 (FILM): the loudness levelling lifts a quiet shot by several dB,
+# and 16-bit PCM clips whatever that takes past full scale before the limiter at the film's
+# end can see it (the trial's film had 372 samples flat at 0 dBFS). Float keeps the overs
+# for the limiter to bring down; it is the same 48 kHz stereo, twice the (temporary) size.
+AUDIO_PCM = ["-c:a", "pcm_f32le", "-ac", "2", "-ar", str(AUDIO_RATE)]
+
+
+def limited(label: str, out: str) -> str:
+    """`;[label]<true-peak limiter>[out]`: the stage every film's sound ends in (wave 23 FILM,
+    roughcut/limiter.py): -1 dBTP in the delivered file, after the levelling and the bed."""
+    return f";[{label}]{limiter.audio_filter(AUDIO_RATE)}[{out}]"
+
+
+def true_peak_db(p: Path) -> float | None:
+    """The film's sound's true peak in dBFS (EBU R128's, oversampled), or None when it has
+    no sound or is silent."""
+    r = run(["ffmpeg", "-hide_banner", "-nostats", "-i", str(p), "-vn", "-af",
+             "ebur128=peak=true:framelog=quiet", "-f", "null", "-"])
+    tail = r.stderr[r.stderr.rfind("Summary:"):] if "Summary:" in r.stderr else ""
+    m = re.findall(r"Peak:\s+(-?[\d.]+|-?inf) dBFS", tail)
+    try:
+        v = float(m[-1]) if m else None
+    except ValueError:
+        return None
+    return v if v is not None and math.isfinite(v) else None
+
+
+def enforce_ceiling(film: Path, video: dict, tries: int = 2) -> list[str]:
+    """The limiter's guarantee: the delivered file's true peak is at or under
+    `limiter.CEILING_DBTP`. The limiter works under the ceiling for the AAC encode's
+    overshoot (0.4-0.7 dB on ordinary material); a film so loud and so dense that the encode
+    overshoots further is limited again, harder by what it was over plus half a dB, and
+    re-encoded (sound only, the picture is copied). Says what it did; [] when the film was
+    already inside."""
+    said: list[str] = []
+    tp = true_peak_db(film)
+    headroom = limiter.CODEC_HEADROOM_DB
+    for _ in range(tries):
+        if tp is None or tp <= limiter.CEILING_DBTP:
+            break
+        headroom += (tp - limiter.CEILING_DBTP) + 0.5
+        tmp = film.with_name(film.stem + ".peak.mp4")
+        r = run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-i", str(film),
+                 "-map", "0:v:0", "-map", "0:a:0", "-dn", "-c:v", "copy",
+                 "-af", limiter.audio_filter(AUDIO_RATE, headroom_db=headroom),
+                 "-c:a", "aac", "-b:a", video["audio_bitrate"], "-ac", "2",
+                 "-video_track_timescale", str(video["timescale"]), "-write_tmcd", "0",
+                 "-movflags", "+faststart", str(tmp)])
+        if r.returncode != 0:
+            tmp.unlink(missing_ok=True)
+            raise RuntimeError(f"limiter pass failed: {r.stderr[-600:]}")
+        tmp.replace(film)
+        said.append(f"true peak was {tp:+.1f} dBTP, limited again {headroom:.1f} dB under "
+                    f"the ceiling")
+        tp = true_peak_db(film)
+    if tp is not None:
+        said.append(f"true peak {tp:+.1f} dBTP (ceiling {limiter.CEILING_DBTP:+.1f})")
+    return said
 
 
 def audio_codec(video: dict, final: bool) -> list[str]:
@@ -279,6 +337,39 @@ def audio_lead(lead: float) -> str:
     return f"atrim=start={lead:.6f},asetpts=PTS-{lead:.6f}/TB,"
 
 
+# (wave 23, lane FILM) Rotation is decided per clip, not per bin: a clip whose flag the camera's
+# own sensor contradicts (Copper's GX010474 / 484 / 492: flagged +-90, shot upright) is
+# ignored, one whose flag is right (497-499, flagged 180, inverted) is turned. The app writes
+# its decisions to a file (`--orient-clips`, `{"clips": {stem: {"mode": "auto"|"none"}}}`) and
+# the EDL may carry the same as `orient_clips` (`{stem: "auto"|"none"}`); the EDL's own
+# `orient: none` still ignores every flag. A clip in neither is turned by its flag, as ever.
+ORIENT_CLIPS: dict[str, str] = {}
+
+
+def load_orient_clips(path: Path | None, edl: dict | None = None) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for stem, v in ((edl or {}).get("orient_clips") or {}).items():
+        if v in ("auto", "none"):
+            out[str(stem)] = v
+    if path is not None:
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        for stem, rec in ((data or {}).get("clips") or {}).items():
+            mode = rec.get("mode") if isinstance(rec, dict) else rec
+            if mode in ("auto", "none"):
+                out[str(stem)] = mode
+    return out
+
+
+def src_orient(src: Path, orient: str) -> str:
+    """The orient rule for this source: the project's `none` wins, else the clip's own."""
+    if orient == "none":
+        return "none"
+    return ORIENT_CLIPS.get(Path(src).stem, orient)
+
+
 def gpu_input(src: Path, orient: str, normalise: str | None, video: dict) -> dict | None:
     """How this source decodes on the GPU — `{"flip": 180° to undo, "full": full range}`
     — or None for the CPU path."""
@@ -287,7 +378,7 @@ def gpu_input(src: Path, orient: str, normalise: str | None, video: dict) -> dic
     f = decode_facts(src)
     if f["codec"] not in GPU_CODECS or f["pix_fmt"] not in GPU_PIX:
         return None
-    rot = 0 if orient == "none" else f["rotation"] % 360
+    rot = 0 if src_orient(src, orient) == "none" else f["rotation"] % 360
     if rot not in (0, 180):
         return None
     return {"flip": rot == 180, "full": f["full"]}
@@ -299,7 +390,7 @@ def input_args(src: Path, orient: str, gpu: dict | None) -> list[str]:
     out = []
     if gpu:
         out += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
-    if orient == "none" or gpu:
+    if src_orient(src, orient) == "none" or gpu:
         out += ["-display_rotation", "0"]           # must precede -i; see module docstring
     return out
 
@@ -2161,7 +2252,10 @@ def join_parts(parts: list[Path], spans: list[tuple[int, int]], video: dict,
         graph.append(f"[{k + 1}:a]aresample={AUDIO_RATE},apad,atrim=end_sample={n},"
                      f"asetpts=PTS-STARTPTS[a{k}]")
     graph.append("".join(f"[a{k}]" for k in range(len(parts)))
-                 + f"concat=n={len(parts)}:v=0:a=1[aout]")
+                 + f"concat=n={len(parts)}:v=0:a=1[acat]")
+    # the sound's one encode ends in the limiter; a later pass (the bed's, A1 re-laid) that
+    # writes PCM here is the one that limits
+    graph[-1] += limited("acat", "aout") if final_audio else ";[acat]anull[aout]"
     total = (spans[-1][1] - spans[0][0]) / rate if spans else 0
     r = run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-f", "concat", "-safe", "0",
              "-i", str(listfile), *inputs, "-filter_complex", ";".join(graph),
@@ -2289,7 +2383,7 @@ def overlay_pieces(edl: dict, spans: list[tuple[int, int]], rate: Fraction,
 def tracks_pass(film: Path, edl: dict, segments: list[dict], parts: list[Path],
                 video: dict, orient: str, footage: Path, generated_dir: Path | None,
                 workdir: Path, film_s: float | None = None, *,
-                final_audio: bool = True) -> list[str]:
+                final_audio: bool = True, music_follows: bool = False) -> list[str]:
     """The sequence's audio tracks over the concatenated film (roughcut/tracks.py), in
     ONE sound-only pass and only when they ask for something the plain concat is not.
     The picture is always stream-copied: V2+ and V1's eye are composited inside the
@@ -2360,6 +2454,10 @@ def tracks_pass(film: Path, edl: dict, segments: list[dict], parts: list[Path],
                      f"dropout_transition=0,apad,atrim=0:{max(0.01, total):.3f}[amix]")
         amap = "[amix]"
         acodec = audio_codec(video, final_audio)
+    if amap != "0:a:0" and not music_follows:
+        # the sound was re-laid here and nothing mixes under it after: it is limited here
+        graph.append(f"{amap}{limiter.audio_filter(AUDIO_RATE)}[alim]")
+        amap = "[alim]"
     out = film.with_name(film.stem + ".sound.mp4")    # picture copied, sound re-laid
     cmd = ["ffmpeg", "-v", "error", "-y", "-nostdin", *inputs,
            "-filter_complex", ";".join(graph), "-map", vmap, "-map", amap, "-dn",
@@ -2690,6 +2788,10 @@ def main() -> int:
                          "`effects_music.asset`")
     ap.add_argument("--assets", type=Path, default=None,
                     help="root for relative asset paths (see docs/EFFECTS.md)")
+    ap.add_argument("--orient-clips", type=Path, default=None,
+                    help="the app's per-clip rotation decisions (orient/<bin>.json): a clip "
+                         "marked `none` has its rotation flag ignored, the others are turned "
+                         "by it (the EDL's `orient: none` still ignores every flag)")
     ap.add_argument("--colour-dir", type=Path, default=None,
                     help="per-clip colour files (<stem>.colour.json, INTAKE M10); the "
                          "EDL's `colour` block is resolved against them per shot")
@@ -2737,6 +2839,8 @@ def main() -> int:
     edl = json.loads(args.edl.read_text(encoding="utf-8"))
     segments = edl["segments"]
     orient = edl.get("orient", "auto")
+    ORIENT_CLIPS.clear()
+    ORIENT_CLIPS.update(load_orient_clips(args.orient_clips, edl))
     planned = sum(edits.dur(s) for s in segments)      # a shot at a speed is longer or shorter
     size = frame_size(args.size) if args.size else None
     if args.size and size is None:
@@ -2924,7 +3028,8 @@ def main() -> int:
         # A3+ — one sound-only pass (the picture copied), only when one is not the default.
         for line in tracks_pass(args.out, edl, segments, parts, video, orient,
                                 args.footage, args.generated_dir, workdir, film_s,
-                                final_audio=encoder == "tracks"):
+                                final_audio=encoder == "tracks",
+                                music_follows=bool(music.get("asset"))):
             print(f"tracks: {line}")
         assert_no_rotation(args.out, orient)
 
@@ -2945,6 +3050,12 @@ def main() -> int:
                     how += f" ({applied['speech_regions']} speech regions)"
             print(f"music: {Path(applied['asset_path']).name} at "
                   f"{applied['gain_db']}dB — {how}")
+
+        # the sound's last word (wave 23 FILM): the true peak of what was written is at or
+        # under -1 dBTP, whatever the AAC encode did to the limiter's output
+        for line in enforce_ceiling(args.out, video):
+            print(f"limiter: {line}")
+        assert_no_rotation(args.out, orient)
 
         # the named markers as the file's chapters (verdict 12, punch 4)
         chapters = chapters_of(edl.get("markers"), film_s)
