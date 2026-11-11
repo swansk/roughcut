@@ -85,6 +85,7 @@ from roughcut import procscope  # noqa: E402
 from roughcut import telemetry_events  # noqa: E402
 from roughcut import orient as orientmod  # noqa: E402     # wave 23 FILM: rotation per clip
 from roughcut import fxcheck  # noqa: E402
+from roughcut import frame as framemod  # noqa: E402     # wave 25 VERTICAL: the frame's shape
 from roughcut import dirwatch  # noqa: E402
 from roughcut import tracks as tracksmod  # noqa: E402
 from roughcut import media as mediamod  # noqa: E402
@@ -1991,6 +1992,9 @@ def sequence_payload(edl: dict, segments: list[dict]) -> dict:
         # the sequence's timebase (verdict 10, punch 3): kept, never derived; null until
         # the sequence has held a clip
         "fps": sequence_rate(edl),
+        # the frame's shape (wave 25 VERTICAL, roughcut/frame.py): "16:9" unless the cut
+        # keeps another
+        "frame": framemod.shape_of(edl),
     }
 
 
@@ -2176,6 +2180,15 @@ def apply_sequence(edl: dict, body: dict) -> None:
             v = tracksmod.validate_timebase(body["fps"])
             if v is not None:
                 edl["fps"] = v
+        # the frame's shape (Sequence › Sequence Settings…, wave 25 VERTICAL): 16:9 is the
+        # absence of the key; null or absent leaves it
+        if "frame" in body:
+            v = framemod.validate(body["frame"])
+            if v is not None:
+                if framemod.is_wide(v):
+                    edl.pop("frame", None)
+                else:
+                    edl["frame"] = v
     except ValueError as exc:
         raise HTTPException(400, str(exc))
     if edl.get("in") is not None and edl.get("out") is not None and edl["out"] <= edl["in"]:
@@ -2191,6 +2204,10 @@ CONTROL_RANGES = {
     "scale": (0.0, 1000.0, 100.0), "rotation": (-3600.0, 3600.0, 0.0),
     "opacity": (0.0, 100.0, 100.0), "volume_db": (-60.0, 6.0, 0.0),
     "contrast": (-100.0, 100.0, 0.0), "saturation": (0.0, 200.0, 100.0),
+    # the reframe of a shot in a 9:16 / 1:1 frame (wave 25 VERTICAL, roughcut/frame.py):
+    # where its crop window sits and how far it zooms; a 16:9 cut never reads them
+    "reframe_x": (0.0, 100.0, 50.0), "reframe_y": (0.0, 100.0, 50.0),
+    "reframe_zoom": (100.0, 400.0, 100.0),
     # Lumetri Basic Correction's tone (wave 6): grade.js's shader documents the formula
     "highlights": (-100.0, 100.0, 0.0), "shadows": (-100.0, 100.0, 0.0),
     "whites": (-100.0, 100.0, 0.0), "blacks": (-100.0, 100.0, 0.0),
@@ -10590,13 +10607,24 @@ def _native_frame() -> tuple[int, int] | None:
     return None
 
 
+def _cut_shape() -> str:
+    """The shape of the cut on the board's frame (roughcut/frame.py): "16:9" unless it keeps
+    another. The Export dialog's frames and sizes follow it."""
+    return framemod.shape_of(read_edl())
+
+
 def export_frame(preset: dict, native: tuple[int, int] | None) -> tuple[int, int]:
     mw, mh = preset["max"]
     if preset["fixed"] or not native:
-        return mw, mh
-    nw, nh = native
-    scale = min(1.0, mw / nw, mh / nh)
-    return max(2, int(nw * scale) // 2 * 2), max(2, int(nh * scale) // 2 * 2)
+        w, h = mw, mh
+    else:
+        nw, nh = native
+        if not framemod.is_wide(_cut_shape()):
+            nw, nh = max(nw, nh), min(nw, nh)     # a portrait clip's frame, as its landscape twin
+        scale = min(1.0, mw / nw, mh / nh)
+        w, h = max(2, int(nw * scale) // 2 * 2), max(2, int(nh * scale) // 2 * 2)
+    # a 9:16 / 1:1 cut: the frame whose short side is that frame's height (Quick 1080×1920)
+    return framemod.reshape(_cut_shape(), w, h)
 
 
 def export_default_name(edl: dict) -> str:
@@ -10654,17 +10682,27 @@ def _rate_value(text: str | None) -> float | None:
 
 
 def export_aspect(native: tuple[int, int] | None) -> float:
+    shape = _cut_shape()
+    if not framemod.is_wide(shape):
+        return framemod.aspect(shape)
     return (native[0] / native[1]) if native and native[1] else 16 / 9
 
 
 def export_size_frame(key: str, native: tuple[int, int] | None) -> tuple[int, int] | None:
     """The frame Frame Size `key` renders at: the footage's own for "match", else that
-    height at the sequence's aspect (even sides), or None for an unknown key."""
+    height at the sequence's aspect (even sides), or None for an unknown key. A 9:16 or
+    1:1 cut names its sizes by the SHORT side, as phones do: 1080 is 1080×1920 / 1080×1080
+    (frame.reshape)."""
+    shape = _cut_shape()
     if key == "match":
-        return tuple(native) if native else (1920, 1080)
+        if native and not framemod.is_wide(shape):
+            return framemod.reshape(shape, max(native), min(native))
+        return tuple(native) if native else framemod.reshape(shape, 1920, 1080)
     if key not in actionsmod.EXPORT_SIZES:
         return None
     h = int(key)
+    if not framemod.is_wide(shape):
+        return framemod.reshape(shape, int(round(h * 16 / 9 / 2)) * 2, h)
     w = max(2, int(round(h * export_aspect(native) / 2)) * 2)
     return w, h
 
@@ -10674,7 +10712,8 @@ def export_sizes(native: tuple[int, int] | None) -> list[dict]:
     out = []
     for key, label in actionsmod.EXPORT_SIZES.items():
         w, h = export_size_frame(key, native)
-        up = bool(native) and key != "match" and h > native[1]
+        up = bool(native) and key != "match" and (
+            h > native[1] if framemod.is_wide(_cut_shape()) else min(w, h) > min(native))
         out.append({"key": key, "label": label, "width": w, "height": h, "upscale": up})
     return out
 
@@ -11145,8 +11184,11 @@ def export_entry(key: str, native: tuple[int, int] | None, seq: list[dict], seq_
             mbps = max(0.5, p["mbps"] * (w * h) / (rw * rh) * math.sqrt(fps / p["fps"]))
             source = "typical"
         state = "done" if model else sample_state(key, variant)
+    about = p["about"]
+    if not framemod.is_wide(_cut_shape()):         # the preset's words name its own frame
+        about = re.sub(r"\d{3,4}×\d{3,4}", f"{own[0]}×{own[1]}", about)
     return {"key": key, "label": p["label"], "profile": p["profile"],
-            "about": p["about"], "width": w, "height": h,
+            "about": about, "width": w, "height": h,
             "fps": round(fps, 3), "fps_rational": rate,
             "video_mbps": round(mbps, 3), "audio_kbps": audio_kbps,
             "measured": n, "source": source, "sample": model, "sample_state": state,
@@ -11215,6 +11257,8 @@ def api_export() -> JSONResponse:
         # choices with the frame / rate each makes, and the target bitrate's range
         "sizes": export_sizes(native), "rates": export_rates(seq_fps, timebase is not None),
         "native": list(native) if native else None,
+        # the cut's frame shape (wave 25 VERTICAL): the sizes above are its own
+        "frame": framemod.shape_of(edl),
         "bitrate": {"min": actionsmod.EXPORT_BITRATE_MIN, "max": actionsmod.EXPORT_BITRATE_MAX},
         # what the sound of every file is (wave 24 DELIVER, FINISH-15): the one AAC encode
         # at the preset's bitrate, 48 kHz stereo, ending in the true-peak limiter (wave 23)
@@ -14428,6 +14472,8 @@ def module_static(name: str) -> Response:
 MODULE_FILES |= {"passreview.js", "projsettings.js", "voice.js", "events.js"}
 # wave 24 HANDS: where the keys go (focus rule, menus) and the typed timecode
 MODULE_FILES |= {"hands.js"}
+# wave 25 VERTICAL: the frame's shape (9:16 / 1:1), the browser's twin of roughcut/frame.py
+MODULE_FILES |= {"frame.js"}
 
 
 # ---------------------------------------------------------------- audio peaks (wave 3 TLAUDIO)
@@ -15402,8 +15448,9 @@ def _fx_retire(fx_id: str) -> None:
 
 
 def _fx_frame() -> tuple[int, int]:
-    """The frame the free check measures on: the proof's."""
-    return PROOF_W, PROOF_H
+    """The frame the free check measures on: the proof's, in the cut's own shape (wave 25
+    VERTICAL: a title that fits 16:9 is measured again on 9:16's narrower frame)."""
+    return framemod.proof_size(_cut_shape())
 
 
 def _fx_bounds(e: dict) -> dict | None:
@@ -15502,7 +15549,8 @@ def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict 
             e = fx.design(note, seg, clip, load_sidecar(seg["clip"]), reference=ref,
                           place=bool(place), proxy=_fx_proxy(seg["clip"]) if place else None,
                           workdir=fx_home() / fx_id, segments=segments, clips=clips,
-                          window=window)
+                          window=window,
+                          **({} if framemod.is_wide(_cut_shape()) else {"shape": _cut_shape()}))
         if window is not None:
             e["window"] = [window[0], window[1]]
         e["id"] = fx_id
@@ -15758,8 +15806,9 @@ def _fx_run_check(entry: progress.Job, e: dict, seg: dict, onset, hz: float) -> 
     d.mkdir(parents=True, exist_ok=True)
     _fx_check_plan(entry, e, seg)
     on = _fx_check_progress(entry)
-    spec = {"effect": e, "seg": seg, "src": str(src), "dir": str(d), "w": PROOF_W,
-            "h": PROOF_H, "fps": PROOF_FPS, "onset": onset, "hz": hz, "impact": _fx_impact(e)}
+    pw, ph = framemod.proof_size(_cut_shape())
+    spec = {"effect": e, "seg": seg, "src": str(src), "dir": str(d), "w": pw,
+            "h": ph, "shape": _cut_shape(), "fps": PROOF_FPS, "onset": onset, "hz": hz, "impact": _fx_impact(e)}
     t0 = time.perf_counter()
     if not (FX_CHECK_CHILD and fxcheck.unpatched()):
         res = fxcheck.check(spec, on)
@@ -18081,6 +18130,17 @@ async def api_cuts_copy(request: Request) -> JSONResponse:
     edl = read_edl()
     edl["cut"] = {"name": name, "created": time.time(),
                   "from": cut_name_of(edl, STATE["edl"])}
+    # a copy in another frame shape (wave 25 VERTICAL: the AI's "vertical version"; Sequence
+    # Settings › Frame): the shape is the copy's own, the cut copied from is never touched
+    if isinstance(body, dict) and body.get("frame") is not None:
+        try:
+            shape = framemod.validate(body["frame"])
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        if shape and not framemod.is_wide(shape):
+            edl["frame"] = shape
+        else:
+            edl.pop("frame", None)
     _write_cut(dest, edl)
     if open_it:
         switch_cut(dest)

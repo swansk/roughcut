@@ -166,7 +166,10 @@
  *   tl.setTimebase(r)           Sequence › Sequence Settings…: the new rate and every edit
  *                               point re-snapped to its frames, ONE undo entry ('sequence
  *                               settings'); the tracks' save carries `fps`.
- *   tl.openSequenceSettings()   The dialog (#seqSettings: Timebase, Cancel / OK).
+ *   tl.openSequenceSettings()   The dialog (#seqSettings: Timebase and Frame shape, Cancel / OK).
+ *   tl.frameShape() / tl.setFrame(s)  The sequence's frame shape (wave 25 VERTICAL, roughcut/frame.py):
+ *                               "16:9" (every cut with none stored), "9:16" or "1:1". setFrame is
+ *                               Sequence Settings' Frame: ONE undo entry, saved with the tracks.
  *   tl.gridRate() / tl.onGrid(t) The edit grid (wave 3): the exact rate (29.97 →
  *   tl.isOnGrid(t)               30000/1001) and a time on its nearest frame. setRange,
  *                               split, insert, overwrite, setSpeed, the A1 offset and V2
@@ -439,6 +442,15 @@
   let seqRate = 0;                 // the timebase this page holds (0: none yet)
   let seqRateWhy = '';             // 'stored' (the project's) | 'first' (its first clip) | 'preview' | 'set'
   let rateTouched = false;         // set here (first clip, Settings): every tracks save carries it
+  /* The sequence's frame shape (wave 25 VERTICAL; roughcut/frame.py, app/static/frame.js): the
+   * EDL's `frame`, "16:9" when it keeps none. Read by the Program monitor, the Effect Controls'
+   * Reframe, the effects' canvas and the Export dialog; changed only by Sequence Settings
+   * (setFrame) and an undo of that. */
+  let seqFrame = '16:9';
+  let frameTouched = false;        // set here (Settings, an undo): the tracks' save carries it
+  const FRAME_SHAPES = ['16:9', '9:16', '1:1'];
+  const frameOk = (v) => (FRAME_SHAPES.includes(v) ? v : '');
+  const frameShape = () => seqFrame;
   const TIMEBASES = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60];   // tracks.py TIMEBASES
   const rateOk = (r) => Number.isFinite(r) && r >= 1 && r <= 240;
   /* A rate as the EDL keeps it (tracks.py timebase_value): 29.97002997 → 29.97. */
@@ -1821,6 +1833,7 @@
       // the timebase, once this page gave the sequence one or changed it (verdict 10,
       // punch 3); a page that only shows the stored one leaves it to the server
       ...(rateTouched && seqRate && seqRateWhy !== 'preview' ? { fps: seqRate } : {}),
+      ...(frameTouched ? { frame: seqFrame } : {}),
     });
   }
 
@@ -1868,6 +1881,10 @@
     seqRate = p ? rateKey(p.fps) : 0;
     seqRateWhy = seqRate ? 'stored' : '';
     rateTouched = false;
+    const wasFrame = seqFrame;
+    seqFrame = frameOk(p && p.frame) || '16:9';
+    frameTouched = false;
+    if (seqFrame !== wasFrame) emit('frame', { frame: seqFrame });     // another cut's shape was loaded
     const base = DEFAULT_TRACKS();
     const got = (p && p.tracks) || {};
     for (const n of TRACKS) base[n] = { ...base[n], ...(got[n] || {}) };
@@ -3413,9 +3430,9 @@
   const snapshot = () => JSON.stringify(hooks && hooks.extra
     ? { segs: segs(), extra: hooks.extra(), overlays: state.overlays, audio: state.audio,
         xtracks: trackNames().filter(isExtra), transitions: state.transitions, marks: marksOf(),
-        rate: rateOf() }
+        rate: rateOf(), frame: seqFrame }
     : { segs: segs(), overlays: state.overlays, audio: state.audio, xtracks: trackNames().filter(isExtra),
-        transitions: state.transitions, marks: marksOf(), rate: rateOf() });
+        transitions: state.transitions, marks: marksOf(), rate: rateOf(), frame: seqFrame });
 
   function restore(json) {
     const v = JSON.parse(json);
@@ -3440,6 +3457,12 @@
         seqRateWhy = 'set';
         rateTouched = true;
         paintTc();
+      }
+      const fr = frameOk(v.frame);                       // a Sequence Settings frame undone / redone
+      if (fr && fr !== seqFrame) {
+        seqFrame = fr;
+        frameTouched = true;
+        emit('frame', { frame: fr });
       }
     } else {
       hooks.setSegs(v);
@@ -4023,11 +4046,36 @@
     return true;
   }
 
+  /* The sequence's frame shape changed (Sequence Settings › Frame): the Program, the Effect
+   * Controls' Reframe, the effects' check and the Export's sizes follow. ONE undo entry,
+   * 'sequence settings' — the shots keep their own reframe, nothing else moves. False when the
+   * shape is already that one, or unknown. */
+  function setFrame(shape) {
+    const f = frameOk(shape);
+    if (!f || f === seqFrame) return false;
+    if (cutLocked()) return refuseLocked(trackState('V1').lock ? 'V1' : 'A1');
+    const ok = mutate('sequence settings', () => {
+      seqFrame = f;
+      frameTouched = true;
+      return true;
+    });
+    if (!ok) return false;
+    scheduleSeqSave();
+    emit('frame', { frame: f });
+    return true;
+  }
+
   /* The dialog: Premiere's General › Timebase, over the sequence's own settings. Built on
    * its first open; OK applies (one undo) and writes the tracks' save before it closes,
    * so an Export opened next reads the new Match Sequence. */
   let ssDlg = null;
   const rateLabel = (r) => `${String(r)} frames/second`;
+  const FRAME_LABEL = { '16:9': 'Landscape 16:9', '9:16': 'Vertical 9:16', '1:1': 'Square 1:1' };
+  const FRAME_ABOUT = {
+    '16:9': 'The frame every cut has unless you change it.',
+    '9:16': 'A phone frame, 1080×1920 on Quick and YouTube: each shot fills it (Effect Controls › Reframe moves the crop).',
+    '1:1': 'A square frame, 1080×1080 on Quick and YouTube: each shot fills it (Effect Controls › Reframe moves the crop).',
+  };
   function openSequenceSettings() {
     if (!ssDlg) {
       ssDlg = document.createElement('dialog');
@@ -4038,7 +4086,7 @@
       ssDlg.addEventListener('cancel', (e) => { e.preventDefault(); ssDlg.close(); });
       // keys typed in it stay in it (the timeline's keys are on window)
       ssDlg.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && e.target && e.target.id === 'ssTimebase') { e.preventDefault(); ssOk(); }
+        if (e.key === 'Enter' && e.target && (e.target.id === 'ssTimebase' || e.target.id === 'ssFrame')) { e.preventDefault(); ssOk(); }
         if (e.key !== 'Escape') e.stopPropagation();
       });
       ssDlg.addEventListener('click', (e) => {
@@ -4058,6 +4106,7 @@
       // eslint-disable-next-line no-undef
       if (typeof P !== 'undefined' && P && P.cut) name = String(P.cut);
     } catch (err) { /* the default */ }
+    const frameOpts = FRAME_SHAPES.map((f) => `<option value="${f}"${f === seqFrame ? ' selected' : ''}>${FRAME_LABEL[f]}</option>`).join('');
     const opts = (cur ? '' : '<option value="" selected>None yet: the first clip sets it</option>')
       + rates.map((r) => `<option value="${r}"${r === cur ? ' selected' : ''}>${rateLabel(r)}</option>`).join('');
     ssDlg.innerHTML = `
@@ -4069,6 +4118,9 @@
             <label for="ssTimebase">Timebase</label>
             <div><select id="ssTimebase" data-testid="seq-timebase">${opts}</select>
               <div class="ss-about" id="ssAbout" role="status"></div></div>
+            <label for="ssFrame">Frame</label>
+            <div><select id="ssFrame" data-testid="seq-frame">${frameOpts}</select>
+              <div class="ss-about" id="ssFrameAbout" role="status"></div></div>
           </div>
         </div>
         <div class="ss-foot"><span class="ss-grow"></span>
@@ -4086,6 +4138,11 @@
     const sel = ssDlg && ssDlg.querySelector('#ssTimebase');
     const about = ssDlg && ssDlg.querySelector('#ssAbout');
     if (!sel || !about) return;
+    const fsel = ssDlg.querySelector('#ssFrame'), fabout = ssDlg.querySelector('#ssFrameAbout');
+    if (fsel && fabout) {
+      fabout.textContent = fsel.value === seqFrame ? FRAME_ABOUT[fsel.value]
+        : `${FRAME_ABOUT[fsel.value]} One undo takes it back.`;
+    }
     const r = rateKey(sel.value), cur = timebase();
     about.textContent = !r ? 'A new sequence takes the frame rate of the first clip put in it.'
       : r === cur ? 'The timecode and every edit point count in this rate.'
@@ -4093,10 +4150,11 @@
   }
   async function ssOk() {
     const r = rateKey(ssDlg.querySelector('#ssTimebase').value);
-    if (r && r !== timebase()) {
-      setTimebase(r);
-      await saveSeq();
-    }
+    const fr = frameOk(ssDlg.querySelector('#ssFrame').value);
+    let changed = false;
+    if (r && r !== timebase()) { setTimebase(r); changed = true; }
+    if (fr && fr !== seqFrame) { setFrame(fr); changed = true; }
+    if (changed) await saveSeq();
     if (ssDlg.open) ssDlg.close();
   }
 
@@ -4701,7 +4759,7 @@
     get trackTops() { return { ...(state.trackTops || {}) }; },
     fps, setFps, frame, tc, keyLabel, isMac: IS_MAC, gridRate, onGrid, isOnGrid,
     // the sequence's timebase (verdict 10, punch 3): 0 while it has none
-    timebase, setTimebase, TIMEBASES, openSequenceSettings,
+    timebase, setTimebase, TIMEBASES, openSequenceSettings, frameShape, setFrame,
     TOOLS, setTool, get tool() { return state.tool; },
     addMarker, removeMarker, clearMarkers, setMarkers, nextMarker, prevMarker,
     // the EDL's shape: a plain marker its bare time, any other {t, name?, comment?, colour?, dur?}

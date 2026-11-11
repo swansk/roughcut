@@ -292,7 +292,9 @@ def sequence_block(state: dict) -> str:
         t += d
     if len(segs) > SEG_ROWS_MAX:
         rows.append(f"  … and {len(segs) - SEG_ROWS_MAX} more shots")
-    lines = [f"{len(segs)} shots, {t:.2f} s ({tc(t)}) at {fps:g} fps."]
+    lines = [f"{len(segs)} shots, {t:.2f} s ({tc(t)}) at {fps:g} fps."
+             + (f" The frame is {state['frame']} (Sequence Settings)."
+                if state.get("frame") and state["frame"] != "16:9" else "")]
     lines.append("   #  id  clip  clip range  film time  [effect controls, colour, why]")
     lines.extend(rows or ["  (the sequence is empty)"])
     mk = [m for m in state.get("markers") or [] if tracksmod.marker_time(m) is not None]
@@ -544,6 +546,14 @@ Export presets: {presets}
 - a title, a graphic, hit markers, an arrow → design_effect with a note saying what and where
   (only what no tool above draws).
 - a review copy, a file to upload, the final file → export with quick, youtube or master.
+- a vertical / phone / Instagram / TikTok / Reels / Shorts / square version, or a shorter cut
+  "for" a place → a SECOND DELIVERABLE: the first op is `new_cut` (a saved copy, named from the
+  ask, `frame` "9:16" for vertical and "1:1" for square), the ops after it shorten and shape the
+  copy (ripple_delete and trim to the length asked; keep the opening and the best moments; the
+  copy's length is the sum of the kept shots' lengths in the table, so count it and land within
+  a second of the ask). The cut the editor is on is NEVER shortened or reshaped for these, and
+  the `summary` begins "A new cut, <name>:" and says that the cut they are on stays as it is.
+  Only to change THIS cut's own shape ("make this sequence vertical") is the `frame` op used.
 
 ## The app (name only what exists here)
 {APP_GUIDE}
@@ -556,7 +566,8 @@ JSON with `kind`:
   sequence and times from the tables. Prefer the fewest ops that do what was asked.
 - "plan": the request rewrites the whole cut (a new structure, a new length for the whole
   film, "make a teaser", "cut it to the music") — something better done by re-cutting than
-  by a handful of edits. `note` is the brief for the re-cut, in the editor's terms: only what
+  by a handful of edits. (A second deliverable — a vertical, Instagram or other version — is
+  never a plan: a plan replaces the cut the editor is on. It is `ops` starting with new_cut.) `note` is the brief for the re-cut, in the editor's terms: only what
   the editor asked, plus the shots and moments they named; the cutter reads the same written
   descriptions you do, so never tell it to choose "from the pictures". Under 1,500 characters, whole
   sentences, no instruction the editor did not give, and never "you asked" for your own idea.

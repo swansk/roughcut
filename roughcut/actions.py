@@ -46,6 +46,12 @@ THE OPS (each maps to the human path named after the arrow)
     track_add     {kind: video|audio}        → tl.addTrack   Sequence › Add Track
     overlay       {clip, in, out, at, track?} → tl.addOverlay  a clip on V2 (or an added
                                                  V3…/A3… track) at film time `at`
+    frame         {frame: 16:9|9:16|1:1}     → tl.setFrame   Sequence Settings › Frame (wave 25
+                                                 VERTICAL): one undo entry
+    new_cut       {name, frame?}             a SECOND DELIVERABLE: the first op; every op after
+                                                 it is made on a saved copy of this cut (the
+                                                 cut's "save a copy" path, in `frame`), and the
+                                                 cut the editor is on is never touched
   Effect Controls (a V1 shot's id; Motion and Opacity also take a V2+ clip's id)
     set           {id, prop, value}          → effects.set   the value as the panel shows it
     keys          {id, prop, keys: [[t, v], …]} → the stopwatch (effects.animate), then the
@@ -118,6 +124,7 @@ import copy
 import math
 from typing import Any, Iterable
 
+from . import frame as framemod
 from . import tracks as tracksmod
 from . import vfx as vfxmod
 
@@ -132,7 +139,8 @@ FRAME_W, FRAME_H = 1920, 1080     # Effect Controls' Position is in a 1920×1080
 # The op names, by family, in the order the review panel and the prompt list them.
 FAMILIES: dict[str, tuple[str, ...]] = {
     "timeline": ("insert", "overwrite", "append", "move", "razor", "ripple_delete", "trim",
-                 "roll", "slip", "speed", "marker", "in_out", "track_add", "overlay"),
+                 "roll", "slip", "speed", "marker", "in_out", "track_add", "overlay",
+                 "frame", "new_cut"),
     "effect_controls": ("set", "keys", "effect"),
     "lumetri": ("curve", "wheel", "look", "match", "vignette"),
     "transitions": ("transition", "fade"),
@@ -178,6 +186,10 @@ SET_PROPS: dict[str, tuple[str, float, float, str]] = {
     "hsl_temperature": ("HSL temperature", -100.0, 100.0, ""),
     "hsl_tint": ("HSL tint", -100.0, 100.0, ""),
     # Lumetri › Vignette (wave 15, VIGNETTE; roughcut/colour.py has THE formula)
+    # the reframe of a shot in a 9:16 / 1:1 cut (wave 25 VERTICAL, roughcut/frame.py)
+    "reframe_x": ("Reframe left ↔ right", 0.0, 100.0, " %"),
+    "reframe_y": ("Reframe up ↔ down", 0.0, 100.0, " %"),
+    "reframe_zoom": ("Reframe zoom", 100.0, 400.0, " %"),
     "vignette_amount": ("Vignette Amount", -5.0, 5.0, ""),
     "vignette_midpoint": ("Vignette Midpoint", 0.0, 100.0, ""),
     "vignette_roundness": ("Vignette Roundness", -100.0, 100.0, ""),
@@ -264,8 +276,10 @@ Timeline
   {{"op":"in_out","in"?,"out"?}}                 the sequence In / Out (film seconds; null clears one)
   {{"op":"track_add","kind":"video"|"audio"}}    add a track (V3…, A3…)
   {{"op":"overlay","clip","in","out","at","track"?}}  a clip over the cut on V2 (or an added track) at film time `at`
+  {{"op":"frame","frame":"16:9"|"9:16"|"1:1"}}   the sequence's frame shape (Sequence Settings): 9:16 is a phone / Instagram / TikTok frame, every shot fills it
+  {{"op":"new_cut","name","frame"?}}             A SECOND DELIVERABLE: save a copy of the cut under `name` (in `frame`, default this cut's) and make every op AFTER this one on the COPY; the cut the editor is on is never touched. It must be the FIRST op. Use it for "make a vertical version", "a 20 second Instagram cut", "a short for TikTok" — NEVER shorten or reshape the cut the editor is on for those
 Effect Controls
-  {{"op":"set","id","prop","value"}}             one property, in the panel's units: {props}
+  {{"op":"set","id","prop","value"}}             one property, in the panel's units: {props}. `reframe_x` / `reframe_y` (0..100 %, 50 the centre) slide a shot's crop window left ↔ right / up ↔ down and `reframe_zoom` (100..400 %) shrinks it, in a 9:16 or 1:1 cut only: a shot is filled and centred by default, so set them only where the subject is off-centre (a person at the left third: reframe_x 25)
   {{"op":"effect","id","kind","params"?,"keys"?,"on"?,"remove"?}}   a video effect from the Effects bin on a shot (its first of that kind; added when it has none): {vfx}. "keys" {{param: [[t, v], …]}} keyframes as `keys`; "on": false bypasses it; "remove": true clears it
   {{"op":"keys","id","prop","keys":[[t,v],…]}}   keyframes (t = film seconds from the shot's first frame, before its last frame; v in the prop's units) on {", ".join(KEY_PROPS)}
 Lumetri Color
@@ -420,6 +434,11 @@ class _Sim:
                          if isinstance(o, dict) and o.get("id")}
         self.transitions = [dict(t) for t in state.get("transitions") or [] if isinstance(t, dict)]
         self.looks = set(state.get("looks") or [])
+        # the frame's shape (wave 25 VERTICAL): what Reframe applies to; `new_cut` says the ops
+        # after it are made on a copy in another shape
+        self.shape = framemod.shape_value(state.get("frame")) or framemod.DEFAULT
+        self.new_cut: dict | None = None
+        self.n_ops = 0
         self.presets: dict[str, str] = dict(state.get("presets") or {})
         colour = state.get("colour") if isinstance(state.get("colour"), dict) else {}
         self.reference = colour.get("reference")
@@ -926,6 +945,40 @@ def _c_in_out(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
     return clean, "Sequence " + ", ".join(bits)
 
 
+def _frame_words(shape: str) -> str:
+    w, h = framemod.reshape(shape, 1920, 1080)
+    return f"{framemod.LABELS[shape]} ({w}×{h} on Quick)"
+
+
+def _c_frame(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
+    shape = framemod.shape_value(raw.get("frame"))
+    if shape is None:
+        raise Refused(f"`frame` must be one of {', '.join(framemod.SHAPES)}")
+    if shape == sim.shape:
+        raise Refused(f"the sequence's frame is already {shape}")
+    sim.shape = shape
+    return {"op": "frame", "frame": shape}, f"Sequence Settings: frame {_frame_words(shape)}"
+
+
+def _c_new_cut(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
+    """A second deliverable (wave 25 VERTICAL, WORDS-22): the ops after this one are made on a
+    SAVED COPY of this cut, in its own frame shape, and the cut the editor is on stays as it is.
+    It must come first, once."""
+    if sim.n_ops or sim.new_cut is not None:
+        raise Refused("`new_cut` must be the first op, and only once: everything after it is made on the copy")
+    name = " ".join(str(raw.get("name") or "").split())[:60]
+    if not name:
+        raise Refused("`new_cut` needs a `name` for the copy")
+    shape = framemod.shape_value(raw.get("frame")) if raw.get("frame") not in (None, "") else sim.shape
+    if shape is None:
+        raise Refused(f"`frame` must be one of {', '.join(framemod.SHAPES)}")
+    sim.new_cut = {"name": name, "frame": shape}
+    sim.shape = shape
+    clean = {"op": "new_cut", "name": name, "frame": shape}
+    return clean, (f"A NEW cut, “{name}”, saved as a copy of this one in {_frame_words(shape)}: "
+                   f"the edits below are made on the copy — the cut you are on stays as it is")
+
+
 def _c_track_add(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
     kind = raw.get("kind")
     if kind not in ("video", "audio"):
@@ -980,6 +1033,9 @@ def _c_set(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
     sid, seg, ov = _target(raw, sim, overlay_ok=True)
     if ov and prop not in OVERLAY_PROPS:
         raise Refused(f"a clip on V2+ takes Motion and Opacity only, not {SET_PROPS[prop][0]}")
+    if prop.startswith("reframe_") and framemod.is_wide(sim.shape):
+        raise Refused("Reframe is for a 9:16 or 1:1 cut: this one is 16:9 (set its frame first: "
+                      "the `frame` op, or `new_cut` with a frame)")
     label, lo, hi, unit = SET_PROPS[prop]
     v = _number(raw, "value", lo, hi, label, unit)
     v = _r(v, 3)
@@ -1388,6 +1444,7 @@ CHECK = {
     "razor": _c_razor, "ripple_delete": _c_ripple_delete, "trim": _c_trim, "roll": _c_roll,
     "slip": _c_slip, "speed": _c_speed, "marker": _c_marker, "in_out": _c_in_out,
     "track_add": _c_track_add, "overlay": _c_overlay, "set": _c_set, "keys": _c_keys,
+    "frame": _c_frame, "new_cut": _c_new_cut,
     "effect": _c_effect,
     "curve": _c_curve, "wheel": _c_wheel, "look": _c_look, "match": _c_match, "vignette": _c_vignette,
     "transition": _c_transition, "fade": _c_fade, "design_effect": _c_design_effect,
@@ -1429,6 +1486,7 @@ def _run(ops: Any, state: dict) -> tuple[list[dict], list[dict], list[str], _Sim
         if clean.get("makes") is None:
             clean.pop("makes", None)
         accepted.append(clean)
+        sim.n_ops += 1
         lines.append(line)
         index.append(i)
     return accepted, refused, lines, sim, index
@@ -1497,4 +1555,5 @@ def state_from(payload: dict, *, looks: Iterable[str] = (), presets: dict | None
         "colour": payload.get("colour") or {},
         "looks": list(looks),
         "presets": dict(presets or {}),
+        "frame": payload.get("frame") or framemod.DEFAULT,
     }

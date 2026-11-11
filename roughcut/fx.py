@@ -1599,11 +1599,26 @@ def _reference_events(reference: dict, peaks: list[dict], onset: list[float], hz
     return [{"t": round(t, 3), "x": float(m[0]), "y": float(m[1])} for m in reference["marks"]]
 
 
+def frame_note(shape: str) -> str:
+    """What the designer is told when the cut is not 16:9 (wave 25 VERTICAL): the frame is
+    narrow (9:16) or square (1:1), every fraction is of THAT frame, and the frame check
+    measures on it."""
+    from roughcut import frame as framemod
+    w, h = framemod.SHAPES.get(shape, (16, 9))
+    return (f"\n\nTHE FRAME OF THIS CUT IS {w}:{h}"
+            + (" — a narrow, tall phone frame: about half as wide as a 16:9 one." if w < h
+               else " — square.")
+            + " x and y are fractions of THAT frame, `size` is a fraction of its width, and the frame "
+              "check measures on it: keep every text inside the middle 90 % of its width, split a long "
+              "title over two or three lines (one text shape with \\n), and put a lower third near "
+              "the bottom third, clear of the edges.")
+
+
 def design(note: str, seg: dict, clip: dict, sidecar: dict | None, *,
            reference: dict | None = None, place: bool = False,
            proxy: Path | None = None, workdir: Path | None = None,
            segments: list[dict] | None = None, clips: dict | None = None,
-           window: tuple[float, float] | None = None) -> dict:
+           window: tuple[float, float] | None = None, shape: str | None = None) -> dict:
     """The whole design step, through `roughcut.inference` (judge role): candidate
     impacts from `onset_peaks` over the shot's range — or over `window`, the human's
     own (t0, t1) in clip seconds, when given: Karl's first live effect put markers
@@ -1633,6 +1648,8 @@ def design(note: str, seg: dict, clip: dict, sidecar: dict | None, *,
     system, prompt = build_design_prompt(note, seg, clip, peaks=peaks, transcript=transcript,
                                          reference=reference if has_marks else None,
                                          cut=segments)
+    if shape and shape != "16:9":
+        system += frame_note(shape)
     answer = _ask(system, prompt)
     if not isinstance(answer, dict):
         raise ValueError("the design answer is not an object")
@@ -2416,7 +2433,7 @@ def _shown_at(overlay: dict, dur: float) -> float | None:
 
 def verify(effect: dict, seg: dict, *, onset: list[float] | None = None,
            hz: float = ONSET_HZ, part: Path | None = None, base: Path | None = None,
-           impact: bool = True) -> dict:
+           impact: bool = True, aspect: float = 16 / 9) -> dict:
     """The definition of done as a checklist the machine runs. Returns
     `{"ok": bool, "at": iso, "checks": [{"key", "label", "ok", "detail"}, …]}` with:
     `in_shot` (every event inside the shot's range, or within half a frame of its edge:
@@ -2446,7 +2463,8 @@ def verify(effect: dict, seg: dict, *, onset: list[float] | None = None,
          else "no events"))
 
     # in_frame: the box is centred on the anchor + the pose's offset; dy is a width
-    # fraction, so it is scaled by the 16:9 aspect to compare with y
+    # fraction, so it is scaled by the frame's aspect (16:9 unless the cut is 9:16 / 1:1:
+    # `verify(aspect=)`, wave 25 VERTICAL) to compare with y
     anim = overlay.get("anim") or {}
     sample_ts = {0.0} | {k[0] for tr in ("dx", "dy") for k in (anim.get(tr) or [])}
     bad = []
@@ -2454,7 +2472,7 @@ def verify(effect: dict, seg: dict, *, onset: list[float] | None = None,
         for ts in sample_ts:
             pose = pose_at(overlay, ts)
             cx = ev["x"] + pose["dx"]
-            cy = ev["y"] + pose["dy"] * 16 / 9
+            cy = ev["y"] + pose["dy"] * aspect
             if not (0 <= cx <= 1 and 0 <= cy <= 1):
                 bad.append(f"{ev['t']:.2f}s at ({cx:.2f}, {cy:.2f})")
                 break

@@ -1955,9 +1955,14 @@
     c.classList.toggle('live', on || !!S.guides);
     if (!on && !S.sketch && !S.guides) return;
     if (!v || !v.videoWidth || !v.videoHeight) return;   // no frame yet; the next one draws
-    if (c.width !== v.videoWidth || c.height !== v.videoHeight) {
-      c.width = v.videoWidth;
-      c.height = v.videoHeight;
+    // the effects are drawn on the FRAME (wave 25 VERTICAL): the video's own size in a 16:9 cut,
+    // else the cut's shape (9:16, 1:1) at the video's short side — fractions of the frame, as
+    // the export lays them (the video is cropped to it, not the other way about)
+    const [fw, fh] = window.rcFrame ? window.rcFrame.canvasSize(v.videoWidth, v.videoHeight)
+      : [v.videoWidth, v.videoHeight];
+    if (c.width !== fw || c.height !== fh) {
+      c.width = fw;
+      c.height = fh;
     }
     const ctx = O.ctx, W = c.width, H = c.height;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -2109,9 +2114,10 @@
     }
     S.sketch = { strokes: [], cur: null, goal: '' };
     const v = live();
-    if (v && v.videoWidth && (O.canvas.width !== v.videoWidth || O.canvas.height !== v.videoHeight)) {
-      O.canvas.width = v.videoWidth;
-      O.canvas.height = v.videoHeight;
+    if (v && v.videoWidth) {
+      const [fw, fh] = window.rcFrame ? window.rcFrame.canvasSize(v.videoWidth, v.videoHeight)
+        : [v.videoWidth, v.videoHeight];
+      if (O.canvas.width !== fw || O.canvas.height !== fh) { O.canvas.width = fw; O.canvas.height = fh; }
     }
     O.canvas.classList.add('sketch');
     mountHud();
@@ -2184,13 +2190,20 @@
 
   function framePng(v) {
     try {
-      const W = v && v.videoWidth ? v.videoWidth : (O.canvas.width || 1280);
-      const H = v && v.videoHeight ? v.videoHeight : (O.canvas.height || 720);
+      const fs = v && v.videoWidth && window.rcFrame ? window.rcFrame.canvasSize(v.videoWidth, v.videoHeight) : null;
+      const W = fs ? fs[0] : v && v.videoWidth ? v.videoWidth : (O.canvas.width || 1280);
+      const H = fs ? fs[1] : v && v.videoHeight ? v.videoHeight : (O.canvas.height || 720);
       const c = document.createElement('canvas');
       c.width = W;
       c.height = H;
       const ctx = c.getContext('2d');
-      if (v && v.videoWidth) ctx.drawImage(v, 0, 0, W, H);
+      if (v && v.videoWidth && window.rcFrame && !window.rcFrame.wide()) {
+        // the frame is a crop of the picture: the reference is what the frame shows
+        const sg = liveShot();
+        const r = window.rcFrame.reframe((sg && sg.controls) || {});
+        const [l, tp, ww, wh] = window.rcFrame.window(v.videoWidth, v.videoHeight, window.rcFrame.shape(), r.x, r.y, r.zoom);
+        ctx.drawImage(v, l * v.videoWidth, tp * v.videoHeight, ww * v.videoWidth, wh * v.videoHeight, 0, 0, W, H);
+      } else if (v && v.videoWidth) ctx.drawImage(v, 0, 0, W, H);
       else { ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H); }
       drawStrokes(ctx, W, H);
       return c.toDataURL('image/png');

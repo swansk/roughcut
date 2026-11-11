@@ -37,6 +37,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from roughcut import frame as framemod
 from roughcut import fx
 
 # The functions the child would run. A test that replaces one of them in the server's
@@ -85,7 +86,7 @@ def _ffmpeg(cmd: list[str], seconds: float, stage: str, on_progress: Progress) -
 
 
 def proof(e: dict, seg: dict, src: Path, d: Path, *, w: int, h: int, fps,
-          on_progress: Progress = _quiet) -> tuple[Path, Path, dict]:
+          on_progress: Progress = _quiet, shape: str | None = None) -> tuple[Path, Path, dict]:
     """The one shot rendered from `src` (its proxy) at w × h, with the effect
     (`proof.mp4`) and without (`base.mp4`), so the checks can measure a difference and
     the human can watch the result in seconds rather than after a whole render.
@@ -93,8 +94,14 @@ def proof(e: dict, seg: dict, src: Path, d: Path, *, w: int, h: int, fps,
     proof_s}`."""
     d.mkdir(parents=True, exist_ok=True)
     dur = float(seg["out"]) - float(seg["in"])
-    vf = (f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
-          f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps={fps},format=yuv420p")
+    if shape and not framemod.is_wide(shape):
+        # a 9:16 / 1:1 cut fills its frame with the shot, reframed as the export does it
+        rx, ry, rz = framemod.reframe_of(seg.get("controls"))
+        vf = (f"scale={w}:{h}:force_original_aspect_ratio=increase,"
+              + ",".join(framemod.fill_filters(w, h, rx, ry, rz)) + f",fps={fps},format=yuv420p")
+    else:
+        vf = (f"scale={w}:{h}:force_original_aspect_ratio=decrease,"
+              f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2,fps={fps},format=yuv420p")
     af = "aresample=48000:first_pts=0,aformat=channel_layouts=stereo"
     head = ["ffmpeg", "-v", "error", "-y", "-nostdin", "-ss", f"{float(seg['in']):.3f}",
             "-i", str(src)]
@@ -133,11 +140,13 @@ def check(spec: dict, on_progress: Progress = _quiet) -> dict:
     fps, onset, hz, impact}`. Returns `{verify, stats}`."""
     e, seg = spec["effect"], spec["seg"]
     out, base, stats = proof(e, seg, Path(spec["src"]), Path(spec["dir"]), w=int(spec["w"]),
-                             h=int(spec["h"]), fps=spec["fps"], on_progress=on_progress)
+                             h=int(spec["h"]), fps=spec["fps"], on_progress=on_progress,
+                             shape=spec.get("shape"))
     on_progress("measure", 0.0, False)
     t0 = time.perf_counter()
     v = fx.verify(e, seg, onset=spec.get("onset"), hz=float(spec.get("hz") or fx.ONSET_HZ),
-                  part=out, base=base, impact=bool(spec.get("impact")))
+                  part=out, base=base, impact=bool(spec.get("impact")),
+                  aspect=int(spec["w"]) / int(spec["h"]))
     row = fx.bounds_check(e, int(spec["w"]), int(spec["h"]))
     if row is not None:                    # wave 23: measured on the renderer's pixels
         at = next((i + 1 for i, c in enumerate(v["checks"]) if c.get("key") == "in_frame"), 0)
