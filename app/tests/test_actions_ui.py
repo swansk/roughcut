@@ -829,7 +829,9 @@ def test_reject_leaves_the_edl_byte_for_byte(browser, live_server, project):
         b.page.wait_for_timeout(1200)
         assert b.raw() == before
         assert Path(project["edl"]).stat().st_mtime_ns == mtime
-        assert b.page.locator("#undo").is_disabled()
+        # setting the edits aside is itself an undo entry (wave 23 SAFE): Ctrl+Z brings them back,
+        # and the cut is untouched either way
+        assert b.page.locator("#undo").get_attribute("title").startswith("undo: set aside AI edit")
         b.page.wait_for_function("async (j) => !!(await (await fetch('/api/assist/' + j)).json()).answer",
                                  arg=res["job"])
         rec = b.page.evaluate("async (j) => (await fetch('/api/assist/' + j)).json()", res["job"])

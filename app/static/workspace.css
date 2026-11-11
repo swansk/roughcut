@@ -752,7 +752,7 @@ a.floorbtn:hover { color: var(--text); background: var(--card-hi); border-color:
   z-index: 50; max-width: 70vw;
 }
 #toast.show { opacity: 1; }
-#toast.act.show { pointer-events: auto; }
+#toast .toastAct { pointer-events: auto; }      /* only its button takes clicks: the toast never covers what is under it */
 #toast .toastAct { margin-left: 8px; padding: 1px 10px; font-size: 12px; }
 
 /* Recent proposals, in the Assistant (wave 23 SAFE) */
@@ -800,3 +800,5 @@ input.hands-tc { box-sizing: border-box; padding: 0 4px; background: #101013; co
                  border: 1px solid var(--accent, #4a9df8); border-radius: 2px; outline: none;
                  font-variant-numeric: tabular-nums; }
 input.hands-tc.bad { border-color: var(--bad, #e46a6a); }
+#proposalStale { margin: 4px 0 6px; padding: 5px 8px; border: 1px solid var(--warn); border-radius: 4px; color: var(--warn); font-size: 11.5px; }
+#proposalStale.sure { background: rgba(226, 177, 79, .12); }

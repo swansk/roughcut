@@ -3471,7 +3471,7 @@
     pending = null;
     const after = snapshot();
     if (after === p.before) return false;
-    undoStack.push({ label: p.label, before: p.before, after });
+    undoStack.push({ label: p.label, before: p.before, after, at: Date.now() / 1000 });
     if (undoStack.length > UNDO_LIMIT) undoStack.shift();
     redoStack.length = 0;
     paintUndo();
@@ -3642,7 +3642,7 @@
     if (pending) return false;
     const now = unrec || snapshot();
     const name = String(label || 'edit');
-    const e = { label: name, before: now, after: now };
+    const e = { label: name, before: now, after: now, at: Date.now() / 1000 };
     if (tag != null) e.tag = String(tag);
     undoStack.push(e);
     if (undoStack.length > UNDO_LIMIT) undoStack.shift();
@@ -3664,12 +3664,26 @@
    * `id` last), and without the timebase a first clip may have given it since. */
   const canon = (v) => (Array.isArray(v) ? v.map(canon) : v && typeof v === 'object'
     ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v);
+  /* Compared on what the cut IS: the shots' identity, range, speed and controls. The server
+   * does not keep an AI proposal's polish notes, and keeps the transitions in its own order, so
+   * a page loaded after a reload never has them as the page that wrote the history did. */
   const noRate = (json) => {
-    try { const v = JSON.parse(json); if (v && typeof v === 'object') delete v.rate; return JSON.stringify(canon(v)); } catch (err) { return json; }
+    try {
+      const v = JSON.parse(json);
+      if (!v || typeof v !== 'object') return json;
+      delete v.rate;
+      if (Array.isArray(v.segs)) {
+        v.segs = v.segs.map((s) => ({ id: s.id, clip: s.clip, in: s.in, out: s.out,
+          speed: s.speed == null ? 1 : s.speed, controls: s.controls || {}, gap: !!s.gap }));
+      }
+      if (Array.isArray(v.transitions)) v.transitions = v.transitions.map((t) => JSON.stringify(canon(t))).sort();
+      return JSON.stringify(canon(v));
+    } catch (err) { return json; }
   };
   function history() {
     const out = (list) => list.filter(keepable).map((e) => ({
-      label: e.label, before: realIds(e.before), after: realIds(e.after), ...(e.tag ? { tag: e.tag } : {}) }));
+      label: e.label, before: realIds(e.before), after: realIds(e.after), ...(e.at ? { at: e.at } : {}),
+      ...(e.tag ? { tag: e.tag } : {}) }));
     return { head: realIds(snapshot()), undo: out(undoStack), redo: out(redoStack) };
   }
   function restoreHistory(h) {
@@ -3682,6 +3696,11 @@
     paintUndo();
     return true;
   }
+  /* The changes the editor has made (and not undone) since time `t` (seconds, this page's clock):
+   * the labels of the undo entries newer than it, oldest first. A proposal that predates them
+   * says so (app.js). A set-aside proposal is not a change to the cut. */
+  const changesSince = (t) => undoStack.filter((e) => e.at && e.at > t && !(e.tag && String(e.tag).startsWith('proposal:')))
+    .map((e) => e.label);
   const onHistory = (fn) => { histListeners.add(fn); return () => histListeners.delete(fn); };
 
   /* What Ctrl+Z would take back now: the top entry's label and tag, or null. */
@@ -4687,7 +4706,7 @@
     begin, commit, cancel, batch, unrecorded, undo, redo, clearHistory,
     mark: markEntry,                // an entry for a change outside the cut (fx.js's Accept)
     nextUndo,                       // {label, tag} of what Ctrl+Z takes back now, or null
-    history, restoreHistory, onHistory,   // the stacks kept past a reload (app.js, /api/undo)
+    history, restoreHistory, onHistory, changesSince,   // the stacks kept past a reload (app.js, /api/undo)
     setRange, move, split, remove, insert, setSpeed, insertAt, overwrite,
     select, syncSel, seek, cueQuiet, setPlayhead, zoomTo, fit,
     forSave, needsRekey, afterSave, applyIds, idFor, putTurn, saveHeaders, seqForFlush, seqDirty,

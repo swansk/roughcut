@@ -191,11 +191,12 @@ function paintJob(row, j) {
   // (wave 23: every AI job — an Ask, a model search, a deep look — stops through one endpoint)
   const stopUrl = (x) => `/api/jobs/${encodeURIComponent(x.id)}/stop`;
   const CANCEL = { index: () => '/api/index/cancel', render: (x) => `/api/render/${x.id}/cancel`,
-                   ask: stopUrl, find: stopUrl, deep: stopUrl };
+                   ask: stopUrl, find: stopUrl, deep: stopUrl,
+                   fx: (x) => (x.fx_kind === 'design' || x.fx_kind === 'revise' ? stopUrl(x) : null) };
   if (j.state === 'cancelled') { row.style.display = 'none'; return; }
   row.style.display = '';
   let x = row.querySelector('.jx');
-  if (CANCEL[j.kind] && j.state === 'running') {
+  if (CANCEL[j.kind] && CANCEL[j.kind](j) && j.state === 'running') {
     if (!x) {
       x = document.createElement('span');
       x.className = 'jx';
@@ -203,7 +204,8 @@ function paintJob(row, j) {
       x.dataset.testid = 'job-cancel';
       x.textContent = '×';
       x.title = j.kind === 'index' ? 'Stop indexing (proxies, close looks, previews): what finished is kept'
-        : j.kind === 'ask' ? 'Stop this AI job: the call is ended, no proposal is kept, the cut stays as it is'
+        : j.kind === 'fx' ? 'Stop this design: the call is ended and nothing of it is kept'
+          : j.kind === 'ask' ? 'Stop this AI job: the call is ended, no proposal is kept, the cut stays as it is'
           : j.kind === 'find' || j.kind === 'deep' ? 'Stop this AI job: nothing it read is kept'
             : 'Stop this render: nothing is written';
       x.style.cssText = 'cursor:pointer;color:var(--dim);padding:0 0 0 2px;font-size:13px;line-height:1';
@@ -215,7 +217,7 @@ function paintJob(row, j) {
         x.title = 'stopping…';
         try {
           const r = await fetch(CANCEL[j.kind](j), { method: 'POST' });
-          const d = j.kind === 'ask' || j.kind === 'find' || j.kind === 'deep' ? await r.json() : null;
+          const d = j.kind === 'ask' || j.kind === 'find' || j.kind === 'deep' || j.kind === 'fx' ? await r.json() : null;
           if (d && d.said) toast(d.said, 5000);
         } catch (_) { /* the next poll says how it went */ }
         const seen = strip.seen.get(j.id);
@@ -5928,6 +5930,9 @@ function showProposal(plan) {
     toast('a newer proposal arrived — the one before it is kept under Recent proposals', 6000);
   }
   pendingPlan = plan;
+  proposalStale = null;
+  paintStale();
+  checkStale(plan);
   paintRecent();
   // a proposal is the pass's (or the Ask's) result: its picks may have just landed
   if (typeof window.rcPicksStale === 'function') window.rcPicksStale();
@@ -6015,7 +6020,10 @@ function paintReview() {
   });
   const partial = !!(r && r.rejected);
   if (acc) {
-    acc.textContent = partial ? `Accept ${r.accepted} of ${r.total}` : 'Accept';
+    acc.disabled = !!(proposalStale && proposalStale.same);
+    acc.textContent = proposalStale && proposalStale.same ? 'Already the cut'
+      : proposalStale && proposalStale.confirmed ? 'Accept anyway — replace my cut'
+      : partial ? `Accept ${r.accepted} of ${r.total}` : 'Accept';
     acc.title = partial ? 'apply the shots you accepted, keep the cut as it is where you rejected one — one undo' : '';
   }
   if (all) all.hidden = !partial;
@@ -6244,7 +6252,19 @@ function mergeColour(base, patch) {
  * changed one stays as it was, a removed one stays (tlLanes.reviewed). */
 function acceptProposal(everything) {
   if (!pendingPlan) return;
+  // A proposal replaces the cut as it was when it was made. When the cut has changed since, Accept
+  // asks once, in the card's own words, before the changes since go (wave 23 SAFE, CLUMSY-02/-04).
+  if (proposalStale && proposalStale.same) return;
+  if (proposalStale && !proposalStale.confirmed) {
+    proposalStale.confirmed = true;
+    paintStale();
+    paintReview();
+    toast('This proposal was made before your later changes — press Accept again to replace the cut with it', 7000);
+    return;
+  }
   const job = pendingPlan.job || null;
+  proposalStale = null;
+  paintStale();
   const graded = !!(pendingPlan.colour && Object.keys(pendingPlan.colour).length);
   const cutToo = !pendingPlan.unchanged;
   const r = everything !== true && cutToo && window.tlLanes && tlLanes.reviewed
@@ -6305,6 +6325,8 @@ function playProposal() {
  * Undo and the toast's own Undo bring it back as it was made. */
 function setProposalAside() {
   pendingPlan = null;
+  proposalStale = null;
+  paintStale();
   $('#proposal').style.display = 'none';
   $('#lastAsk').style.display = 'none';      // answered: not offered again
   if (window.dock) dock.badge('ask', 0);
@@ -6356,18 +6378,51 @@ window.rcReopenProposal = reopenProposal;
 /* Ctrl+Z / Edit › Undo / the toast's Undo on a discard bring the proposal back; Redo sets it
  * aside again. The entry is the stack's (tl.mark, tag `proposal:<job>`); what it does is here. */
 function wireProposalUndo() {
+  window.addEventListener('rc:assist-answered', () => setTimeout(paintRecent, 500));   // the edits' answer is on the record
   tl.on('change', (ev) => {
     const tag = ev && typeof ev.tag === 'string' ? ev.tag : '';
-    if (!tag.startsWith('proposal:')) return;
+    if (!tag.startsWith('proposal:')) {
+      // an accept taken back (or done again) is said so in Recent proposals: "accepted, then undone"
+      if (ev && (ev.kind === 'undo' || ev.kind === 'redo') && ev.label) {
+        fetch('/api/asks/undone', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          credentials: 'omit', body: JSON.stringify({ label: ev.label, redo: ev.kind === 'redo' }) })
+          .then(() => paintRecent(), () => {});
+      }
+      return;
+    }
     const job = tag.slice(9);
-    if (ev.kind === 'undo') reopenProposal(job, { quiet: true }).then((ok) => { if (ok) toast('proposal back'); });
-    else if (ev.kind === 'redo' && pendingPlan && pendingPlan.job === job) {
-      setProposalAside();
-      answerProposal('discard', null, job);
+    const assist = job.startsWith('assist:');
+    if (ev.kind === 'undo') {
+      (assist ? reopenAssist(job.slice(7), { quiet: true }) : reopenProposal(job, { quiet: true }))
+        .then((ok) => { if (ok) toast(assist ? 'AI edit back' : 'proposal back'); });
+    } else if (ev.kind === 'redo') {
+      if (assist) {
+        if (window.rcActions && rcActions.open) rcActions.reject({ redo: true, quiet: true });
+      } else if (pendingPlan && pendingPlan.job === job) {
+        setProposalAside();
+        answerProposal('discard', null, job);
+      }
       paintRecent();
     }
   });
 }
+
+/* The prompt box's itemised edits, set aside: back for review (Ctrl+Z, the toast's Undo, or Open
+ * in Recent proposals). The answer is taken off the record and the card opens as it did. */
+async function reopenAssist(job, opts = {}) {
+  let d;
+  try {
+    const r = await fetch(`/api/assist/${encodeURIComponent(job)}/reopen`, { method: 'POST' });
+    d = await r.json();
+    if (!r.ok) { toast(d.detail || 'those edits could not be opened', 6000); return false; }
+  } catch (e) { toast('could not open the edits', 6000); return false; }
+  if (!window.rcActions || typeof rcActions.review !== 'function') return false;
+  const ok = await rcActions.review({ ...d, job, asked: d.text_asked });
+  if (ok && !opts.quiet) toast('AI edit back — Accept or Reject it');
+  if (window.dock) dock.open('ask', { focus: false });
+  return !!ok;
+}
+window.rcReopenAssist = reopenAssist;
 
 /* The proposal is answered here and now: Next lets go of it at once (flow.js; verdict 14,
  * journey step 8 read "Next: Read the proposal…" beside "applied 4 of 5 shots") rather
@@ -6393,7 +6448,7 @@ function answerProposal(answer, partial, job) {
   // uncredentialed like the save, so it is never queued behind the posters (SAVESAFE)
   fetch('/api/asks/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     credentials: 'omit',
-    body: JSON.stringify({ answer, ...(partial ? { partial } : {}), ...(job ? { job } : {}) }) })
+    body: JSON.stringify({ answer, label: 'proposal', ...(partial ? { partial } : {}), ...(job ? { job } : {}) }) })
     .then(() => { flowSoon(); paintRecent(); }, () => {});
 }
 
@@ -6401,8 +6456,44 @@ function answerProposal(answer, partial, job) {
  * AI made for this bin, each with where it stands — waiting, accepted, discarded, replaced —
  * and a button that opens it again, to read, play and Accept. A proposal is never only
  * on screen: nothing the editor does with the cut (a save, a copy, an index run) drops it. */
-const RECENT_WORDS = { waiting: 'waiting for you', accepted: 'accepted', discarded: 'discarded',
-                       replaced: 'replaced by a newer one' };
+/* A proposal that predates later edits (wave 23 SAFE, CLUMSY-02/-04): the card says so before
+ * Accept, with the count and the names of those changes from the undo labels, and Accept asks once. */
+let proposalStale = null;                       // {labels, confirmed} while the waiting proposal predates the cut
+async function checkStale(plan) {
+  const job = plan && plan.job;
+  if (!job || plan.unchanged) return;
+  try { await flushSave(); } catch (e) { /* the save says so itself */ }
+  let d;
+  try { d = await (await fetch(`/api/asks/${job}`, { cache: 'no-store' })).json(); } catch (e) { return; }
+  if (!pendingPlan || pendingPlan.job !== job) return;
+  if (d.same) { proposalStale = { same: true, labels: [], confirmed: true }; paintStale(); paintReview(); return; }
+  if (!d.stale) return;
+  const skew = (d.now || 0) - Date.now() / 1000;                    // the server's clock against this page's
+  const labels = tl.changesSince((((d.record || {}).created) || 0) - skew);
+  proposalStale = { labels, confirmed: false };
+  paintStale();
+  paintReview();
+}
+function paintStale() {
+  const el = $('#proposalStale');
+  if (!el) return;
+  el.hidden = !proposalStale;
+  if (!proposalStale) { el.textContent = ''; return; }
+  if (proposalStale.same) {
+    el.classList.remove('sure');
+    el.textContent = 'This is the cut you already have: accepting it changes nothing.';
+    return;
+  }
+  const n = proposalStale.labels.length;
+  const names = [...new Set(proposalStale.labels)].slice(-4).join(', ');
+  el.classList.toggle('sure', !!proposalStale.confirmed);
+  el.textContent = n
+    ? `Made before your last ${n === 1 ? 'change' : `${n} changes`} (${names}): accepting replaces the cut as it is now, and ${n === 1 ? 'that change goes' : 'those changes go'}. Its notes describe the older cut.`
+    : 'Made before the cut changed: accepting replaces the cut as it is now, and the changes since go. Its notes describe the older cut.';
+}
+
+const RECENT_WORDS = { waiting: 'waiting for you', accepted: 'accepted', discarded: 'set aside',
+                       replaced: 'replaced by a newer one', undone: 'accepted, then undone' };
 let recentRows = [];
 let recentBusy = false;
 async function paintRecent() {
@@ -6421,21 +6512,27 @@ async function paintRecent() {
   box.innerHTML = '<h3>Recent proposals</h3>' + recentRows.map((r) => {
     const here = r.job === shown;
     const status = here ? 'on screen' : (RECENT_WORDS[r.status] || r.status);
-    const what = r.note ? `“${escapeHtml(r.note.length > 70 ? `${r.note.slice(0, 70)}…` : r.note)}”` : 'first cut';
+    const what = r.note ? `“${escapeHtml(r.note.length > 70 ? `${r.note.slice(0, 70)}…` : r.note)}”`
+      : r.kind === 'edits' ? 'edits' : 'first cut';
     const other = r.this_cut ? '' : ` · for the cut “${escapeHtml(r.cut || 'another')}”`;
+    const old = r.stale && r.status !== 'accepted' ? ' · made before later changes' : '';
     const when = r.created ? ago(now - r.created) : '';
+    const said = r.answered_at && ['accepted', 'discarded'].includes(r.status) ? ` · ${r.status === 'accepted' ? 'accepted' : 'set aside'} ${ago(now - r.answered_at)}` : '';
+    const size = r.colour_only ? 'colour only' : r.kind === 'edits' ? `${r.edits} edit${r.edits === 1 ? '' : 's'}` : `${r.shots} shots`;
+    const word = r.status === 'waiting' ? 'Open' : r.status === 'undone' ? 'Accept again' : 'Open again';
     const open = here ? '' : r.this_cut
-      ? `<button type="button" class="rr-open" data-job="${escapeHtml(r.job)}" data-testid="recent-open">${r.status === 'waiting' ? 'Open' : 'Open again'}</button>` : '';
-    return `<div class="rr" data-job="${escapeHtml(r.job)}" data-status="${here ? 'screen' : r.status}" data-testid="recent-proposal">`
+      ? `<button type="button" class="rr-open" data-job="${escapeHtml(r.job)}" data-kind="${r.kind || 'cut'}" data-testid="recent-open">${word}</button>` : '';
+    return `<div class="rr" data-job="${escapeHtml(r.job)}" data-kind="${r.kind || 'cut'}" data-status="${here ? 'screen' : r.status}" data-testid="recent-proposal"${r.plan ? ` title="${escapeHtml(`the plan it was made from: ${r.plan}`)}"` : ''}>`
       + `<span class="rr-st">${escapeHtml(status)}</span><span class="rr-what">${what}</span>`
-      + `<span class="hint">${r.colour_only ? 'colour only' : `${r.shots} shots`} · ${escapeHtml(when)}${other}</span>${open}</div>`;
+      + `<span class="hint">${size} · ${escapeHtml(when)}${escapeHtml(said)}${old}${other}</span>${open}</div>`;
   }).join('');
 }
+setInterval(() => { if (!document.hidden && $('#askRecent') && !$('#askRecent').hidden) paintRecent(); }, 30000);
 document.addEventListener('click', (e) => {
   const b = e.target.closest && e.target.closest('#askRecent .rr-open');
   if (!b) return;
   b.disabled = true;
-  reopenProposal(b.dataset.job).then(paintRecent);
+  (b.dataset.kind === 'edits' ? reopenAssist(b.dataset.job) : reopenProposal(b.dataset.job)).then(paintRecent);
 });
 
 /* Undo that survives a reload, a bin switch and a restart (wave 23 SAFE; CLUMSY-06, -17,

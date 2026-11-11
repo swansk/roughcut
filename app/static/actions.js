@@ -88,7 +88,7 @@
       else { const t = TL(); if (t) t.begin(label); fn(); if (t) t.commit(); }
     },
     renderInspector: () => { if (typeof renderInspector === 'function') renderInspector(); },
-    toast: (m, ms) => { if (typeof toast === 'function') toast(m, ms); },
+    toast: (m, ms, o) => { if (typeof toast === 'function') toast(m, ms, o); },
     undoKey: () => (typeof undoKey === 'function' ? undoKey() : 'Ctrl+Z'),
     flush: () => (typeof window.roughcutFlush === 'function' ? window.roughcutFlush() : Promise.resolve()),
     playing: () => (typeof player !== 'undefined' && player && player.playing),
@@ -1104,7 +1104,7 @@
                 designs: made.designs || 0 } }));
     fetch(`/api/assist/${encodeURIComponent(job)}/answer`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'omit',
-      body: JSON.stringify({ accepted: acc, rejected: rej }),
+      body: JSON.stringify({ accepted: acc, rejected: rej, ...(made.label ? { label: made.label } : {}) }),
     }).catch(() => {});
   }
 
@@ -1143,12 +1143,26 @@
     return out;
   }
 
-  function reject() {
+  /* Reject all sets the edits aside, undoably (wave 23 SAFE, CLUMSY-17): an entry on the undo stack
+   * tagged `proposal:assist:<job>` (app.js brings them back on Ctrl+Z, the toast's Undo or Open in
+   * Recent proposals), so Ctrl+Z never reaches past the rejection to an older edit. `redo`: the
+   * redo of that entry, which sets them aside again without a second entry. */
+  function reject(opts = {}) {
     if (!R.res) return;
-    if (R.res.kind === 'ops') answer([], R.ops.map((_, i) => i));
-    const was = R.res.kind;
+    const res = R.res, was = res.kind, n = R.ops.length;
+    if (was === 'ops') answer([], R.ops.map((_, i) => i));
     closeQuiet();
-    if (was === 'ops') app.toast('discarded — nothing changed');
+    if (was !== 'ops') return;
+    if (opts.redo) { if (!opts.quiet) app.toast('AI edit set aside'); return; }
+    const t = TL();
+    const mark = res.job && t && typeof t.mark === 'function' ? t.mark('set aside AI edit', `proposal:assist:${res.job}`) : false;
+    const back = () => {
+      const top = t && t.nextUndo ? t.nextUndo() : null;
+      if (mark && top && top.tag === `proposal:assist:${res.job}`) t.undo();
+      else if (typeof window.rcReopenAssist === 'function') window.rcReopenAssist(res.job);
+    };
+    app.toast(`${n === 1 ? 'AI edit' : `${n} AI edits`} set aside — ${app.undoKey()} brings ${n === 1 ? 'it' : 'them'} back`, 10000,
+      res.job ? { action: { label: 'Undo', run: back } } : {});
   }
 
   /* Stop on the whole-film re-cut (wave 23 SAFE, CLUMSY-13): ends the call on the server,

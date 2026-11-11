@@ -46,10 +46,21 @@ class Model:
     def __init__(self):
         self.plans: list[list[dict]] = []
         self.gate: threading.Event | None = None
+        self.assist_gate: threading.Event | None = None   # holds the prompt box's own call
+        self.assist: list[dict] = []                      # its answers, in turn (default: a plan)
+        self.assist_calls = 0
 
     def complete(self, request):
         schema = request.schema or {}
         if "kind" in schema and "ops" in schema:
+            self.assist_calls += 1
+            if self.assist_gate is not None:
+                self.assist_gate.wait(timeout=60)
+            if self.assist:
+                text = json.dumps(self.assist.pop(0))
+                model = config.model_for(request.role)
+                return inference.Result(content=text, input_tokens=4000, output_tokens=300, backend=self.name,
+                                        model=model, projected_usd=1e-4, latency_ms=1, raw=text)
             text = json.dumps({"kind": "plan", "summary": "a tighter cut", "note": "make it tighter"})
         elif "segments" in schema:
             if self.gate is not None:
@@ -123,7 +134,7 @@ def board(browser, live_server, project):
         for p in d.glob("*.json"):
             p.unlink()
     server.undo_path().unlink(missing_ok=True)
-    MODEL.plans, MODEL.gate = [], None
+    MODEL.plans, MODEL.gate, MODEL.assist, MODEL.assist_gate = [], None, [], None
     ctx = browser.new_context(viewport={"width": 1440, "height": 900})
     page = ctx.new_page()
     errors: list[str] = []
@@ -133,8 +144,9 @@ def board(browser, live_server, project):
     page.wait_for_function("window.rcActions && window.rcAI && window.rcReopenProposal")
     page.wait_for_timeout(500)
     yield page, errors
-    if MODEL.gate is not None:
-        MODEL.gate.set()
+    for g in (MODEL.gate, MODEL.assist_gate):
+        if g is not None:
+            g.set()
     ctx.close()
     assert not errors, errors
 
@@ -397,3 +409,242 @@ def test_undo_and_redo_stay_on_an_emptied_sequence(board):
     page.wait_for_timeout(2200)
     nxt = page.evaluate("(document.querySelector('#flowNext') || {innerText: ''}).innerText")
     assert "first cut" not in nxt
+
+
+# ---------------------------------------------------------------- the round-2 holes (wave 23 SAFE)
+
+EDIT_OPS = [{"op": "set", "id": "shot-a", "prop": "contrast", "value": 20},
+            {"op": "set", "id": "shot-b", "prop": "saturation", "value": 115}]
+
+
+def ask_edits(page, words="give the first two shots more punch"):
+    MODEL.assist = [{"kind": "ops", "summary": "more punch", "ops": EDIT_OPS}]
+    page.keyboard.press("Escape")
+    page.keyboard.press("Control+j")
+    page.wait_for_function(
+        "document.activeElement && document.activeElement.dataset.testid === 'ai-prompt-input'")
+    page.keyboard.type(words)
+    page.keyboard.press("Enter")
+    page.wait_for_selector("[data-testid=ai-result][data-kind=ops]", timeout=30000)
+    op = page.locator("[data-testid=ai-result-open]")
+    if op.count() and op.is_visible() and op.inner_text().strip() == "Review":
+        op.click()
+    page.wait_for_selector("[data-testid=ai-review] [data-testid=ai-op-row]")
+
+
+def test_a_proposal_that_predates_later_edits_says_so_and_asks_before_it_replaces_them(board):
+    """CLUMSY-02 / -04: two proposals waiting; accept one; the other (reopened) predates that
+    change: its card says how many changes, names them, and Accept asks once; one undo."""
+    page, _ = board
+    ask_plan(page, PLAN_1, "first idea for the cut")
+    first = the_job(page)
+    ask_plan(page, PLAN_2, "second idea for the cut", wait_proposal=False)
+    page.wait_for_function(f"pendingPlan && pendingPlan.job !== '{first}'", timeout=30000)
+    second = the_job(page)
+    page.wait_for_timeout(800)
+    assert page.locator("#proposalStale").is_hidden(), "a fresh proposal is of the cut as it is"
+    page.locator("#acceptProposal").click()                       # the second is accepted
+    page.wait_for_function("segs.length === 2")
+    page.wait_for_function("document.querySelector('#saveState').dataset.state === 'saved'")
+    page.locator(f"#askRecent .rr[data-job='{first}'] .rr-open").click()      # the first, made before it
+    page.wait_for_function(f"pendingPlan && pendingPlan.job === '{first}'")
+    page.wait_for_selector("#proposalStale", state="visible", timeout=10000)
+    said = page.locator("#proposalStale").inner_text()
+    assert "Made before your last change" in said and "proposal" in said and "Its notes describe the older cut" in said
+    page.locator("#acceptProposal").click()                       # asks once: nothing changes yet
+    page.wait_for_timeout(500)
+    assert page.evaluate("segs.length") == 2 and page.evaluate("!!pendingPlan")
+    assert "Accept anyway" in page.locator("#acceptProposal").inner_text()
+    page.locator("#acceptProposal").click()
+    page.wait_for_function("segs.length === 3")
+    assert page.evaluate("pendingPlan") is None
+    page.keyboard.press("Control+z")                              # the accept is one undo
+    page.wait_for_function("segs.length === 2")
+
+
+def test_set_aside_ai_edits_are_undoable_and_listed(board):
+    """CLUMSY-17: Reject all on the AI edit card leaves an entry: Ctrl+Z brings the card back and
+    never reaches past it to the edit before; Recent proposals lists the edits."""
+    page, _ = board
+    page.locator("#tl .blk").nth(2).click()
+    page.keyboard.press("Delete")                                  # an older edit
+    page.wait_for_function("segs.length === 2")
+    ask_edits(page)
+    page.locator("[data-testid=ai-reject-all]").click()
+    page.wait_for_selector("[data-testid=ai-review]", state="hidden")
+    assert "set aside" in page.locator("#toast").inner_text()
+    assert page.locator("#toast .toastAct").inner_text() == "Undo"
+    assert page.evaluate("tl.nextUndo().tag").startswith("proposal:assist:")
+    page.wait_for_selector("#askRecent .rr[data-kind=edits]", timeout=10000)
+    assert "set aside" in page.locator("#askRecent .rr[data-kind=edits] .rr-st").inner_text()
+    page.keyboard.press("Control+z")
+    page.wait_for_selector("[data-testid=ai-review] [data-testid=ai-op-row]", timeout=10000)
+    assert page.evaluate("segs.length") == 2, "the older edit was not undone"
+    page.locator("[data-testid=ai-reject-all]").click()            # and the toast's button does too
+    page.wait_for_selector("[data-testid=ai-review]", state="hidden")
+    page.locator("#toast .toastAct").click()
+    page.wait_for_selector("[data-testid=ai-review] [data-testid=ai-op-row]", timeout=10000)
+    page.locator("[data-testid=ai-accept-all]").click()            # reopened edits can be accepted
+    page.wait_for_function("document.querySelector('[data-testid=ai-review]').hidden")
+    page.wait_for_function("tl.byId('shot-a').controls && tl.byId('shot-a').controls.contrast === 20")
+
+
+def test_an_accepted_proposal_that_was_undone_says_so(board):
+    page, _ = board
+    ask_plan(page, PLAN_1)
+    page.locator("#acceptProposal").click()
+    page.wait_for_function("segs.length === 3 && segs[0].clip === 'CLIP_C.MP4'")
+    page.wait_for_selector("#askRecent .rr[data-status=accepted]", timeout=10000)   # its answer is on the record
+    page.keyboard.press("Control+z")
+    page.wait_for_function("segs[0].clip === 'CLIP_A.MP4'")
+    page.wait_for_selector("#askRecent .rr[data-status=undone]", timeout=10000)
+    assert page.locator("#askRecent .rr[data-status=undone] .rr-st").inner_text() == "accepted, then undone"
+    assert page.locator("#askRecent .rr[data-status=undone] .rr-open").inner_text() == "Accept again"
+    page.keyboard.press("Control+Shift+z")                         # redone: accepted again
+    page.wait_for_selector("#askRecent .rr[data-status=accepted]", timeout=10000)
+
+
+def test_recent_proposals_show_the_editors_words_not_the_plan_markup(board):
+    page, _ = board
+    page.evaluate("fetch('/api/ask', {method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({"
+                  "note: 'put the walk first\\n\\n\\u27e6the plan\\u27e7\\nOpen on CLIP_C, then the greeting.', segments: segs})})")
+    page.wait_for_function("document.querySelector('#progress .job[data-kind=ask]') === null", timeout=30000)
+    page.reload()
+    page.wait_for_selector("#askRecent .rr", timeout=15000)
+    row = page.locator("#askRecent .rr").first
+    assert "put the walk first" in row.inner_text() and "the plan" not in row.inner_text()
+    assert "Open on CLIP_C" in (row.get_attribute("title") or "")
+
+
+# ---------------------------------------------------------------- Stop beside the prompt
+
+def test_the_stop_beside_the_prompt_stops_a_short_ask(board):
+    """CLUMSY-11 / -05 / -12: Stop 4 s into a short ask ends it; the counter stops; nothing arrives."""
+    page, _ = board
+    MODEL.assist_gate = threading.Event()
+    MODEL.assist = [{"kind": "answer", "text": "the second shot is a greeting"}]
+    page.keyboard.press("Control+j")
+    page.keyboard.type("what is in the second shot")
+    page.keyboard.press("Enter")
+    stop = page.locator("[data-testid=ai-stop]")
+    stop.wait_for(state="visible", timeout=10000)
+    page.wait_for_timeout(4200)                                    # the Stop stays beyond the first seconds
+    assert stop.is_visible()
+    t0 = page.locator(".aip-time").inner_text()
+    stop.click()
+    page.wait_for_function("document.querySelector('[data-testid=ai-status]').innerText.includes('Stopped')")
+    MODEL.assist_gate.set()                                        # the call returns after the Stop ...
+    page.wait_for_timeout(2500)
+    assert "Stopped" in page.locator("[data-testid=ai-status]").inner_text(), "... and nothing arrives"
+    assert page.locator("[data-testid=ai-result]").count() == 0 and page.locator("#aiReview:visible").count() == 0
+    assert t0 and page.locator(".aip-time").count() == 0, "the counter stopped with it"
+
+
+def test_stop_beside_the_prompt_on_itemised_edits_keeps_the_cut(board):
+    page, _ = board
+    MODEL.assist_gate = threading.Event()
+    MODEL.assist = [{"kind": "ops", "summary": "more punch", "ops": EDIT_OPS}]
+    page.keyboard.press("Control+j")
+    page.keyboard.type("more punch on the first two")
+    page.keyboard.press("Enter")
+    page.locator("[data-testid=ai-stop]").click(timeout=10000)
+    MODEL.assist_gate.set()
+    page.wait_for_timeout(2000)
+    assert page.locator("[data-testid=ai-review]:visible").count() == 0
+    assert page.evaluate("tl.byId('shot-a').controls") in (None, {})
+
+
+# ---------------------------------------------------------------- undo across the switcher's own clicks
+
+def _switch_bin(page, path):
+    page.click("#hdBin")
+    page.wait_for_selector("#pickerPath")
+    page.fill("#pickerPath", str(path))
+    with page.expect_navigation():
+        page.press("#pickerPath", "Enter")
+    page.wait_for_selector("#tl, #tlEmpty", timeout=20000)
+    page.wait_for_timeout(1500)
+
+
+def test_undo_survives_the_switchers_own_clicks_to_another_film_and_back(board, project, tmp_path):
+    """WORDS-19 and the first round trip: edits, an accepted proposal, then the title-bar switcher
+    to another film and back."""
+    import shutil
+    page, _ = board
+    other = tmp_path / "otherfilm"
+    other.mkdir()
+    shutil.copy(project["footage"] / "CLIP_A.MP4", other / "CLIP_A.MP4")
+    page.locator("#tl .blk").nth(2).click()
+    page.keyboard.press("Delete")
+    page.wait_for_function("segs.length === 2")
+    ask_plan(page, PLAN_1)
+    page.locator("#acceptProposal").click()
+    page.wait_for_function("segs.length === 3 && segs[0].clip === 'CLIP_C.MP4'")
+    page.wait_for_function("document.querySelector('#saveState').dataset.state === 'saved'")
+    depth = page.evaluate("tl.history().undo.length")
+    assert depth >= 2
+    _switch_bin(page, other)                       # at once: no waiting for any debounce
+    assert page.locator("#undo").get_attribute("title") == "nothing to undo"
+    _switch_bin(page, project["footage"])
+    page.wait_for_selector("#tl .blk")
+    page.wait_for_function("!document.querySelector('#undo').disabled", timeout=10000)
+    assert page.evaluate("tl.history().undo.length") == depth
+    page.keyboard.press("Control+z")               # the accepted proposal, one undo
+    page.wait_for_function("segs.length === 2")
+
+
+def test_undo_survives_a_copy_and_the_return_to_the_original_through_the_switcher(board, project):
+    page, _ = board
+    page.locator("#tl .blk").nth(0).click()
+    page.keyboard.press("Delete")
+    page.wait_for_function("segs.length === 2")
+    page.wait_for_function("document.querySelector('#saveState').dataset.state === 'saved'")
+    page.click("#hdBin")
+    page.fill("#copyName", "peek copy")
+    with page.expect_navigation():
+        page.click("#copyGo")
+    page.wait_for_selector("#tl .blk")
+    page.wait_for_timeout(1000)
+    assert page.locator("#undo").get_attribute("title") == "nothing to undo"
+    page.click("#hdBin")
+    page.wait_for_selector("#cutList .crow")
+    with page.expect_navigation():
+        page.locator("#cutList .crow:not(.current)").first.click()
+    page.wait_for_selector("#tl .blk")
+    page.wait_for_function("!document.querySelector('#undo').disabled", timeout=10000)
+    for p in (project["work"] / "projects").rglob("peek-copy.edl.json"):
+        p.unlink()
+    page.keyboard.press("Control+z")
+    page.wait_for_function("segs.length === 3")
+
+
+def test_a_reopened_accepted_proposal_stays_waiting_through_a_copy_a_return_and_a_reload(board, project):
+    """Finder 8: nothing is inferred from the cut. The proposal is the cut already there, says so up
+    front, and keeps its state and its Proposal lane through a switch of cuts and back and a reload."""
+    import server
+    page, _ = board
+    ask_plan(page, PLAN_1)
+    job = the_job(page)
+    page.locator("#acceptProposal").click()
+    page.wait_for_function("segs.length === 3 && segs[0].clip === 'CLIP_C.MP4'")
+    page.wait_for_selector(f"#askRecent .rr[data-job='{job}'][data-status=accepted]", timeout=10000)
+    page.locator(f"#askRecent .rr[data-job='{job}'] .rr-open").click()
+    page.wait_for_function(f"pendingPlan && pendingPlan.job === '{job}'")
+    page.wait_for_selector("#proposalStale", state="visible", timeout=10000)
+    assert "the cut you already have" in page.locator("#proposalStale").inner_text()
+    assert page.locator("#acceptProposal").is_disabled()
+    main = str(server.STATE["edl"])
+    page.evaluate("fetch('/api/cuts/copy', {method:'POST', headers:{'content-type':'application/json'},"
+                  " body: JSON.stringify({name: 'same peek'})})")
+    page.reload()
+    page.wait_for_selector("#tl .blk")
+    page.evaluate("(p) => fetch('/api/cuts/open', {method:'POST', headers:{'content-type':'application/json'},"
+                  " body: JSON.stringify({path: p})})", main)
+    for p in (project["work"] / "projects").rglob("same-peek.edl.json"):
+        p.unlink()
+    page.reload()
+    page.wait_for_selector("#tl .blk")
+    page.wait_for_function(f"pendingPlan && pendingPlan.job === '{job}'", timeout=15000)
+    assert page.locator("#proposal").is_visible()
+    rows = page.evaluate("fetch('/api/asks/recent').then(r => r.json()).then(d => d.proposals.map(r => [r.job, r.status]))")
+    assert [job, "waiting"] in rows

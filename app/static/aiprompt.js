@@ -585,7 +585,15 @@
     }
     // compared with what was last written, not innerHTML's re-serialisation: a needless
     // rewrite between a press and its release would swallow a click on Stop or Review
-    if (statusHtml !== html) { status.innerHTML = html; statusHtml = html; }
+    // The clock is not part of the comparison (wave 23 SAFE, CLUMSY-11): the input's blur, which a
+    // press on Stop causes, repaints the line, and a line that differed only by its seconds was
+    // rewritten between the press and the release, so the click landed on a button that was gone.
+    const same = (h) => h.replace(/<b class="aip-time">[^<]*<\/b>/, '<b class="aip-time"></b>');
+    if (same(statusHtml) !== same(html)) { status.innerHTML = html; statusHtml = html; }
+    else if (html && AI.state === 'working') {
+      const t = status.querySelector('.aip-time');
+      if (t) t.textContent = clock(Date.now() - AI.t0);
+    }
     status.hidden = !html;
     placeStatus();
   }
@@ -801,6 +809,10 @@
       if (t) t.textContent = clock(Date.now() - AI.t0);
     }, 500);
     let r, d;
+    // what the editor just did is on the disk before the AI reads the cut from it (a proposal records
+    // the cut it was made from, and one made from a stale read would call itself old)
+    try { if (typeof window.roughcutFlush === 'function') await window.roughcutFlush(); } catch (e) { /* the save says so itself */ }
+    if (gen !== AI.gen) return false;
     try {
       r = await fetch('/api/assist', {
         method: 'POST', headers: { 'content-type': 'application/json' },

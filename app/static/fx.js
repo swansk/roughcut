@@ -434,7 +434,17 @@
     const from = ev.kind === 'undo' ? followUndo.done : followUndo.undone;
     let k = from.length - 1;
     while (k >= 0 && from[k].label !== ev.label) k -= 1;
-    if (k < 0) return;
+    if (k < 0) {
+      // An entry the page did not make: the history kept past a reload (wave 23 SAFE). Its effect
+      // is found by the label, as it was when it was made: an accepted one for an undo, a
+      // proposal for a redo; the newest if two share a name.
+      const want = ev.kind === 'undo' ? 'accepted' : 'proposed';
+      const e = S.effects.filter((x) => x.status === want && undoLabel(x) === ev.label)
+        .sort((a, b) => String(b.created || '').localeCompare(String(a.created || '')))[0];
+      if (!e) return;
+      from.push({ id: e.id, label: ev.label });
+      k = from.length - 1;
+    }
     const [entry] = from.splice(k, 1);
     (ev.kind === 'undo' ? followUndo.undone : followUndo.done).push(entry);
     api('POST', ev.kind === 'undo' ? '/api/fx/undo' : '/api/fx/redo', { id: entry.id })
