@@ -410,6 +410,12 @@
     undo: () => { const b = $('#undo'); if (b) b.click(); },
     redo: () => { const b = $('#redo'); if (b) b.click(); },
     keys: () => keys(true),
+    // what the index found in the Source clip (the transcript with times, its description and
+    // moments): the Index panel on that clip. Also on the Source monitor's right-click menu.
+    transcript: () => {
+      if (!source.clip) return toastSay('pick a clip in the Project panel first');
+      if (window.rcIndex) window.rcIndex.open([source.clip.clip]);
+    },
     markin: () => source.mark('in'),
     markout: () => source.mark('out'),
     insert: () => source.insert(),
@@ -2249,6 +2255,25 @@
         else if (k === 'insert') this.insert();
       });
       $('#srcScreen').addEventListener('click', () => this.play());
+      $('#srcScreen').addEventListener('contextmenu', (e) => {
+        if (!this.clip) return;
+        e.preventDefault();
+        let m = $('#srcMenu');
+        if (!m) {
+          m = document.createElement('div');
+          m.id = 'srcMenu';
+          m.className = 'tl-ctx';
+          m.setAttribute('role', 'menu');
+          m.innerHTML = '<button type="button" role="menuitem" data-testid="src-transcript">Transcript…</button>';
+          document.body.appendChild(m);
+          m.addEventListener('click', () => { m.hidden = true; COMMANDS.transcript(); });
+          document.addEventListener('pointerdown', (ev) => { if (!m.contains(ev.target)) m.hidden = true; }, true);
+          document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') m.hidden = true; }, true);
+        }
+        m.hidden = false;
+        m.style.left = `${Math.min(e.clientX, innerWidth - 160)}px`;
+        m.style.top = `${Math.min(e.clientY, innerHeight - 40)}px`;
+      });
       const bar = $('#srcBar');
       const seek = (e) => {
         const c = this.clip;

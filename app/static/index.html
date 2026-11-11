@@ -32,6 +32,7 @@
       <button type="button" data-cmd="markin">Mark In (Source) <span class="k">I</span></button>
       <button type="button" data-cmd="markout">Mark Out (Source) <span class="k">O</span></button>
       <button type="button" data-cmd="insert">Insert into sequence <span class="k">,</span></button>
+      <button type="button" data-cmd="transcript" data-testid="clip-transcript">Transcript…</button>
       <hr><button type="button" data-cmd="ec">Speed and colour… <span class="k">Effect Controls</span></button>
     </div></div>
     <div class="menu" data-menu="sequence"><button type="button" class="mtop">Sequence</button><div class="mdrop" role="menu">
@@ -178,7 +179,7 @@
 
   <!-- SOURCE: the clip chosen in the Project panel, with its own In and Out. -->
   <section class="ws-panel" id="pSource" data-panel="source">
-    <div class="ws-head"><div class="ws-tabs"><span class="ws-tab on" id="srcTitle"><span class="lbl">Source: (no clip)</span></span></div><span class="ws-tools"><button type="button" id="srcFound" data-testid="source-found" disabled title="What the index found in this clip: the transcript with times, the description and its moments (opens the Index panel on it)">Transcript</button></span></div>
+    <div class="ws-head"><div class="ws-tabs"><span class="ws-tab on" id="srcTitle"><span class="lbl">Source: (no clip)</span></span></div></div>
     <div class="ws-body mon-body" id="source">
       <div class="screenbox"><div class="mon" id="srcScreen">
         <img id="srcPoster" alt="" draggable="false" hidden>

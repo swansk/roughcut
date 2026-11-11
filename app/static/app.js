@@ -6151,18 +6151,18 @@ function renderFindResults(rows, note, meta) {
   box.innerHTML = '';
   $('#findDeep').hidden = false;          // under any find: the priced search, plain
   if (note) box.insertAdjacentHTML('beforeend', `<div class="hint" style="padding:4px 0">${escapeHtml(note)}</div>`);
+  const q = ($('#findQ').value || '').trim();
+  const qq = q ? `“${escapeHtml(q)}”` : 'that';
   if (!rows.length) {
-    // wave 23: an honest "no", not a shrug. Weak guesses sit under a floor chosen from the
-    // finder's real and absent queries (roughcut/find.py FLOOR); they can still be shown.
-    const hidden = (meta && meta.hidden) || 0;
-    const q = ($('#findQ').value || '').trim();
     box.insertAdjacentHTML('beforeend',
-      `<div class="hint" data-testid="find-nothing">Nothing like ${q ? `“${escapeHtml(q)}”` : 'that'} in this footage.`
-      + `${hidden ? ` <a href="#" id="findWeak" data-testid="find-weak">Show the ${hidden} weak guess${hidden === 1 ? '' : 'es'}</a>` : ''}`
-      + ' Try other words, or Ask the model.</div>');
-    const weak = $('#findWeak');
-    if (weak) weak.onclick = (e) => { e.preventDefault(); doFind(false, true); };
+      `<div class="hint" data-testid="find-nothing">Nothing like ${qq} in this footage. Try other words, or Ask the model.</div>`);
     return;
+  }
+  // wave 23: when nothing clears the confidence floors, say so above the hits (they are still
+  // listed: a floor that removed hits lost a real one on Killington)
+  if (meta && meta.confident === false) {
+    box.insertAdjacentHTML('beforeend',
+      `<div class="hint" data-testid="find-nothing">Nothing convincing like ${qq} in this footage. These are only the closest guesses.</div>`);
   }
   rows.forEach((m) => {
     const d = document.createElement('div');
@@ -6292,10 +6292,9 @@ async function doFind(deep = false, weak = false) {
     }
     const data = await r.json();
     paintFindDeepPrice(data.deep_projected_usd, data);
-    renderFindResults(data.matches, '', { hidden: (data.floor || {}).hidden || 0 });
-    $('#findState').textContent = data.matches.length
-      ? `${data.matches.length} match${data.matches.length > 1 ? 'es' : ''} in the words and the frames${weak ? ' (weak ones shown)' : ''}`
-      : 'nothing like that here — the model may still find it';
+    renderFindResults(data.matches, '', { confident: (data.floor || {}).confident });
+    $('#findState').textContent = (data.floor || {}).confident === false || !data.matches.length ? ''
+      : `${data.matches.length} match${data.matches.length > 1 ? 'es' : ''} in the words and the frames`;
     if (data.job) {
       strip.owned.add(data.job);    // this page is following it; the strip must not double up
       followFind(data.job);
