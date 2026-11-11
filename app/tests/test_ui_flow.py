@@ -304,16 +304,21 @@ def test_undo_restores_exact_state_after_snap(page):
     assert page.evaluate("JSON.stringify(segs)") == before
 
 
-def test_remove_from_the_inspector_takes_the_shot_out_and_moves_on(page):
-    """remove in the inspector is tl.remove: the shot goes, the one that takes its place
-    is selected, and the inspector shows that one."""
+def test_remove_from_the_inspector_takes_the_shot_out_and_leaves_nothing_selected(page):
+    """remove in the inspector is tl.remove: the shot goes and, as in Premiere, nothing is
+    selected after a delete (HANDS round 3: the board does not hand the selection on, so a
+    later Delete cannot take a shot nobody chose); the inspector falls back to the film's
+    panel, which counts the one shot left, and the remove is one named undo."""
     assert page.locator("#tl .blk").count() == 2
     select_shot(page, 0)
     first_clip = page.locator("#inspector .clip").text_content()
     open_assistant(page)
     page.locator("#inspector button[data-act=del]").click()
     assert page.locator("#tl .blk").count() == 1
-    assert page.locator("#inspector .clip").text_content() != first_clip
+    assert page.evaluate("tl.state.anchor") is None
+    assert page.locator("#inspector .clip").count() == 0
+    assert page.locator("#inspector .film .totals").inner_text().startswith("1 shot")
+    assert first_clip not in page.evaluate("segs[0].clip"), "the other shot is the one left"
     assert page.locator("#undo").get_attribute("title").startswith("undo: remove")
 
 
@@ -838,8 +843,12 @@ def test_selecting_a_block_fills_the_shot_strip(page):
     assert insp.locator(".clip").text_content() == "CLIP_B"
     assert "0:00 hello there" in insp.locator(".whybox .lines").first.inner_text()
     assert insp.locator(".lines.seen").is_hidden(), "nothing was seen on this bin"
-    # ↑ goes back to the previous cut, the strip follows and why? is closed again
+    # ↑ moves the playhead to the previous cut and nothing else: the selection is only what
+    # the editor selects (HANDS round 3), so the strip stays on shot 2; selecting shot 1 by a
+    # click fills it in and why? is closed again
     page.keyboard.press("ArrowUp")
+    assert insp.locator(".sname").inner_text() == "Shot 2 · 2.0 s"
+    page.locator("#tl .blk").nth(0).click()
     assert insp.locator(".sname").inner_text() == "Shot 1 · 2.0 s"
     assert insp.locator(".clip").text_content() == "CLIP_A"
     assert insp.locator(".why").text_content() == "first"
@@ -1260,14 +1269,15 @@ def test_what_the_visual_pass_saw_shows_in_the_inspector_and_in_the_library(page
         assert "lens" not in insp.locator(".warns").inner_text()
         # …until the in-point is trimmed back into it: a warning in plain words, on the
         # shot, with its own fix (INTAKE M16 I16.4)
-        for _ in range(4):
-            page.keyboard.press("[")
+        for _ in range(5):          # five frames a press (HANDS round 3); five keys stay under the typing guard's eight
+            page.keyboard.press("Shift+BracketLeft")
+        assert page.evaluate("segs[tl.indexOf(tl.state.anchor)].in") == pytest.approx(1.5 - 25 / 24, abs=1e-3)
         assert "⚠ 0:00.0–0:00.1 the lens is covered · Trim it out" in insp.locator(".warns").inner_text()
         assert insp.locator(".warns .w", has_text="lens").get_attribute("title") == "lens covered"
         insp.locator("button[data-act=trimbad]").click()
-        assert page.evaluate("segs[sel].clip") == "CLIP_C.MP4"
+        assert page.evaluate("segs[tl.indexOf(tl.state.anchor)].clip") == "CLIP_C.MP4"
         # past the covered lens on the frame grid, never into it: 0.6 -> 15/24 (not 14/24)
-        assert page.evaluate("segs[sel].in") == pytest.approx(0.625, abs=1e-4)
+        assert page.evaluate("segs[tl.indexOf(tl.state.anchor)].in") == pytest.approx(0.625, abs=1e-4)
         assert "lens" not in insp.locator(".warns").inner_text()
     finally:
         sidecar.unlink(missing_ok=True)
