@@ -687,3 +687,192 @@ def test_an_end_card_is_not_the_title_it_contains():
     same = _effect(events=[{"t": 3.0, "x": 0.5, "y": 0.5}], overlay=title["overlay"])
     assert fx.text_key(title) != fx.text_key(card) and fx.text_key(title) == fx.text_key(same)
     assert fx.removal_targets("remove the Copper Mountain title", [title, card]) == [title, card]
+
+
+# ---------------------------------------------------------------- hand changes are undo steps; Stop (round 3, clumsy)
+
+def _design_one(client, project, answers, note="a title"):
+    s1, _ = _seed(project, client)
+    answers.append(GOOD)
+    return _wait(client, client.post("/api/fx/design", json={"shot": s1, "note": note}).json()["job"])["result"]["id"], s1
+
+
+def test_each_hand_change_is_a_step_that_goes_back_and_forth_on_its_own(server_fx, client):
+    project, answers, calls = server_fx
+    fx_id, _ = _design_one(client, project, answers)
+    client.post("/api/fx/accept", json={"id": fx_id})
+    a = client.post("/api/fx/hand", json={"id": fx_id, "edit": {"size": 0.6}}).json()
+    b = client.post("/api/fx/hand", json={"id": fx_id, "edit": {"x": 0.4, "y": 0.6}}).json()
+    c = client.post("/api/fx/hand", json={"id": fx_id, "edit": {"words": {"COPPER 2026": "Copper"}}}).json()
+    seqs = [x["hand_entry"]["seq"] for x in (a, b, c)]
+    assert seqs == [1, 2, 3] and c["hand_entry"]["tag"] == f"proposal:fxhand:{fx_id}:3"   # `proposal:` tags are kept past a reload
+    # a change that changes nothing is not a step
+    assert "hand_entry" not in client.post("/api/fx/hand", json={"id": fx_id, "edit": {"size": 0.6}}).json()
+    cur = lambda: _effects(client)[fx_id]
+    r = client.post("/api/fx/hand/step", json={"id": fx_id, "seq": 3, "back": True})
+    assert r.status_code == 200
+    assert [s["text"] for s in cur()["overlay"]["shapes"] if s["type"] == "text"] == ["COPPER 2026"]
+    assert cur()["overlay"]["size"] == 0.6 and cur()["events"][0]["x"] == 0.4            # the others stay
+    assert cur()["status"] == "accepted"                                                   # the title is still there
+    client.post("/api/fx/hand/step", json={"id": fx_id, "seq": 2, "back": True})
+    assert cur()["events"][0]["x"] == 0.5 and cur()["overlay"]["size"] == 0.6
+    client.post("/api/fx/hand/step", json={"id": fx_id, "seq": 2, "back": False})        # redo
+    assert cur()["events"][0]["x"] == 0.4
+    # a step that is not where the effect stands is refused, not forced
+    r = client.post("/api/fx/hand/step", json={"id": fx_id, "seq": 1, "back": True})
+    assert r.status_code == 409
+    assert client.post("/api/fx/hand/step", json={"id": fx_id, "seq": 99, "back": True}).status_code == 404
+    # kept with the effect: it is in the record on disk, so it survives a reload and a restart
+    import server
+    on_disk = json.loads((server.fx_home() / f"{fx_id}.json").read_text(encoding="utf-8"))
+    assert [x["seq"] for x in on_disk["hand_log"]] == [1, 2, 3] and on_disk["hand_seq"] == 3
+
+
+def test_stopping_a_revise_during_a_re_ask_keeps_nothing_half_made(server_fx, client, monkeypatch):
+    import threading
+    project, answers, calls = server_fx
+    fx_id, _ = _design_one(client, project, answers)
+    before = json.dumps(_effects(client)[fx_id]["overlay"], sort_keys=True)
+    gate, inside = threading.Event(), threading.Event()
+    called = []
+
+    def slow_revise(effect, note, segments, clips=None):
+        on = getattr(fx._WATCH, "on", None)
+        on("the revise call", False)
+        called.append(note)
+        inside.set()
+        gate.wait(10)
+        on("the revise call", True)                     # (a stopped call's answer is not used)
+        return fx.validate_effect({**effect, "name": "NEW", "overlay": COPPER_2026["overlay"]}, segments, clips)
+
+    monkeypatch.setattr(fx, "revise", slow_revise)
+    job = client.post("/api/fx/revise", json={"id": fx_id, "note": "make it bigger"}).json()["job"]
+    assert inside.wait(10)
+    r = client.post(f"/api/jobs/{job}/stop").json()
+    assert r["stopped"] is True and "the effect is as it was" in r["said"]
+    gate.set()
+    snap = _wait(client, job) if client.get(f"/api/job/{job}").json()["state"] not in ("cancelled",) else client.get(f"/api/job/{job}").json()
+    time.sleep(0.5)
+    assert client.get(f"/api/job/{job}").json()["state"] == "cancelled"
+    assert json.dumps(_effects(client)[fx_id]["overlay"], sort_keys=True) == before and _effects(client)[fx_id]["name"] != "NEW"
+    assert len(called) == 1                              # no re-ask round started after the Stop
+
+
+def test_stopping_a_design_says_no_title_was_added_and_leaves_no_effect(server_fx, client, monkeypatch):
+    import threading
+    project, answers, calls = server_fx
+    s1, _ = _seed(project, client)
+    gate, inside = threading.Event(), threading.Event()
+
+    def slow_design(note, seg, clip, sidecar, **kw):
+        on = getattr(fx._WATCH, "on", None)
+        on("the design call", False)
+        inside.set()
+        gate.wait(10)
+        on("the design call", True)
+        raise AssertionError("never reached after a stop")
+
+    monkeypatch.setattr(fx, "design", slow_design)
+    job = client.post("/api/fx/design", json={"shot": s1, "note": "a COPPER 2026 title"}).json()["job"]
+    assert inside.wait(10)
+    listed = [j for j in client.get("/api/jobs").json()["jobs"] if j["id"] == job][0]
+    assert listed["fx_kind"] == "design" and listed["state"] == "running"        # the pill has what it needs to show a ×
+    r = client.post(f"/api/jobs/{job}/stop").json()
+    assert r["stopped"] is True and r["said"] == "Stopped: no title was added."
+    gate.set()
+    time.sleep(0.5)
+    assert client.get(f"/api/job/{job}").json()["state"] == "cancelled"
+    assert _effects(client) == {}
+
+
+# ---------------------------------------------------------------- FINISH-05 / -07 / -08 (round 3, finish)
+
+def test_where_a_title_sits_is_said_from_the_measured_box_and_a_named_place_is_held_to():
+    assert fx.requested_place("Name lower-third: 'Spencer' on the bearded man, bottom left, fades") == {"v": "lower", "h": "left"}
+    assert fx.requested_place("a title at the top of the frame") == {"v": "upper", "h": None}
+    assert fx.requested_place("a lower third for Spencer") == {"v": "lower", "h": None}
+    assert fx.requested_place("a centred title") == {"v": None, "h": "centre"}
+    assert fx.requested_place("make it bigger") is None
+    assert fx.place_words([0.1, 0.78, 0.4, 0.9]) == "lower left"
+    assert fx.place_words([0.3, 0.45, 0.7, 0.55]) == "centre"
+    assert fx.place_words([0.5, 0.4, 0.95, 0.55]) == "middle right"
+    # the Spencer plate: asked for the bottom left, drawn about x 64 %, y 45 %
+    e = _effect(events=[{"t": 1.0, "x": 0.64, "y": 0.45}], overlay={
+        "duration": 3.0, "size": 0.5, "anim": {}, "shapes": [
+            {"type": "rect", "at": [0, 0], "w": 1.8, "h": 0.5, "fill": True, "color": "#0b0b0f", "opacity": 0.65},
+            _text("Spencer", 0.16)]})
+    e["wants"] = fx.requested_place("Name lower-third: 'Spencer', bottom left")
+    res = fx.check_bounds(e, W, H)
+    assert res["ok"] is False and res["place"]
+    [p] = [p for p in res["problems"] if p["kind"] == "place"]
+    assert "asked for at the lower left" in p["detail"] and "drawn at the" in p["detail"]
+    # the one-click fix: no model, and the check passes
+    moved = fx.apply_hand(e, {"place": e["wants"]}, w=W, h=H)
+    after = fx.check_bounds(moved, W, H)
+    assert after["ok"] is True and after["place"] == "lower left"
+    # without a named place there is nothing to hold it to
+    e.pop("wants")
+    assert fx.check_bounds(e, W, H)["ok"] is True
+
+
+def test_a_wrong_place_is_asked_again_like_an_overflow(monkeypatch):
+    asked = []
+    right = {"events": [{"t": 1.2, "x": 0.27, "y": 0.82}], "overlay": fx._EXAMPLE_LOWERTHIRD["overlay"]}
+
+    def ask(system, prompt, images=None, *, what="the design call"):
+        asked.append(prompt)
+        return _answer(right)
+
+    monkeypatch.setattr(fx, "_ask", ask)
+    e = fx.validate_effect({**_effect(events=[{"t": 1.2, "x": 0.64, "y": 0.45}], overlay=fx._EXAMPLE_LOWERTHIRD["overlay"]),
+                            "shot": "s1", "wants": {"v": "lower", "h": "left"}}, SEGS)
+    out, n, res = fx.refit(e, SEGS, None, w=W, h=H)
+    assert n == 1 and res["ok"] and "asked for at the lower left" in asked[0]
+    assert out["wants"] == {"v": "lower", "h": "left"}
+
+
+def test_one_size_for_every_title_the_text_height_as_a_share_of_the_frames_height():
+    big = _effect(events=[{"t": 1.0, "x": 0.5, "y": 0.5}], overlay={
+        "duration": 2.0, "size": 0.4, "anim": {}, "shapes": [_text("Spencer", 0.4)]})
+    small = _effect(events=[{"t": 1.0, "x": 0.5, "y": 0.5}], overlay={
+        "duration": 2.0, "size": 1.0, "anim": {}, "shapes": [_text("Opening title here", 0.07)]})
+    for e in (big, small):
+        moved = fx.apply_hand(e, {"text_height": 8}, w=W, h=H)
+        assert fx.text_share(moved, W, H) == pytest.approx(0.08, abs=0.004)
+        assert fx.check_bounds(moved, W, H)["share"] == pytest.approx(0.08, abs=0.004)
+    # the share is what is drawn: the measured cap-to-baseline box height is in proportion
+    m = fx.measure(fx.apply_hand(big, {"text_height": 8}, w=W, h=H), W, H)["views"][0]["boxes"][0]
+    assert 0.05 < (m[3] - m[1]) < 0.09
+    with pytest.raises(ValueError):
+        fx.apply_hand(_effect(events=[{"t": 1, "x": 0.5, "y": 0.5}], overlay={
+            "duration": 2.0, "size": 0.4, "anim": {}, "shapes": [{"type": "circle", "at": [0, 0], "r": 0.5}]}), {"text_height": 8})
+
+
+def test_a_proposal_that_moves_the_opening_title_offers_to_keep_it_at_the_start():
+    from roughcut import actions
+    segs = [{"id": f"s{i}", "clip": "A.MP4", "in": 0.0, "out": 3.0} for i in range(1, 4)]
+    title = {**_effect(**COPPER_2026), "id": "fx_open", "shot": "s1", "status": "accepted"}
+    name = {**_effect(events=[{"t": 4.0, "x": 0.3, "y": 0.8}], overlay={
+        "duration": 2.0, "size": 0.4, "anim": {}, "shapes": [_text("Spencer", 0.14)]}), "id": "fx_name", "shot": "s2", "status": "accepted"}
+    state = {"segments": segs, "effects": [title, name], "clips": {"A.MP4": {"duration": 99}}, "fps": 24, "markers": [],
+             "tracks": {}, "overlays": [], "transitions": [], "colour": {}, "looks": [], "presets": {}}
+    out = actions.check([{"op": "move", "ids": ["s2"], "before": "s1"}], state)
+    assert len(out["notes"]) == 2
+    assert out["note_actions"] == [{"fx": "fx_open", "shot": "s2", "words": "COPPER 2026"}]    # the name super stays with its shot
+    # and the review's answer carries them to the page (the server's whitelist missed `notes`)
+    import server
+    assert '"notes", "note_actions"' in Path(server.__file__).read_text(encoding="utf-8")
+
+
+def test_a_title_moves_to_another_shot_as_one_undo_step(server_fx, client):
+    project, answers, calls = server_fx
+    fx_id, s1 = _design_one(client, project, answers)
+    s2 = [s["id"] for s in client.get("/api/project").json()["segments"]][1]
+    client.post("/api/fx/accept", json={"id": fx_id})
+    r = client.post("/api/fx/move", json={"id": fx_id, "shot": s2}).json()
+    assert r["shot"] == s2 and r["hand_entry"]["tag"].startswith(f"proposal:fxhand:{fx_id}:")
+    assert json.loads(project["edl"].read_text(encoding="utf-8"))["effects"][0]["shot"] == s2
+    seq = r["hand_entry"]["seq"]
+    back = client.post("/api/fx/hand/step", json={"id": fx_id, "seq": seq, "back": True})
+    assert back.status_code == 200 and back.json()["shot"] == s1
+    assert json.loads(project["edl"].read_text(encoding="utf-8"))["effects"][0]["shot"] == s1

@@ -148,3 +148,12 @@
 #fx .fxh output { min-width: 34px; font-variant-numeric: tabular-nums; }
 #fx .fxh .nudge { padding: 0 8px; line-height: 20px; }
 #fx .fxreads { font-size: 12px; margin-top: 3px; color: var(--dim); }
+#fx .fxh input.bad { border-color: var(--bad); outline: 1px solid var(--bad); }
+#fx .fxhandmsg { color: var(--bad); font-size: 12px; }
+#fx .fxbusy { display: flex; align-items: center; gap: 8px; font-size: 12px; margin: 0 0 8px; }
+#fx .fxbusy .grow { flex: 1; }
+#fx .fxstopped { font-size: 12px; margin: 0 0 8px; color: var(--dim); }
+/* one line high, always: the fields below never move while the check changes (FINISH-06) */
+#fx .fxcheck { height: 20px; line-height: 20px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#fx .fxhandmsg { display: inline-block; min-height: 16px; }
+#fx .fxreads { height: 18px; line-height: 18px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }

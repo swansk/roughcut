@@ -634,6 +634,7 @@
 
   /* ------------------------------------------------------------ the review */
   const R = {
+    keep: new Set(),            // which of the review's keep-the-title offers are ticked (default: all)
     res: null,             // the /api/assist result under review
     ops: [],               // its ops
     lines: [],
@@ -673,6 +674,12 @@
     el.hidden = true;
     host.insertBefore(el, host.firstChild);
     el.addEventListener('click', onClick);
+    el.addEventListener('change', (e) => {      // a keep-the-title offer ticked or cleared
+      const c = e.target.closest('input[data-keep]');
+      if (!c) return;
+      const k = Number(c.dataset.keep);
+      if (c.checked) R.keep.add(k); else R.keep.delete(k);
+    });
     R.el = el;
     return el;
   }
@@ -820,6 +827,7 @@
       ${res.summary ? `<div class="air-sum">${esc(named(res.summary))}</div>` : ''}
       <ol class="air-ops">${R.ops.map(rowHtml).join('')}${refused.map((x) => `<li class="air-op refused" data-testid="ai-op-refused" data-op="${esc(x.op || '')}"><span class="air-fam" aria-hidden="true">⊘</span><span class="air-line">${esc(String(x.op || 'an op').replace('_', ' '))} not applied: ${esc(named(x.why))}</span></li>`).join('')}</ol>
       ${(res.notes || []).map((n) => `<div class="air-note" data-testid="ai-title-note">${esc(named(n))}</div>`).join('')}
+      ${(res.note_actions || []).map((a, k) => `<label class="air-note air-keep" data-testid="ai-keep-title"><input type="checkbox" data-keep="${k}"${R.keep.has(k) ? ' checked' : ''}> keep the title “${esc(a.words)}” at the start of the film (it moves to the new first shot)</label>`).join('')}
       ${preview ? `<div class="air-preview">${preview}</div>` : ''}
       <div class="air-foot">
         <button type="button" class="air-btn" data-act="reject" data-testid="ai-reject-all" title="put everything back as it was — nothing is written (Esc)">Reject all</button>
@@ -1065,6 +1073,7 @@
     }
     if (R.res) closeQuiet();
     R.res = res;
+    R.keep = new Set((res.note_actions || []).map((_, k) => k));
     R.after = true;
     R.blocked = new Map();
     R.planWhat = '';
@@ -1154,7 +1163,13 @@
     if (R.ops[idx[0]] && R.ops[idx[0]].op === 'new_cut') return acceptIntoCopy(idx);
     // the entry is named for what the ops are, never the model's summary cut to fit (the
     // summary stays the review's own line)
+    const keeps = (R.res.note_actions || []).filter((_, k) => R.keep.has(k));
     const out = applyOps(idx.map((i) => R.ops[i]), { label: labelFor(idx.map((i) => R.ops[i])) });
+    // the titles the editor chose to keep at the start of the film go to the shot that is first now
+    // (a name super stays with its shot); no model, one undo step each (fx.js moveTitle)
+    if (keeps.length && window.fx && typeof fx.moveTitle === 'function') {
+      setTimeout(() => keeps.forEach((a) => { fx.moveTitle(a.fx, a.shot).catch(() => {}); }), 400);
+    }
     return landed(idx, idx, out);
   }
 

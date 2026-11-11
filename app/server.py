@@ -3683,7 +3683,7 @@ def stop_job(job: str) -> dict:
     if job in FX:
         out = _fx_cancel(job)
         return {**out, "stopped": out.get("state") == "cancelled",
-                "said": out.get("said") or "Stopped."}
+                "said": (FX.get(job) or {}).get("stopped_says") or out.get("said") or "Stopped."}
     if job in RENDERS:
         r = json.loads(api_render_cancel(job).body)
         return {"ok": True, "job": job, "state": r.get("state"), "stopped": True,
@@ -15840,6 +15840,17 @@ def _fx_bounds(e: dict) -> dict | None:
     return None if res.get("ok") is None else res
 
 
+def _fx_bounds_rec(res: dict, asked: int, by_hand: bool) -> dict:
+    """What the card keeps of a frame check: the verdict, the problems, the text's box, the whole
+    drawn box and where it sits in words (measured, never the designer's description), and the
+    text's height as a share of the frame's."""
+    out = {"ok": res["ok"], "problems": res["problems"], "text": res["text"], "safe": res["safe"],
+           "asked": asked, "all": res.get("all"), "place": res.get("place"), "share": res.get("share")}
+    if by_hand:
+        out["by_hand"] = True
+    return out
+
+
 def _fx_refit(e: dict, segments: list[dict], clips: dict, entry: progress.Job | None = None,
               scope=None, on_call=None) -> dict:
     """The frame check on a fresh design; while it fails the designer is asked again with
@@ -15881,8 +15892,7 @@ def _fx_refit(e: dict, segments: list[dict], clips: dict, entry: progress.Job | 
         e2, asked, res = fx.refit(e, segments, clips, w=w, h=h, on_try=say)
     if entry is not None and entry.get("milestones"):
         entry.complete("frame")
-    e2["bounds"] = {"ok": res["ok"], "problems": res["problems"], "text": res["text"],
-                    "safe": res["safe"], "asked": asked}
+    e2["bounds"] = _fx_bounds_rec(res, asked, False)
     return e2
 
 
@@ -15947,6 +15957,7 @@ def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict 
         clip = clips.get(seg["clip"]) or {"clip": seg["clip"]}
         fx_id = fx.new_id()
         ref = _fx_reference(fx_id, reference)
+        entry["titleish"] = bool(re.search(r"\b(?:title|lower[- ]third|end card|caption|credits?|text|words?)\b", note, re.I))
         _fx_plan(entry, ["design"] + (["place"] if place and not ref else []) + ["frame"])
         entry.note("designing the effect" + (" from your drawing" if ref else ""))
         with procscope.active(scope), fx.watched(on_call):
@@ -16008,7 +16019,7 @@ def _fx_stop_words(calling: str | None, called: list[str]) -> str:
 
 def _fx_cancel(job: str) -> dict:
     entry = FX.get(job)
-    if entry is None or entry.get("fx_kind") != "design":
+    if entry is None or entry.get("fx_kind") not in ("design", "revise"):
         raise HTTPException(404, f"no design job {job}")
     with FX_DESIGN_LOCK:
         if entry["state"] != "running":             # it ended first: say how
@@ -16018,6 +16029,11 @@ def _fx_cancel(job: str) -> dict:
         what, called = entry.get("calling"), list(entry.get("called") or [])
         said = _fx_stop_words(what, called)
         entry.finish("cancelled", detail=f"taken back (Ctrl+Z) — {said}")
+        # what the Stop did, in the editor's words (wave 23, CLUMSY-12): a design adds nothing,
+        # a revision leaves the effect as it was; the half-made one is never saved
+        kept = ("the effect is as it was" if entry.get("fx_kind") == "revise"
+                else f"no {'title' if entry.get('titleish') else 'effect'} was added")
+        entry["stopped_says"] = f"Stopped: {kept}."
     scope = FX_DESIGN_SCOPES.get(job)
     if scope is not None:
         # SIGTERM now, SIGKILL after the grace — off this request; a process the job
@@ -16030,13 +16046,25 @@ def _fx_cancel(job: str) -> dict:
 
 def _fx_revise_job(job: str, fx_id: str, note: str) -> None:
     entry = FX[job]
+    scope = FX_DESIGN_SCOPES[job] = procscope.Scope(f"fx revise {job}")
+
+    def on_call(what: str, answered: bool) -> None:
+        _fx_progress_call(entry, what, answered)
+        if answered:
+            entry["calling"] = None
+            entry["called"] = [*(entry.get("called") or []), what]
+            return
+        if entry.get("cancel"):
+            raise FxStopped(what)
+        entry["calling"] = what
+
     try:
         e = _fx_current(fx_id)
         segments = _fx_segments()
         clips, _ = _ask_clips()
         _fx_plan(entry, ["revise", "frame"])
         entry.note("revising the effect")
-        with fx.watched(lambda what, answered: _fx_progress_call(entry, what, answered)):
+        with procscope.active(scope), fx.watched(on_call):
             new = fx.revise(e, note, segments, clips)
         new["id"] = fx_id
         new["status"] = "proposed"          # an iteration is a proposal again
@@ -16046,17 +16074,21 @@ def _fx_revise_job(job: str, fx_id: str, note: str) -> None:
         new.pop("verify", None)
         new.pop("bounds", None)
         new = fx.validate_effect(new, segments, clips)
-        new = _fx_refit(new, segments, clips, entry)
-        fx.save(fx_home(), new)
-        _fx_sound(new)
-        if e.get("status") == "accepted":
-            # the accepted one stays in the EDL until this proposal is accepted over it
-            pass
-        entry["result"] = {"id": fx_id}
-        _fx_autoverify(fx_id)
-        entry.finish("done", detail=f"{new['name']} — revised, a proposal")
+        new = _fx_refit(new, segments, clips, entry, scope, on_call)
+        with FX_DESIGN_LOCK:
+            if entry.get("cancel"):             # stopped during a re-ask: nothing half-made is kept
+                raise FxStopped("the revision")
+            fx.save(fx_home(), new)
+            _fx_sound(new)
+            entry["result"] = {"id": fx_id}
+            _fx_autoverify(fx_id)
+            entry.finish("done", detail=f"{new['name']} — revised, a proposal")
     except Exception as exc:  # noqa: BLE001
-        entry.finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
+        with FX_DESIGN_LOCK:
+            if not entry.get("cancel"):         # a cancel already said how it ended
+                entry.finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
+    finally:
+        FX_DESIGN_SCOPES.pop(job, None)
 
 
 PROOF_W, PROOF_H, PROOF_FPS = 1280, 720, 24
@@ -16752,8 +16784,7 @@ async def api_fx_update(fx_id: str, request: Request) -> JSONResponse:
         raise HTTPException(400, str(exc))
     res = await asyncio.to_thread(_fx_bounds, new)
     if res is not None:
-        new["bounds"] = {"ok": res["ok"], "problems": res["problems"], "text": res["text"],
-                         "safe": res["safe"], "asked": 0, "by_hand": True}
+        new["bounds"] = _fx_bounds_rec(res, 0, True)
     _fx_put(new)
     if body.get("sound") is not None:
         await asyncio.to_thread(_fx_sound, new)  # off the loop: a long synth holds it
@@ -16788,9 +16819,99 @@ async def api_fx_hand(request: Request) -> JSONResponse:
         raise HTTPException(400, str(exc))
     res = await asyncio.to_thread(_fx_bounds, new)
     if res is not None:
-        new["bounds"] = {"ok": res["ok"], "problems": res["problems"], "text": res["text"],
-                         "safe": res["safe"], "asked": 0, "by_hand": True}
+        new["bounds"] = _fx_bounds_rec(res, 0, True)
+    # each hand change is one undo step (CLUMSY-13): the spec before and after, kept with the
+    # effect, so the board's Ctrl+Z / Ctrl+Shift+Z entry (tag `proposal:fxhand:<id>:<seq>`,
+    # kept past a reload by the undo history) can put exactly that change back or forth
+    before, after = _fx_hand_snap(e), _fx_hand_snap(new)
+    if before != after:
+        seq = int(e.get("hand_seq") or 0) + 1
+        log = list(e.get("hand_log") or [])
+        log.append({"seq": seq, "before": before, "after": after})
+        new["hand_seq"] = seq
+        new["hand_log"] = log[-FX_HAND_LOG:]
     _fx_put(new)
+    _fx_autoverify(fx_id)
+    out = _fx_urls(new)
+    if before != after:
+        out["hand_entry"] = {"seq": new["hand_seq"], "tag": f"proposal:fxhand:{fx_id}:{new['hand_seq']}"}
+    return JSONResponse(out)
+
+
+FX_HAND_LOG = 60
+
+
+def _fx_hand_snap(e: dict) -> dict:
+    """What a hand change (or a move to another shot) can change, for its undo step."""
+    return {**_fx_snapshot(e), "shot": e.get("shot"), "clip": e.get("clip")}
+
+
+@app.post("/api/fx/move")
+async def api_fx_move(request: Request) -> JSONResponse:
+    """A title moved to another shot — "keep the title at the start of the film" when an
+    edit puts a different shot first (wave 23, FINISH-08). Its moments keep their place in
+    the shot (offset from its in-point, kept inside the new shot). No model. One undo step,
+    as a hand change is."""
+    body = await request.json()
+    fx_id = str(body.get("id") or "")
+    e = _fx_current(fx_id)
+    seg_old = _fx_seg(e["shot"])
+    seg_new = _fx_seg(str(body.get("shot") or ""))
+    if seg_new["id"] == seg_old["id"]:
+        return JSONResponse(_fx_urls(e))
+    merged = {**e, "shot": seg_new["id"], "clip": seg_new["clip"]}
+    lo, hi = float(seg_new["in"]), float(seg_new["out"])
+    merged["events"] = [{**ev, "t": round(min(max(lo + (float(ev["t"]) - float(seg_old["in"])), lo), hi - 0.05), 3)}
+                        for ev in e.get("events") or []]
+    merged.pop("verify", None)
+    merged.pop("bounds", None)
+    try:
+        new = fx.validate_effect(merged, _fx_segments())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    before, after = _fx_hand_snap(e), _fx_hand_snap(new)
+    seq = int(e.get("hand_seq") or 0) + 1
+    new["hand_seq"] = seq
+    new["hand_log"] = [*list(e.get("hand_log") or []), {"seq": seq, "before": before, "after": after}][-FX_HAND_LOG:]
+    _fx_put(new)
+    _fx_autoverify(fx_id)
+    out = _fx_urls(new)
+    out["hand_entry"] = {"seq": seq, "tag": f"proposal:fxhand:{fx_id}:{seq}"}
+    return JSONResponse(out)
+
+
+@app.post("/api/fx/hand/step")
+async def api_fx_hand_step(request: Request) -> JSONResponse:
+    """The board's Ctrl+Z (`back`) or Ctrl+Shift+Z of one hand change: the effect's spec
+    goes to what it was before that change, or to what it was after. Refused when the
+    effect is no longer as that change left it (an AI revision, a later hand change the
+    board's stack no longer holds): it says so and changes nothing."""
+    body = await request.json()
+    fx_id = str(body.get("id") or "")
+    seq = int(body.get("seq") or 0)
+    back = bool(body.get("back"))
+    e = _fx_current(fx_id)
+    rec = next((x for x in e.get("hand_log") or [] if x.get("seq") == seq), None)
+    if rec is None:
+        raise HTTPException(404, "that change is no longer kept on this effect")
+    want = rec["before"] if back else rec["after"]
+    leaves = rec["after"] if back else rec["before"]
+    if _fx_hand_snap(e) != leaves:
+        raise HTTPException(409, "the effect was changed since — that step cannot be put back on its own")
+    merged = {**e}
+    merged.update(want)
+    merged.pop("verify", None)
+    merged.pop("bounds", None)
+    try:
+        new = fx.validate_effect(merged, _fx_segments())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    res = await asyncio.to_thread(_fx_bounds, new)
+    if res is not None:
+        new["bounds"] = _fx_bounds_rec(res, 0, True)
+    _fx_put(new)
+    if new.get("sound"):
+        await asyncio.to_thread(_fx_sound, new)
     _fx_autoverify(fx_id)
     return JSONResponse(_fx_urls(new))
 
@@ -18307,7 +18428,7 @@ def _assist_view(job: str) -> dict:
     if rec is not None and rec.get("answer"):
         out["answer"] = rec["answer"]
     for k in ("kind", "ops", "lines", "refused", "index", "families", "preview", "plan_ask",
-              "text", "note", "summary", "cost", "from_picture", "from_descriptions", "looked", "target"):
+              "text", "note", "notes", "note_actions", "summary", "cost", "from_picture", "from_descriptions", "looked", "target"):
         if k in res:
             out[k] = res[k]
     if out.get("plan_ask") and out["plan_ask"] in ASKS:
