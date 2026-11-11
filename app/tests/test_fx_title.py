@@ -397,9 +397,16 @@ def server_fx(monkeypatch, project):
     answers: list[dict] = []
     calls = {"design": 0, "revise": 0}
 
+    def _call(what):                                   # what `fx._ask` tells the server's watcher
+        on = getattr(fx._WATCH, "on", None)
+        if on:
+            on(what, False)
+            on(what, True)
+
     def design(note, seg, clip, sidecar, *, reference=None, place=False, proxy=None,
                workdir=None, segments=None, clips=None, window=None):
         calls["design"] += 1
+        _call("the design call")
         spec = answers.pop(0) if answers else COPPER_2026
         e = {"name": "Copper title", "why": "w", "note": note, "shot": seg["id"], "clip": seg["clip"],
              "events": [{**spec["events"][0], "t": seg["in"] + 0.5}], "overlay": json.loads(json.dumps(spec["overlay"])),
@@ -409,6 +416,7 @@ def server_fx(monkeypatch, project):
 
     def revise(effect, note, segments, clips=None):
         calls["revise"] += 1
+        _call("the revise call")
         spec = answers.pop(0) if answers else COPPER_2026
         e = json.loads(json.dumps(effect))
         e["overlay"] = json.loads(json.dumps(spec["overlay"]))
@@ -537,9 +545,15 @@ def test_remove_the_title_is_a_removal_not_a_design_job(server_fx, client):
     assert snap["state"] == "done" and "removed" in snap["detail"]
     assert calls == before                                # the designer was not asked
     assert _effects(client)[a]["status"] == "removed"
-    # a removal with nothing to remove says which effects are there, and fails visibly
+    # a removal of what is already gone (taken out by hand) is done, not failed
     snap = _wait(client, client.post("/api/fx/design", json={"shot": s1, "note": "remove the title"}).json()["job"])
-    assert snap["state"] == "failed" and "nothing here to remove" in snap["detail"]
+    assert snap["state"] == "done" and "nothing to remove" in snap["detail"]
+    # two effects and no name: it fails and says what the editor can do
+    for words in ("Alpha", "Bravo"):
+        answers.append({**GOOD, "overlay": {**GOOD["overlay"], "shapes": [_text(words, 0.1)]}})
+        _wait(client, client.post("/api/fx/design", json={"shot": s1, "note": f"a {words} title"}).json()["job"])
+    snap = _wait(client, client.post("/api/fx/design", json={"shot": s1, "note": "remove the title"}).json()["job"])
+    assert snap["state"] == "failed" and "press Remove" in snap["detail"] and "Copper title" in snap["detail"]
 
 
 def test_an_accepted_answers_design_is_accepted_with_it_when_it_fits(server_fx, client):
@@ -588,3 +602,88 @@ def test_a_design_with_no_auto_flag_is_a_proposal_as_before(server_fx, client):
     answers.append(GOOD)
     snap = _wait(client, client.post("/api/fx/design", json={"shot": s1, "note": "a title"}).json()["job"])
     assert _effects(client)[snap["result"]["id"]]["status"] == "proposed"
+
+
+# ---------------------------------------------------------------- the wait, said (wave 23, COLD round 2)
+
+def test_a_design_job_has_a_learned_estimate_and_says_each_step(server_fx, client):
+    import server
+    project, answers, calls = server_fx
+    s1, _ = _seed(project, client)
+    server.FX_TITLE_COST.update({"design": 40.0, "place": 12.0, "revise": 30.0, "frame": 2.0})
+    job = client.post("/api/fx/design", json={"shot": s1, "note": "a COPPER 2026 title"}).json()["job"]
+    snap = _wait(client, job)
+    assert snap.get("estimated_s")
+    keys = [m["key"] for m in snap["milestones"]]
+    # the designer never fixed it: two re-asks, each a step of the bar, each said
+    assert keys == ["design", "frame", "reask1", "reask2"], keys
+    assert all(m["done_at"] for m in snap["milestones"])
+    assert snap["eta_s"] > 40 + 2 + 30 + 30 - 1 or snap["state"] == "done"
+
+
+def test_the_title_timing_is_learned_and_kept_between_runs(server_fx, client):
+    import server
+    project, answers, calls = server_fx
+    s1, _ = _seed(project, client)
+    server.FX_TITLE_COST["frame"] = 2.0
+    server._fx_cost_learn("design", 10.0)
+    server._fx_cost_learn("design", 10.0)
+    assert server.FX_TITLE_COST["design"] < 25.0
+    saved = json.loads(server._fx_cost_path().read_text(encoding="utf-8"))
+    assert saved["design"] == server.FX_TITLE_COST["design"]
+    server._FX_TITLE_LOADED["done"] = False
+    server.FX_TITLE_COST["design"] = 99.0
+    server._fx_cost_load()
+    assert server.FX_TITLE_COST["design"] == saved["design"]
+
+
+def test_the_re_ask_says_it_is_happening(server_fx, client):
+    project, answers, calls = server_fx
+    s1, _ = _seed(project, client)
+    seen = []
+    import server
+    real = server._fx_progress_call
+
+    def spy(entry, what, answered):
+        real(entry, what, answered)
+        if entry is not None and not answered:
+            seen.append(entry.get("detail"))
+    server._fx_progress_call, keep = spy, server._fx_progress_call
+    try:
+        answers.extend([COPPER_2026, GOOD])
+        _wait(client, client.post("/api/fx/design", json={"shot": s1, "note": "a COPPER 2026 title"}).json()["job"])
+    finally:
+        server._fx_progress_call = keep
+    assert seen[0] == "designing the effect"
+    assert any("asking the designer again" in (d or "") and "outside the frame" in (d or "") for d in seen), seen
+
+
+def test_validating_an_effect_twice_keeps_every_shape_where_it_was():
+    """The cold editor's end card: accepted, its two lines at (0, 0) on each other. An effect is
+    validated on design and again on accept and on every edit; the second pass read no `at` and
+    centred every shape."""
+    raw = {"duration": 2.0, "size": 0.9, "shapes": [
+        {"type": "rect", "at": [0.1, 0.2], "w": 1.0, "h": 0.4, "fill": True},
+        {"type": "circle", "at": [-0.3, 0.4], "r": 0.2},
+        {"type": "text", "text": "Line one", "at": [0, -0.2], "h": 0.1},
+        {"type": "text", "text": "Line two", "at": [0.05, 0.3], "h": 0.06}]}
+    once = fx.validate_overlay(raw)
+    twice = fx.validate_overlay(once)
+    thrice = fx.validate_overlay(twice)
+    assert once == twice == thrice
+    assert [(s["x"], s["y"]) for s in thrice["shapes"]] == [(0.1, 0.2), (-0.3, 0.4), (0.0, -0.2), (0.05, 0.3)]
+    e = {"id": "fx_a", "shot": "s1", "clip": "A.MP4", "name": "x", "events": [{"t": 1.0, "x": 0.5, "y": 0.5}],
+         "overlay": raw, "sound": None, "status": "proposed"}
+    seg = [{"id": "s1", "clip": "A.MP4", "in": 0.0, "out": 6.0}]
+    once_e = fx.validate_effect(e, seg)
+    assert fx.validate_effect(once_e, seg)["overlay"] == once_e["overlay"]
+
+
+def test_an_end_card_is_not_the_title_it_contains():
+    title = _effect(events=[{"t": 1.0, "x": 0.5, "y": 0.5}], overlay={
+        "duration": 2.0, "size": 0.8, "shapes": [_text("Copper Mountain", 0.1)], "anim": {}})
+    card = _effect(events=[{"t": 1.0, "x": 0.5, "y": 0.5}], overlay={
+        "duration": 2.0, "size": 0.8, "shapes": [_text("Thanks", 0.05), _text("Copper Mountain", 0.1)], "anim": {}})
+    same = _effect(events=[{"t": 3.0, "x": 0.5, "y": 0.5}], overlay=title["overlay"])
+    assert fx.text_key(title) != fx.text_key(card) and fx.text_key(title) == fx.text_key(same)
+    assert fx.removal_targets("remove the Copper Mountain title", [title, card]) == [title, card]

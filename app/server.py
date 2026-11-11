@@ -15560,6 +15560,75 @@ class FxStopped(Exception):
     """The design job was cancelled: no further call, nothing kept."""
 
 
+# How long a title round trip takes on this machine, learned (wave 23: "25 s to 2.5 min with
+# no time estimate"): seconds per kind of step, a moving average of what past jobs measured,
+# kept in the work dir so it survives a restart. The design job's bar is made of these.
+FX_TITLE_COST = {"design": 25.0, "place": 12.0, "revise": 20.0, "frame": 2.0}
+_FX_TITLE_LOADED = {"done": False}
+_FX_CALL_WORDS = {"design": "designing the effect", "place": "looking at the frames to place it",
+                  "revise": "asking the designer again"}
+_FX_CALL_KIND = {"the design call": "design", "the placing look": "place", "the revise call": "revise"}
+
+
+def _fx_cost_path() -> Path:
+    return STATE["work"] / "fx_title_timing.json"
+
+
+def _fx_cost_load() -> None:
+    if _FX_TITLE_LOADED["done"]:
+        return
+    _FX_TITLE_LOADED["done"] = True
+    try:
+        saved = json.loads(_fx_cost_path().read_text(encoding="utf-8"))
+        for k, v in saved.items():
+            if k in FX_TITLE_COST and isinstance(v, (int, float)) and 0.1 <= v <= 900:
+                FX_TITLE_COST[k] = float(v)
+    except (OSError, ValueError, KeyError):
+        pass
+
+
+def _fx_cost_learn(kind: str, seconds: float) -> None:
+    if kind not in FX_TITLE_COST or not (0.05 <= seconds <= 900):
+        return
+    FX_TITLE_COST[kind] = round(0.5 * FX_TITLE_COST[kind] + 0.5 * seconds, 2)
+    try:
+        _fx_cost_path().write_text(json.dumps(FX_TITLE_COST), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _fx_plan(entry: progress.Job, kinds: list[str]) -> None:
+    """The job's steps as milestones weighted by what each cost last time (`FX_TITLE_COST`),
+    and the time they add up to: "designing the effect · ~25 s"."""
+    _fx_cost_load()
+    labels = {"design": "designing the effect", "place": "looking at the frames to place it",
+              "revise": "revising the effect", "frame": "checking the words are inside the frame"}
+    ms = [progress.milestone(k, labels[k], FX_TITLE_COST[k]) for k in kinds]
+    entry.set_estimate(round(sum(FX_TITLE_COST[k] for k in kinds), 1), ms, source="history",
+                       detail=labels[kinds[0]])
+
+
+def _fx_progress_call(entry: progress.Job | None, what: str, answered: bool) -> None:
+    """A model call began or was answered: say which, move the bar, learn the time."""
+    if entry is None:
+        return
+    kind = _FX_CALL_KIND.get(what)
+    if kind is None:
+        return
+    if not answered:
+        entry["_call_t"] = time.time()
+        n_ask = sum(1 for m in entry.get("milestones") or [] if m["key"].startswith("reask"))
+        entry.note(_FX_CALL_WORDS[kind] + (" — the words ran outside the frame" if kind == "revise" and n_ask else ""))
+        return
+    t0 = entry.pop("_call_t", None)
+    if t0:
+        _fx_cost_learn(kind, time.time() - t0)
+    for m in entry.get("milestones") or []:
+        if m["done_at"] is None and re.sub(r"\d+$", "", m["key"]).replace("reask", "revise") == kind:
+            entry.complete(m["key"])
+            break
+
+
 def _fx_retire(fx_id: str) -> None:
     """An effect taken out because a newer one is its replacement, or because it was asked
     to go: an accepted one leaves the cut but is kept (status removed: Restore brings it
@@ -15606,21 +15675,42 @@ def _fx_refit(e: dict, segments: list[dict], clips: dict, entry: progress.Job | 
     """The frame check on a fresh design; while it fails the designer is asked again with
     the measured overflow, up to `fx.MAX_REFITS` times, before the editor sees it (wave 23,
     TITLE: "COPPER 2026" came out as "PER 2026", every time "✓ checked"). The result's
-    `bounds` is what the card shows; `bounds.asked` how many times the designer was asked."""
+    `bounds` is what the card shows; `bounds.asked` how many times the designer was asked.
+    The job says each step as it happens (checking the frame, asking again because it
+    overflowed) and its bar grows a step for each re-ask."""
     w, h = _fx_frame()
     if _fx_bounds(e) is None:
         e.pop("bounds", None)
+        if entry is not None:
+            entry.complete("frame") if entry.get("milestones") else None
         return e
+    if on_call is None and entry is not None:
+        def on_call(what: str, answered: bool) -> None:      # noqa: F811 — progress only
+            _fx_progress_call(entry, what, answered)
+    if entry is not None:
+        entry.note("checking the words are inside the frame")
+    t0 = time.time()
 
     def say(n: int, res: dict) -> None:
-        if entry is not None:
-            entry.note(f"the words run outside the frame — asking the designer again ({n} of {fx.MAX_REFITS})")
+        if entry is None:
+            return
+        _fx_cost_learn("frame", (time.time() - t0) / max(1, n))
+        entry.complete("frame") if any(m["key"] == "frame" for m in entry["milestones"]) else None
+        entry["milestones"].append(progress.milestone(f"reask{n}", f"asking again ({n} of {fx.MAX_REFITS}): "
+                                                      "the words ran outside the frame", FX_TITLE_COST["revise"]))
+        entry["eta_s"] = (entry.get("eta_s") or 0) + FX_TITLE_COST["revise"]
+        entry["total_est_s"] = entry["estimated_s"] = entry["eta_s"]
+        said = "; ".join(p["detail"] for p in res["problems"][:1])
+        entry.note(f"the words ran outside the frame — asking the designer again ({n} of {fx.MAX_REFITS}): {said}"[:300])
 
-    ctx = (procscope.active(scope), fx.watched(on_call)) if scope is not None and on_call else ()
+    ctx = (procscope.active(scope), fx.watched(on_call)) if scope is not None and on_call else (
+        (fx.watched(on_call),) if on_call else ())
     with contextlib.ExitStack() as stack:
         for c in ctx:
             stack.enter_context(c)
         e2, asked, res = fx.refit(e, segments, clips, w=w, h=h, on_try=say)
+    if entry is not None and entry.get("milestones"):
+        entry.complete("frame")
     e2["bounds"] = {"ok": res["ok"], "problems": res["problems"], "text": res["text"],
                     "safe": res["safe"], "asked": asked}
     return e2
@@ -15652,6 +15742,7 @@ def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict 
     fx_id = None
 
     def on_call(what: str, answered: bool) -> None:
+        _fx_progress_call(entry, what, answered)
         if answered:                                # a call made: a cancel now stops after it
             entry["calling"] = None
             entry["called"] = [*(entry.get("called") or []), what]
@@ -15668,9 +15759,14 @@ def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict 
                    and x.get("status") in ("accepted", "proposed")]
         gone = fx.removal_targets(note, on_shot)
         if gone is not None:                         # "remove the title": a removal, not a design
+            if not gone and not on_shot:                # already gone (taken out by hand): nothing failed
+                entry["result"] = {"id": None, "removed": []}
+                entry.finish("done", detail="nothing to remove — this shot has no effect any more")
+                return
             if not gone:
-                said = ", ".join(f"“{x.get('name')}”" for x in on_shot) or "no effect"
-                raise ValueError(f"nothing here to remove by that name — this shot has {said}")
+                said = ", ".join(f"“{x.get('name')}”" for x in on_shot)
+                raise ValueError(f"nothing here to remove by that name — this shot has {said}; "
+                                 "name the one to remove, or press Remove on its card in Designed Effects")
             for x in gone:
                 _fx_retire(x["id"])
             names = ", ".join(f"“{x.get('name')}”" for x in gone)
@@ -15681,6 +15777,7 @@ def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict 
         clip = clips.get(seg["clip"]) or {"clip": seg["clip"]}
         fx_id = fx.new_id()
         ref = _fx_reference(fx_id, reference)
+        _fx_plan(entry, ["design"] + (["place"] if place and not ref else []) + ["frame"])
         entry.note("designing the effect" + (" from your drawing" if ref else ""))
         with procscope.active(scope), fx.watched(on_call):
             e = fx.design(note, seg, clip, load_sidecar(seg["clip"]), reference=ref,
@@ -15766,8 +15863,10 @@ def _fx_revise_job(job: str, fx_id: str, note: str) -> None:
         e = _fx_current(fx_id)
         segments = _fx_segments()
         clips, _ = _ask_clips()
+        _fx_plan(entry, ["revise", "frame"])
         entry.note("revising the effect")
-        new = fx.revise(e, note, segments, clips)
+        with fx.watched(lambda what, answered: _fx_progress_call(entry, what, answered)):
+            new = fx.revise(e, note, segments, clips)
         new["id"] = fx_id
         new["status"] = "proposed"          # an iteration is a proposal again
         for k in ("reference",):
@@ -16245,6 +16344,8 @@ def _fx_accept(fx_id: str, *, auto: bool = False) -> JSONResponse:
             _fx_retire(str(old_id))
     _fx_put(e)
     _fx_accept_record(fx_id, undo, e)
+    if not e.get("verify"):
+        _fx_autoverify(fx_id)      # accepted before its check landed: it still gets one (a card never stays unchecked)
     return JSONResponse({"ok": True, "effect": _fx_urls(e)})
 
 

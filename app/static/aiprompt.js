@@ -630,8 +630,10 @@
   function designLine(a) {
     const n = a.designs, ready = a.ready || 0, failed = a.failed || 0;
     const them = n === 1 ? 'it' : 'them';
-    if (failed && failed >= n) return `${n === 1 ? 'the effect' : `the ${n} effects`} could not be designed — see Designed Effects`;
-    if (ready + failed >= n) return `${plural(ready, 'effect')} designed${failed ? `, ${failed} failed` : ''} — review ${ready === 1 ? 'it' : 'them'} in Designed Effects`;
+    const why = (a.why || []).filter(Boolean).slice(0, 2).map((w) => String(w).replace(/^[A-Za-z]*Error:\s*/, '')).join(' · ');
+    const reason = why ? ` (${why})` : '';
+    if (failed && failed >= n) return `${n === 1 ? 'the effect' : `the ${n} effects`} could not be designed${reason} — try again in Designed Effects`;
+    if (ready + failed >= n) return `${plural(ready, 'effect')} designed${failed ? `, ${failed} failed${reason}` : ''} — review ${ready === 1 ? 'it' : 'them'} in Designed Effects${failed ? ' · ask again for the one that failed' : ''}`;
     return `${plural(n, 'effect')} being designed — review ${them} in Designed Effects`;
   }
 
@@ -938,6 +940,7 @@
     if (!d || !a || !a.designs || d.label !== a.label) return;
     a.ready = d.ready;
     a.failed = d.failed;
+    a.why = d.why || [];
     paintStatus();
   }
 
