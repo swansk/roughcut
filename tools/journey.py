@@ -997,13 +997,28 @@ class Journey:
                           " return b ? b.innerText.trim() : null; })()")
             raise StepFailed(f'the header control reads {got!r}, not "{text}"')
 
+    def show_fp_steps(self) -> None:
+        """The steps sit under the panel's Details control (a person opens it); open it if shut."""
+        if self.pg.locator('[data-testid="firstpass-panel"] .fp-steps li').count() == 0:
+            tog = self.pg.locator('[data-testid="firstpass-panel"] [data-fp="details"]')
+            need(tog.count() == 1 and tog.is_visible(),
+                 "the first-pass panel has no steps and no Details control to open them")
+            tog.click()
+        self.until("document.querySelector('[data-testid=\"firstpass-panel\"] .fp-steps li') !== null",
+                   "the first-pass panel lists no steps (waited 15 s)", 15000)
+
     def open_fp_panel(self) -> str:
         btn = self.pg.locator('[data-testid="firstpass-button"]')
         need(btn.is_visible(), "no visible first-pass control in the header")
         btn.click()
         self.sel('[data-testid="firstpass-panel"]', "one click on the first-pass control opened no panel", 5000)
-        self.until("document.querySelector('[data-testid=\"firstpass-panel\"] .fp-steps li') !== null",
-                   "the first-pass panel lists no steps", 15000)
+        # Since wave 24 START the panel leads with plain words (what it will do, how long, that
+        # nothing changes until accepted) and keeps the steps, the models and the cost under
+        # "Details". A person who wants the steps opens Details; so does this.
+        self.until("document.querySelector('[data-testid=\"firstpass-plain\"] li') !== null",
+                   "the first-pass panel says in plain words nothing of what it will run", 15000)
+        self.plain_words = self.pg.locator('[data-testid="firstpass-plain"]').inner_text()
+        self.show_fp_steps()
         return self.pg.locator('[data-testid="firstpass-panel"]').inner_text()
 
     def accept_proposal(self, timeout=120000) -> list[dict]:
@@ -1192,6 +1207,13 @@ class Journey:
                 need(word in text, f'the panel does not say "{word}": {text[:160]!r}')
             run = pg.locator('[data-testid="firstpass-run"]')
             need(run.is_visible() and run.is_enabled(), "the panel's Run button is not usable")
+            # before anything runs the board says, in plain words, what it will run, and that
+            # it changes nothing until the proposal is accepted (the check this step always made)
+            plain = getattr(self, "plain_words", "")
+            need("Listens" in plain and "Looks at" in plain and "rough cut" in plain,
+                 f"the plain words do not say what the pass will run: {plain[:200]!r}")
+            need("changes until you accept" in plain,
+                 f"the plain words do not promise that nothing changes unasked: {plain[:200]!r}")
             need(run.inner_text().strip() == "Run first pass",
                  f"the Run button reads {run.inner_text().strip()!r}")
 
@@ -1671,8 +1693,7 @@ class Journey:
                 F["new_clips_offer"] = line
                 pg.locator('[data-testid="firstpass-new-clips-go"]').click()
                 self.sel('[data-testid="firstpass-panel"]', "the offer's Re-run first pass… opened no panel", 5000)
-                self.until("document.querySelector('[data-testid=\"firstpass-panel\"] .fp-steps li') !== null",
-                           "the first-pass panel lists no steps", 15000)
+                self.show_fp_steps()
                 text = pg.locator('[data-testid="firstpass-panel"]').inner_text()
                 listed = pg.locator('[data-testid="firstpass-new-list"]')
                 need(listed.count() == 1 and all(Path(c).stem in listed.inner_text() for c in new),

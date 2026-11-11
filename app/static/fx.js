@@ -1094,7 +1094,9 @@
       ? ` <button class="fxlink" data-act="moveplace" title="move it, by hand, to the ${esc(WANT_WORDS(e.wants))} — no model is asked">Move it to the ${esc(WANT_WORDS(e.wants))}</button>` : '';
     const fit = [...kinds].some((k) => k !== 'place')
       ? ` <button class="fxlink" data-act="fit" title="shrink and move it, by hand, until the words are inside the safe area — no model is asked">Fit to frame</button>` : '';
-    return `<div class="fxcheck bad">✗ ${esc(BOUNDS_WORDS[p.kind] || 'the words are not inside the frame')}${where}${extra}${move}${fit}</div>`;
+    // the words may be cut short with an ellipsis; the action beside them never is (a Fit to frame the
+    // line clipped away was a button nobody could reach in a narrow inspector)
+    return `<div class="fxcheck bad"><span class="fxmsg">✗ ${esc(BOUNDS_WORDS[p.kind] || 'the words are not inside the frame')}${where}${extra}</span>${move}${fit}</div>`;
   }
   function checkLine(e) {
     if (e.status === 'removed') return '';

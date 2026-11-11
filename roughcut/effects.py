@@ -96,10 +96,17 @@ def integrated_lufs(path: Path) -> float | None:
     for line in r.stderr.splitlines():
         if "I:" in line and "LUFS" in line:
             try:
-                return float(line.split("I:")[1].split("LUFS")[0])
+                v = float(line.split("I:")[1].split("LUFS")[0])
             except ValueError:
                 return None
+            return v if math.isfinite(v) else None      # a silent track is -inf: no figure, not a bad one
     return None
+
+
+def _finite(v: float) -> float | None:
+    """A silent film measures -inf dBFS; JSON cannot carry that, and 'no figure' is the
+    truthful report (callers already treat None as 'not measured')."""
+    return v if math.isfinite(v) else None
 
 
 def measure_loudness(path: Path) -> tuple[float | None, float | None]:
@@ -113,14 +120,14 @@ def measure_loudness(path: Path) -> tuple[float | None, float | None]:
         t = line.strip()
         if t.startswith("I:") and "LUFS" in t:
             try:
-                lufs = float(t[2:].split("LUFS")[0])
+                lufs = _finite(float(t[2:].split("LUFS")[0]))
             except ValueError:
                 pass
         elif t.startswith("True peak"):
             in_peak = True
         elif in_peak and t.startswith("Peak:") and "dBFS" in t:
             try:
-                peak = float(t[5:].split("dBFS")[0])
+                peak = _finite(float(t[5:].split("dBFS")[0]))
             except ValueError:
                 pass
             in_peak = False

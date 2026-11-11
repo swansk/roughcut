@@ -16,6 +16,10 @@ same commit. Releases move entries into a dated version section.
 
 ### Fixed
 docs: loop State, the full gate on a49e979 is red (23 broken, journey step 4) and wave 26's two GATEFIX lanes
+Fixed: the title card's check line keeps its Fit to frame / Move it action whole at the right (its words take the ellipsis); in a narrow inspector the button was clipped away, and clicking it scrolled the panel and moved the hand fields
+Fixed: the journey's first-pass step reads the panel as a person now does — the plain words first (what it will run, that nothing changes until accepted), then Details for the steps — and checks both
+Tests: the assist's price tests pin the plan's one wording (hover is 'free on your plan', the API estimate is api_note) and an API backend test keeps proving it says API
+Fixed: a silent film's export no longer answers 500 — its true peak measures -inf dBFS, which JSON cannot carry, so the figure is now 'not measured' and the export finishes
 - Karl's try-list rewritten for the build after round two (seven asks, six trades to decide).
 - Loop State after round two of the editors; the rubric log names three behaviours that changed against earlier verdicts (insert past the end, selection and playhead, the AI looking by default).
 - Tests: the Find drag test checks the row that names its clip (Find's ranking and windows changed with wave 25 FIND2).

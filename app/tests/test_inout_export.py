@@ -467,3 +467,23 @@ def test_an_in_out_export_at_59_94_starts_on_the_ins_own_frame(page, proj):
     v = _video(film)
     assert v["r_frame_rate"] == NTSC60 and int(v["nb_read_frames"]) == 58, v
     assert _which_frame(film, src, 2) == 2
+
+
+def test_a_silent_film_measures_no_figure_not_minus_infinity(tmp_path):
+    """A film with no sound has a true peak of -inf dBFS. The export job's status, the
+    render record and the versions list are JSON, which cannot carry it: the figure is
+    'not measured' (None), so a silent export finishes and says so truthfully."""
+    import math
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from roughcut import effects
+    silent = tmp_path / "silent.wav"
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-nostdin", "-f", "lavfi", "-i",
+                    "anullsrc=r=48000:cl=stereo", "-t", "2", str(silent)], check=True)
+    lufs, tpk = effects.measure_loudness(silent)
+    assert tpk is None or math.isfinite(tpk)
+    assert lufs is None or math.isfinite(lufs)
+    assert tpk is None, "a silent file has no true peak to report"
+    json.dumps({"lufs": lufs, "true_peak_dbtp": tpk}, allow_nan=False)
+    v = effects.integrated_lufs(silent)
+    assert v is None or math.isfinite(v)

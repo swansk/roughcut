@@ -157,3 +157,7 @@
 #fx .fxcheck { height: 20px; line-height: 20px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 #fx .fxhandmsg { display: inline-block; min-height: 16px; }
 #fx .fxreads { height: 18px; line-height: 18px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+/* the line's words give way (ellipsis); its actions keep their place at the right, whole */
+#fx .fxcheck { display: flex; align-items: center; gap: 4px; }
+#fx .fxcheck .fxmsg { flex: 0 1 auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#fx .fxcheck button.fxlink { flex: none; padding: 0 2px; line-height: 20px; white-space: nowrap; }
