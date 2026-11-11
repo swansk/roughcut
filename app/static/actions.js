@@ -693,9 +693,23 @@
     return `<span class="air-cost" data-testid="ai-cost" title="${esc(hover)}">${esc(rcCost.tag(cost.usd, p))}</span>`;
   }
 
+  /* The by-hand edits a take_back of `n` AI changes would also undo (they sit above the n-th AI entry on
+   * the undo stack), by their labels: nothing the editor did goes unnamed. */
+  function handSince(n) {
+    const t = TL();
+    const labels = t && typeof t.undoLabels === 'function' ? t.undoLabels() : [];
+    let seen = 0, at = -1;
+    for (let i = labels.length - 1; i >= 0; i -= 1) {
+      if (/^(AI|proposal)/.test(labels[i]) && (seen += 1) === n) { at = i; break; }
+    }
+    return at < 0 ? [] : labels.slice(at).filter((l) => !/^(AI|proposal)/.test(l));
+  }
+  const handWords = (hand) => (hand.length
+    ? ` — and ${hand.length} edit${hand.length === 1 ? '' : 's'} you made by hand since: ${[...new Set(hand)].join(', ')}` : '');
+
   function rowHtml(op, i) {
     const fam = FAMILY[op.op] || 'timeline';
-    const line = named(R.lines[i] || describe(op));
+    const line = named(R.lines[i] || describe(op)) + (op.op === 'take_back' ? handWords(handSince(Number(op.n) || 1)) : '');
     const block = R.blocked.has(i) ? named(R.blocked.get(i)) : undefined;
     const on = !!R.verdict[i] && !block;
     const shows = CUT_OPS.has(op.op) ? 'shown as the ghost lane under V1 until you accept'
@@ -1312,6 +1326,7 @@
     review,
     describe,
     label: (ops) => labelFor(Array.isArray(ops) ? ops : []),
+    takeBackHand: (n) => handWords(handSince(n)),
     accept,
     reject,
     close: closeQuiet,

@@ -237,3 +237,57 @@ def test_a_look_that_confirmed_a_shot_updates_its_certainty_chip(board):
     segs = [{"id": "g1", "clip": "CLIP_A.MP4", "in": 0.0, "out": 4.0}, {"id": "g2", "clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0}]
     assert assist.clean_confirmed([{"shot": 1, "what": "x"}, {"shot": 7, "what": "y"}, {"shot": 2}], segs) == [
         {"clip": "CLIP_A.MP4", "in": 0.0, "out": 4.0, "what": "x"}]
+
+
+# ---------------------------------------------------------------- a description is read whole (FINDER-08)
+
+LONG = ("Friends sit at a lavender bar counter in an airport concourse: a man in a white sweater with a navy "
+        "mountain pattern, a man in a blue tee, and a man in glasses. The clip is a hand-held phone shot that "
+        "pans left to right and ends on the departures board showing the 14:05 flight to Denver.")
+
+
+def _clip(desc, by="model", said="word " * 120):
+    return {"duration": 30.0, "transcript": [{"text": said}],
+            "visual": {"description": desc, "description_by": by, "moments": [{"t": 1.0, "what": "a man laughs"}]}}
+
+
+def test_a_clips_description_comes_first_and_whole_and_the_words_are_trimmed_first():
+    line = assist.clips_block({"A.MP4": _clip(LONG)})
+    assert line.index("described:") < line.index("says:") < line.index("moments:")
+    assert LONG in line and "14:05 flight to Denver." in line
+    said = line.split("says: “")[1].split("”")[0]
+    assert said.endswith("…") and len(said) <= assist.SAID_MAX
+
+
+def test_the_editors_own_description_is_marked_and_kept_longer_than_the_indexs():
+    mine = LONG + " " + LONG
+    blk = assist.clips_block({"A.MP4": _clip(mine, by="editor"), "B.MP4": _clip(mine, by="index")})
+    a, b = blk.splitlines()
+    assert "EDITOR'S DESCRIPTION: " + mine in a
+    assert "described: " in b and mine not in b and "…" in b          # the index's is bounded, with an ellipsis
+
+
+def test_text_is_never_cut_mid_word_without_an_ellipsis():
+    t = assist.clip_text("alpha beta gamma delta epsilon", 17)
+    assert t.endswith("…") and not t[:-1].endswith("gam") and t == "alpha beta gamma…"
+    assert assist.clip_text("short", 17) == "short"
+
+
+def test_a_full_inventory_stays_in_budget_and_trims_the_words_before_the_descriptions():
+    clips = {f"C{i:02d}.MP4": _clip(LONG) for i in range(16)}
+    blk = assist.clips_block(clips)
+    assert len(blk) <= assist.CLIPS_BLOCK_MAX
+    assert blk.count("14:05 flight") == 16                           # the descriptions survive whole
+    assert all(x.count("…") >= 1 for x in blk.splitlines())          # and it was the words that were trimmed
+    huge = assist.clips_block({f"C{i:03d}.MP4": _clip(LONG) for i in range(200)})
+    assert len(huge) <= assist.CLIPS_BLOCK_MAX + 2000 and "more clips:" in huge
+
+
+def test_the_prompt_says_whose_description_outranks(board):
+    c, _ = board
+    m = Scripted({"kind": "answer", "text": "x"})
+    inference.set_backend(m)
+    ask(c, "anything")
+    p = last_prompt(m)
+    assert "EDITOR'S DESCRIPTION was written or corrected by the editor: it outranks" in p
+    assert "never say a description is cut off" in p

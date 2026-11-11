@@ -236,7 +236,7 @@ def test_the_inventory_is_bounded(board):
     block = assist.clips_block(clips)
     assert len(block) <= assist.CLIPS_BLOCK_MAX + 2000
     assert "more clips:" in block
-    assert all(len(line) <= assist.CLIP_LINE_MAX for line in block.splitlines()[:-1])
+    assert all(len(line) <= 700 for line in block.splitlines()[:-1])
 
 
 # ---------------------------------------------------------------- never waits on the model

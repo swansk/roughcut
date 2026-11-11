@@ -3668,7 +3668,7 @@
     if (hooks.touch) hooks.touch();
     paintUndo();
     emit('change', { label: label || `AI: take back ${n}`, kind: 'commit' });
-    return { ok: true, n, labels };
+    return { ok: true, n, labels, hand: labels.filter((l) => !/^(AI|proposal)/.test(l)) };
   }
 
   function redo() {
@@ -4796,6 +4796,7 @@
     byId, indexOf, idAt, dur, speedOf, filmStart, total, shotAt, timeToX, xToTime, eventTime, snapsFor,
     begin, commit, cancel, batch, unrecorded, undo, redo, takeBack, clearHistory, undoDepth: () => undoStack.length,
     mark: markEntry,                // an entry for a change outside the cut (fx.js's Accept)
+    undoLabels: () => undoStack.map((e) => e.label),   // oldest first (the AI names what a take-back would undo)
     nextUndo,                       // {label, tag} of what Ctrl+Z takes back now, or null
     history, restoreHistory, onHistory,   // the stacks kept past a reload (app.js, /api/undo)
     setRange, move, split, remove, insert, setSpeed, insertAt, overwrite,

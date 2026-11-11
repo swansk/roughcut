@@ -977,3 +977,21 @@ def test_take_back_is_one_undo_entry_and_one_undo_cancels_it(live_server, projec
     assert r["stack"][-1] == "AI: change taken back" and r["stack"][:3] == ["AI: trim", "Add marker", "AI: trim"]
     assert r["undone"] == r["two"]                    # one Undo cancels the take-back
     _close(pg)
+
+
+def test_a_take_back_names_the_hand_edits_it_would_also_undo(live_server, project, browser):
+    pg = _open(browser, live_server, project)
+    pg.wait_for_function("document.querySelector('#tl .blk')", timeout=5000)
+    r = pg.evaluate("""() => {
+      const a = tl.state.segs[0].id;
+      tl.batch('AI: trim', () => tl.setRange(a, 0.5, null));
+      tl.batch('ripple delete', () => tl.setRange(a, null, 2.0));
+      tl.batch('trim', () => tl.setRange(a, null, 1.9));
+      tl.batch('AI: trim', () => tl.setRange(a, 0.75, null));
+      return { one: rcActions.takeBackHand(1), two: rcActions.takeBackHand(2), nine: rcActions.takeBackHand(9),
+               labels: tl.undoLabels() };
+    }""")
+    assert r["one"] == "" and r["nine"] == ""
+    assert r["two"] == " — and 2 edits you made by hand since: ripple delete, trim"
+    assert r["labels"] == ["AI: trim", "ripple delete", "trim", "AI: trim"]
+    _close(pg)
