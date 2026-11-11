@@ -7,6 +7,8 @@ free; the editors' second round decides what is added.
 |---|---|---|---|---|
 | EYES | 3. the AI looks before it cuts on what the picture shows | WORDS-08, -12, -13, -17; the `words` editor's "it's free on the plan, so look" | `roughcut/assist.py`, a new `roughcut/look.py` if needed, `app/server.py`: the assist endpoints (DIRECT's region), `app/static/aiprompt.js`; new tests | after DIRECT (`b363a25`) |
 | START | 5. start a film like a person | COLD-01 to -07, -09, -10, -20; CLUMSY-02, -08, -16; FINISH-01, -23 | `app/static/switcher.js`, `app/static/firstpass.js` + css, `app/static/tour.js`, `app/static/import.js`; `app/static/app.js`: the File and Help menus and the empty-timeline card only; `app/server.py`: the `/api/projects*` endpoints (not `orient`, which is FILM's), a folder-listing endpoint, the target-length setter; new tests | `102b725` |
+| HANDS | 8. the hands | HANDS-03, -04, -08, -10, -12, -13, -14, -18; CLUMSY-07, -10, -15, -19, -20; FINISH-12, -13; COLD-14; FINDER-18, -19 | `app/static/timeline-keys.js`, `app/static/timeline-trim.js`, `app/static/timeline.js` (not the undo stacks or their storage: SAFE's), `app/static/effects.js` (control focus only); `app/static/app.js`: menu key handling, the timecode fields, the Source and Program transport rows; css for those; new tests | `f94707e` |
+| DELIVER | 7. what a delivery needs | FINISH-02, -03, -15, -21, -24, -25, -26; WORDS-16; FINDER-17; COLD-20 is START's | `app/static/export.js` + css; `app/static/app.js`: the Audio tab's music bed only; `app/server.py`: the export job endpoints and the assets / music endpoints; `roughcut/effects.py` `add_music` only if needed; new tests | `f94707e` |
 
 ## What done looks like
 
@@ -46,4 +48,37 @@ only under Details. (e) The tour's first step says how to start your own film an
 cut; Help has "Start a new film" and "What the first pass does". (f) The Export tab's Download button is reachable at
 1536x864 and 1280x720 (COLD-20). Tests on the fixture with the fake backend; a real cold start on the Copper folder
 with a fresh work dir in your scratch to see it end to end (one first pass: about 60 calls on the plan).
+
+**HANDS.** A professional's keys never do something they did not ask for, and the basics an editor reaches for are
+there. (a) One focus rule: after a choice in any panel control (a dropdown, a slider let go, a checkbox) the keys are
+the timeline's again; while a menu is open, editing keys do nothing to the cut (Delete with File open removed a shot:
+CLUMSY-20, re-run live by the lead); an editing key never changes a form control's value by accident (after choosing
+½× the next Home made it ¼× and three Downs made it 1×: HANDS-14, re-run live); Enter in a dropdown does not start
+playback (FINISH-13) and cannot leave a "this shot only" play mode stuck (HANDS-08). (b) Copy, cut and paste of
+timeline shots (Ctrl+C / Ctrl+X / Ctrl+V at the playhead, with what Edit says and one undo each); until a key exists,
+pressing it says so in a line instead of doing nothing (HANDS-10: a silent Ctrl+V made the next Ctrl+Z undo something
+older). (c) A timecode can be typed: click the timeline's or the Program's timecode, type `40.`, `1:05`,
+`00:00:40:00` or `+2.`, Enter jumps, Escape cancels, past the end says so (four editors asked). (d) Transport rows do
+not move under the pointer: Play, Mark In / Out, Insert and a job's Stop × keep their place when a label beside them
+changes length (three editors mis-clicked). (e) Small expectations, each verified against the finding's steps first:
+double-click on a timeline clip opens it in the Source monitor at that frame (HANDS-03); Insert from Source leaves the
+playhead after the inserted shot (FINDER-19); J K L drive the Source monitor when it has the focus (HANDS-04); Ctrl+S
+answers "saved: Roughcut saves as you go" (CLUMSY-07); Ctrl+Shift+D at the film's first frame is a fade in, not a
+dissolve on the first cut (HANDS-18); targeting V2 for a source edit does not also write V1 and A1 (HANDS-12).
+(f) If time allows, a split edit: Alt-drag an audio edge moves that edge alone, in sync, for a J or L cut (HANDS-13).
+Say plainly what of (e) and (f) you did not reach. Tests on the fixture; no model calls.
+
+**DELIVER.** (a) Music can be brought in from the board: the Audio tab's music bed has "Add music…" (a file from this
+computer through the browser's picker, and a file already on the board's machine by path), the track lands in the
+project's own music folder (never the repo's `assets/`), shows in the list at once, and "add music that fits and keep
+it under the talking" in the prompt box then has something to use; the empty state no longer tells the editor to drop
+a file into a server folder (FINISH-02, WORDS-16). (b) An export runs in the background: the dialog can be put away
+and the board used while it renders (FINISH-21: 21 minutes locked for a 4K master), the header pill shows progress and
+a time left that does not run out before the export does (FINISH-24), cancel stays clean, and an edit made during an
+export does not change the export in flight (say so in the pill). (c) Small truths in the dialog: the Export button's
+tooltip names the file it will really write (FINISH-26), re-using a name asks or says it will become "-2" before, not
+after (FINISH-25), and the dialog says the audio it writes (codec, bitrate, the -1 dBTP limiter that wave 23 added)
+(FINISH-15). (d) The `.WAV` beside each GoPro file: say in the Index or the clip's audio info whether it is used; if
+it is not, say "camera sound (a .WAV with the same name is beside it, not used)" (FINDER-17). Using it is not this
+wave. A vertical 9:16 sequence is its own lane after TITLE lands. Tests on the fixture; no model calls.
 
