@@ -3596,6 +3596,32 @@
     return true;
   }
 
+  /* The AI's "put it back" (assist op take_back): the cut as it was before the `n`th AI entry from
+   * the top (an entry whose label starts "AI"), whatever by-hand entries sit above it. It is ONE new
+   * entry on top of the stack, so one Undo cancels it; the entries it went back past stay below. */
+  function takeBack(n, label) {
+    if (pending) return { ok: false, why: 'another edit is in progress' };
+    let seen = 0, at = -1;
+    for (let i = undoStack.length - 1; i >= 0; i -= 1) {
+      if (/^(AI|proposal)/.test(undoStack[i].label) && (seen += 1) === n) { at = i; break; }
+    }
+    if (at < 0) return { ok: false, why: `only ${seen} AI change${seen === 1 ? '' : 's'} are on the undo list` };
+    unrec = null;
+    const was = total(), before = snapshot();
+    const labels = undoStack.slice(at).map((e) => e.label);
+    restore(undoStack[at].before);
+    const after = snapshot();
+    undoStack.push({ label: label || `AI: take back ${n}`, before, after });
+    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+    redoStack.length = 0;
+    if (hooks.render) hooks.render();
+    headBack(was);
+    if (hooks.touch) hooks.touch();
+    paintUndo();
+    emit('change', { label: label || `AI: take back ${n}`, kind: 'commit' });
+    return { ok: true, n, labels };
+  }
+
   function redo() {
     unrec = null;
     const e = redoStack.pop();
@@ -4684,7 +4710,7 @@
   const tl = {
     state, el, mount, render, on,
     byId, indexOf, idAt, dur, speedOf, filmStart, total, shotAt, timeToX, xToTime, eventTime, snapsFor,
-    begin, commit, cancel, batch, unrecorded, undo, redo, clearHistory,
+    begin, commit, cancel, batch, unrecorded, undo, redo, takeBack, clearHistory,
     mark: markEntry,                // an entry for a change outside the cut (fx.js's Accept)
     nextUndo,                       // {label, tag} of what Ctrl+Z takes back now, or null
     history, restoreHistory, onHistory,   // the stacks kept past a reload (app.js, /api/undo)

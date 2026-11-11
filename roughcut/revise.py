@@ -674,6 +674,25 @@ PLAN_GUIDANCE = (
     "editor set.")
 
 
+_LEN_SAID = re.compile(r"\b(about|now|lands at|comes to|comes out at|runs|totals?|is|at|around|roughly|under|over)\s+"
+                       r"(\d+(?:\.\d+)?)\s?(s|sec|seconds)\b")
+
+
+def true_length_words(notes: str, total: float) -> str:
+    """The model's notes say how long the cut is before its cut points were snapped to speech; the
+    header says how long it is after. One number: where a sentence of the notes (before the
+    polish line, which already has both) gives a length near the true one but not it, say the
+    true one (WORDS-03: 1:18.4 in the header, "about 74.7s" in the notes)."""
+    head, sep, tail = (notes or "").partition("\n\nBoundary polish")
+
+    def rep(m: re.Match) -> str:
+        v = float(m.group(2))
+        if abs(v - total) >= 0.5 and abs(v - total) <= max(8.0, total * 0.15) and v > total * 0.5:
+            return f"{m.group(1)} {total:.1f} s"
+        return m.group(0)
+    return _LEN_SAID.sub(rep, head) + sep + tail
+
+
 def note_section(note: str, heading: str = "The editor's note") -> str:
     """The prompt's section for the note: the editor's words, then the plan under its own
     label when there is one."""

@@ -3389,6 +3389,9 @@ def _ask_run(entry, job: str, segments: list[dict], clips: dict, story: str, not
                                if isinstance(v, dict)})
     if finish is not None:
         plan = finish(plan)
+    if plan.get("notes") and plan.get("segments"):     # one length: the header's (WORDS-03)
+        plan["notes"] = revise.true_length_words(
+            plan["notes"], sum(actionsmod.dur(x) for x in plan["segments"]))
     # The notes are held to the diff before anyone reads them (judge verdict 1, punch
     # 10): a "kept … unchanged" about a shot whose range moved is flagged and corrected.
     plan = revise.check_notes(plan, segments)
@@ -4848,12 +4851,46 @@ def asks_recent(n: int = ASK_RECENT_N) -> list[dict]:
         cut = rec.get("cut")
         rows.append({
             "job": rec.get("job"), "created": rec.get("created"),
-            "note": str(rec.get("note") or "")[:160],
+            "note": revise.split_note(rec.get("note") or "")[0][:160],
             "shots": len(plan["segments"]), "colour_only": bool(plan.get("unchanged")),
             "status": status, "cut": Path(cut).name.removesuffix(CUT_SUFFIX) if cut else None,
             "this_cut": _ask_for_this_cut(rec),
             "replaced_by": (rec.get("replaced") or {}).get("by"),
             "partial": bool(((rec.get("answered") or {}).get("partial")))})
+        if len(rows) >= n:
+            break
+    more = _assist_recent(n)            # the prompt box's own proposals, beside the re-cuts
+    if more:
+        rows = sorted(rows + more, key=lambda r: -(r.get("created") or 0))
+    return rows[:n]
+
+
+def _assist_recent(n: int) -> list[dict]:
+    """The prompt box's edit proposals of this cut as rows of the Assistant's list: the editor's
+    words, how many edits, and what became of them. They cannot be opened again (`reopen`
+    false): their edits were reviewed in place."""
+    cut = assist_cut()
+    rows = []
+    try:
+        files = sorted(assist_home().glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)[:60]
+    except OSError:
+        return []
+    for path in files:
+        try:
+            rec = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        res = rec.get("result") or {}
+        if rec.get("status") != "done" or rec.get("cut") != cut or res.get("kind") != "ops" or not res.get("ops"):
+            continue
+        ans = rec.get("answer")
+        took, left = len((ans or {}).get("accepted") or []), len((ans or {}).get("rejected") or [])
+        status = ("waiting" if ans is None and not rows else "replaced" if ans is None
+                  else "accepted" if took and not left else "partial" if took else "discarded")
+        rows.append({"job": rec.get("job"), "created": rec.get("created"), "note": str(rec.get("text") or "")[:160],
+                     "shots": None, "edits": len(res["ops"]), "colour_only": False, "status": status,
+                     "cut": cut, "this_cut": True, "reopen": False, "replaced_by": None,
+                     "partial": status == "partial"})
         if len(rows) >= n:
             break
     return rows
@@ -5483,6 +5520,15 @@ def answer_ask(body: dict) -> dict:
         note_rejections(rec)                      # verdict 4: a rejection is remembered
     if answer == "accept":
         MEDIA["kick"].set()     # verdict 8: an idle media walk looks at the accepted cut now
+        try:                    # DIRECT2: the AI's complete list of changes on this cut
+            words, _ = revise.split_note(rec.get("note") or "")
+            plan = rec.get("plan") or {}
+            n = len(plan.get("segments") or [])
+            said = assistmod.fit(str(plan.get("notes") or ""), 200)
+            assist_note_accept(words, f"A new cut of {n} shots" + (f": {said}" if said else ""),
+                               job=str(rec.get("job") or ""), label="proposal")
+        except Exception as exc:  # noqa: BLE001 — the ledger never costs an Accept
+            print(f"  !! assist ledger (accept): {exc}", flush=True)
     return {"ok": True, "job": rec.get("job")}
 
 
@@ -5787,7 +5833,23 @@ def _fp_by(rows: list[dict]) -> list[dict]:
         cuts = _AI_CUTS["cuts"]
     except (OSError, KeyError, TypeError):
         cuts = {}
-    return fpmod.mark_by(rows, cuts)
+    rows = fpmod.mark_by(rows, cuts)
+    # a shot as an accepted proposal (an Ask re-cut, not an op list) wrote it is the AI's too: "8 shots
+    # cut by hand" was said of a cut nobody had touched (WORDS-09). Only while it still has that range.
+    try:
+        written: dict[str, tuple[float, float]] = {}
+        for rec in _ask_records():
+            if (rec.get("answered") or {}).get("answer") == "accept":
+                for sg in (rec.get("plan") or {}).get("segments") or []:
+                    if isinstance(sg, dict) and sg.get("id"):
+                        written[str(sg["id"])] = (float(sg["in"]), float(sg["out"]))
+        for r in rows:
+            w = written.get(str(r.get("id")))
+            if r.get("by") == "hand" and w and abs(float(r.get("in")) - w[0]) < 0.02 and abs(float(r.get("out")) - w[1]) < 0.02:
+                r["by"] = "ai"
+    except (OSError, KeyError, TypeError, ValueError):
+        pass
+    return rows
 
 
 def _fp_names(rows: list[dict]) -> list[dict]:
@@ -6356,7 +6418,16 @@ async def api_certainty(request: Request) -> JSONResponse:
             m = flowmod.shot_moment(covs.get(s.get("clip"), []), float(s["in"]), float(s["out"]))
         except (KeyError, TypeError, ValueError):
             m = None
-        out.append(flowmod.certainty(m) if m else None)
+        c = flowmod.certainty(m) if m else None
+        try:        # the AI looked at this shot's frames and they agreed: the chip says so (DIRECT2, WORDS-04)
+            seen = look_confirmed_for(s.get("clip"), float(s["in"]), float(s["out"])) if c else None
+        except (KeyError, TypeError, ValueError):
+            seen = None
+        if c and seen and c.get("level") in ("unchecked", "unsupported", "once", "heard"):
+            when = time.strftime("%H:%M", time.localtime(seen.get("at") or 0))
+            c = {**flowmod.certainty({**m, "certainty": "claude", "status": "confirmed"}),
+                 "title": f"The AI looked at this shot's frames at {when} and saw: {seen['what']}"}
+        out.append(c)
     return JSONResponse({"shots": out})
 
 
@@ -17692,7 +17763,12 @@ def assist_state(payload: dict | None = None) -> dict:
     payload = payload if payload is not None else project_payload()
     presets = {k: v["label"] for k, v in EXPORT_PRESETS.items()}
     looks = [k for k, v in looks_library().items() if v.get("kind") != "broken"]
-    return actionsmod.state_from(payload, looks=looks, presets=presets)
+    st = actionsmod.state_from(payload, looks=looks, presets=presets)
+    try:
+        st["changes"] = [c for c in reversed(assist_ledger(assist_cut())) if c["status"] == "in"]
+    except Exception as exc:  # noqa: BLE001 — a ledger that cannot be read costs the AI its take_back, never the ask
+        print(f"  !! assist ledger: {exc}", flush=True)
+    return st
 
 
 def clean_scope(raw) -> dict:
@@ -17762,12 +17838,89 @@ def assist_cut() -> str:
         return ""
 
 
-def assist_note_event(kind: str, label: str) -> None:
-    """One line on the cut's record: the editor undid or redid something (the prompt box
-    posts it). Appended under this bin, tagged with this cut."""
-    row = {"at": time.time(), "cut": assist_cut(), "kind": kind, "label": str(label or "")[:120]}
+def assist_note_event(kind: str, label: str, **extra) -> None:
+    """One line on the cut's record, under this bin and tagged with this cut: the editor undid
+    or redid something (the prompt box posts it), or accepted a change (`kind` accept, with
+    what it was). The ledger (`assist_ledger`) is replayed from these lines."""
+    row = {"at": time.time(), "cut": assist_cut(), "kind": kind, "label": str(label or "")[:120], **extra}
     with ASSIST_LOCK, (assist_home() / ASSIST_EVENTS).open("a", encoding="utf-8") as f:
         f.write(json.dumps(row) + "\n")
+
+
+def assist_note_accept(text: str, what: str, lines: list[str] | None = None, *, job: str = "",
+                       take_back: int = 0, label: str = "") -> None:
+    """A change the editor accepted on this cut: their words, what it did, in a line."""
+    assist_note_event("accept", label, job=job, text=str(text or "")[:300], what=str(what or "")[:240],
+                      lines=[str(x)[:160] for x in (lines or [])[:6]], take_back=int(take_back or 0))
+
+
+def _read_events(cut: str) -> list[dict]:
+    out: list[dict] = []
+    try:
+        for ln in (assist_home() / ASSIST_EVENTS).read_text(encoding="utf-8").splitlines():
+            try:
+                ev = json.loads(ln)
+            except ValueError:
+                continue
+            if isinstance(ev, dict) and ev.get("cut") == cut and cut:
+                out.append(ev)
+    except OSError:
+        pass
+    return out
+
+
+def assist_ledger(cut: str) -> list[dict]:
+    """EVERY change accepted on this cut this session, oldest first, each `{at, text, what,
+    status}` with status `in` (it is in the cut), `undone` or `taken back`. Replayed from the
+    cut's event lines the way the board's own undo stack moves: an Undo of an "AI" entry
+    puts its change out, a Redo back in; a take_back marks the n latest changes still in the
+    cut and is itself a change (undoing it brings those back). Complete, unlike the
+    conversation, which is bounded (WORDS-15: "only two of your requests led to changes")."""
+    entries: list[dict] = []
+    stack: list[dict] = []
+    redo: list[dict] = []
+    for ev in _read_events(cut):
+        kind = ev.get("kind")
+        if kind == "accept":
+            e = {"at": ev.get("at"), "text": ev.get("text") or "", "what": ev.get("what") or "",
+                 "lines": ev.get("lines") or [], "status": "in", "targets": []}
+            n = int(ev.get("take_back") or 0)
+            if n:
+                live = [x for x in entries if x["status"] == "in" and not x["targets"]]
+                e["targets"] = live[-n:]
+                for t in e["targets"]:
+                    t["status"] = "taken back"
+            entries.append(e)
+            stack.append(e)
+            redo.clear()
+        elif kind in ("undo", "redo") and re.match(r"(AI|proposal)", str(ev.get("label") or "")):
+            if kind == "undo" and stack:
+                e = stack.pop()
+                redo.append(e)
+                if e["targets"]:
+                    for t in e["targets"]:
+                        t["status"] = "in"
+                e["status"] = "undone"
+            elif kind == "redo" and redo:
+                e = redo.pop()
+                stack.append(e)
+                e["status"] = "in"
+                for t in e["targets"]:
+                    t["status"] = "taken back"
+    return [{k: v for k, v in e.items() if k != "targets"} for e in entries]
+
+
+def ledger_lines(cut: str, limit: int = 40) -> list[str]:
+    """The ledger as the next ask reads it: numbered, oldest first, newest `limit` in full."""
+    rows = assist_ledger(cut)
+    out = []
+    for i, e in enumerate(rows, 1):
+        when = time.strftime("%H:%M", time.localtime(e.get("at") or 0))
+        said = f" (they asked: “{e['text']}”)" if e.get("text") else ""
+        out.append(f"{i}. [{when}] {e.get('what') or 'a change'}{said} — {e['status']}")
+    if len(out) > limit:
+        out = [f"({len(out) - limit} older changes not listed; they are counted in the numbers below)"] + out[-limit:]
+    return out
 
 
 def _turn_text(rec: dict, plan_state: Callable[[str], str] | None = None) -> str:
@@ -17802,8 +17955,23 @@ def _turn_text(rec: dict, plan_state: Callable[[str], str] | None = None) -> str
 
 
 def assist_history(cut: str, budget: int = assistmod.HISTORY_CHARS) -> list[str]:
+    return assist_history_full(cut, budget)[0]
+
+
+def assist_context(cut: str) -> dict:
+    """What an ask carries of this cut's past: `history` (the bounded conversation), `changes`
+    (the complete numbered ledger of accepted changes) and `horizon` (when the conversation
+    starts, said only when it is shorter than the session)."""
+    lines, meta = assist_history_full(cut, assistmod.HISTORY_CHARS)
+    return {"history": lines, "changes": ledger_lines(cut), "horizon": meta.get("horizon", ""),
+            "live": len([e for e in assist_ledger(cut) if e["status"] == "in"])}
+
+
+def assist_history_full(cut: str, budget: int = assistmod.HISTORY_CHARS) -> tuple[list[str], dict]:
     """The earlier turns of THIS bin's THIS cut, oldest first, within `budget` characters
-    (newest kept first). Another bin's or another cut's turns are never in it."""
+    (newest kept first), and `{horizon}`: the time the oldest kept turn is from when older
+    ones were dropped or the session began earlier than the record. Another bin's or
+    another cut's turns are never in it."""
     rows: list[tuple[float, str]] = []
     home = assist_home()
 
@@ -17829,7 +17997,7 @@ def assist_history(cut: str, budget: int = assistmod.HISTORY_CHARS) -> list[str]
                 ev = json.loads(ln)
             except ValueError:
                 continue
-            if ev.get("cut") == cut and cut:
+            if ev.get("cut") == cut and cut and ev.get("kind") != "accept":
                 when = time.strftime("%H:%M", time.localtime(ev.get("at") or 0))
                 rows.append((float(ev.get("at") or 0),
                              f"[{when}] The editor chose {ev.get('kind')}: {ev.get('label') or 'the last change'}"))
@@ -17838,13 +18006,52 @@ def assist_history(cut: str, budget: int = assistmod.HISTORY_CHARS) -> list[str]
     rows.sort(key=lambda r: r[0])
     kept: list[str] = []
     used = 0
+    dropped = 0
     for _, text in reversed(rows):
         text = text if len(text) <= assistmod.TURN_CHARS else assistmod.fit(text, assistmod.TURN_CHARS) + " …"
         if used + len(text) > budget:
+            dropped += 1
             break
         kept.append(text)
         used += len(text)
-    return list(reversed(kept))
+    dropped = len(rows) - len(kept)
+    meta: dict = {}
+    first_change = next(iter(assist_ledger(cut)), None)
+    if kept and (dropped or (first_change and (first_change.get("at") or 0) < rows[len(rows) - len(kept)][0] - 1)):
+        meta["horizon"] = time.strftime("%H:%M", time.localtime(rows[len(rows) - len(kept)][0]))
+    return list(reversed(kept)), meta
+
+
+def look_confirm_path() -> Path:
+    return STATE["work"] / "looks" / STATE["footage"].name / "confirmed.json"
+
+
+def look_confirm_load() -> list[dict]:
+    try:
+        v = json.loads(look_confirm_path().read_text(encoding="utf-8"))
+        return v if isinstance(v, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def look_confirm_store(items: list[dict]) -> None:
+    """What the AI's look at frames settled about a shot's footage (WORDS-04): the shot's
+    certainty chip then says so instead of "unchecked". Per bin, newest 300 kept."""
+    now = time.time()
+    rows = look_confirm_load() + [{**c, "at": now} for c in items]
+    p = look_confirm_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(rows[-300:]), encoding="utf-8")
+    tmp.replace(p)
+
+
+def look_confirmed_for(clip: str, a: float, b: float) -> dict | None:
+    """The newest look confirmation overlapping [a, b] of `clip`, or None."""
+    for r in reversed(look_confirm_load()):
+        if r.get("clip") == clip and min(b, float(r["out"])) - max(a, float(r["in"])) > 0:
+            return r
+    return None
 
 
 def looks_home(job: str) -> Path:
@@ -17871,6 +18078,8 @@ def _assist_looker(job: str, entry, state: dict):
     def looker(req: dict, prompt: str) -> dict | None:
         if stop():
             raise lookmod.Stopped()
+        entry["look"] = {"stage": "planning", "words": "the frames it asked for", "frames": 0,
+                         "sheets": 0, "cut": 0, "scan": False}
         p = lookmod.plan(state, req)
         entry["look"] = {"stage": "cutting", "words": p["words"], "frames": len(p["frames"]),
                          "sheets": p["sheets"], "capped": p["capped"], "cap": p["cap"], "scan": p["scan"],
@@ -17908,16 +18117,20 @@ def _assist_job(job: str, text: str, scope: dict) -> None:
     try:
         clips, payload = _ask_clips(None, drop_junk=True)
         state = assist_state(payload)
-        history = assist_history(record["cut"])
+        ctx = assist_context(record["cut"])
+        history = ctx["history"]
         entry["cost"] = assistmod.estimate_cost(
             assistmod.build_prompt(text, scope, state, clips, history,
-                                   look_ok=assistmod.look_allowed(text)))
+                                   look_ok=assistmod.look_allowed(text, history), ctx=ctx))
         entry.note("asking the model")
         res = assistmod.run(text, scope, state, clips, history,
-                            looker=_assist_looker(job, entry, state))
+                            looker=_assist_looker(job, entry, state), ctx=ctx)
         if entry.get("state") == "cancelled":
             return                                   # stopped: the answer is not wanted
         if res["kind"] == "plan":
+            want = assistmod.length_asked(text)
+            if want:                                  # "make it 75 seconds": that is the project's target now
+                res["target"] = set_target(want_s=want)
             res["plan_ask"] = _assist_start_ask(res.get("note") or text, text)
     except lookmod.Stopped:
         return                                       # Stop during the look: the job reads cancelled already
@@ -17956,6 +18169,8 @@ def _assist_job(job: str, text: str, scope: dict) -> None:
             return
         record.update(status="done", result=res)
         _assist_write(job, record)
+        if (res.get("looked") or {}).get("confirmed"):
+            look_confirm_store(res["looked"]["confirmed"])
         entry.update(result=res, cost=res.get("cost"))
         entry.finish("done", detail=res.get("summary") or res["kind"])
 
@@ -17990,7 +18205,7 @@ def _assist_view(job: str) -> dict:
     if rec is not None and rec.get("answer"):
         out["answer"] = rec["answer"]
     for k in ("kind", "ops", "lines", "refused", "index", "families", "preview", "plan_ask",
-              "text", "note", "summary", "cost", "from_picture", "from_descriptions", "looked"):
+              "text", "note", "summary", "cost", "from_picture", "from_descriptions", "looked", "target"):
         if k in res:
             out[k] = res[k]
     if out.get("plan_ask") and out["plan_ask"] in ASKS:
@@ -18120,8 +18335,9 @@ def api_assist_price(text: str = "", scope: str = "") -> JSONResponse:
         sc = None
     clips, state = _price_inputs()
     words = text.strip()[:assistmod.TEXT_MAX] or "…"
-    prompt = assistmod.build_prompt(words, clean_scope(sc), state, clips, assist_history(assist_cut()),
-                                    look_ok=assistmod.look_allowed(words))
+    ctx = assist_context(assist_cut())
+    prompt = assistmod.build_prompt(words, clean_scope(sc), state, clips, ctx["history"],
+                                    look_ok=assistmod.look_allowed(words, ctx["history"]), ctx=ctx)
     return JSONResponse(assistmod.estimate_cost(prompt))
 
 
@@ -18179,6 +18395,13 @@ async def api_assist_answer(job: str, request: Request) -> JSONResponse:
         raise HTTPException(400, "an op cannot be both accepted and rejected")
     rec["answer"] = {"accepted": acc, "rejected": rej, "at": time.time()}
     _assist_write(job, rec)
+    if acc and rec.get("cut") == assist_cut():          # the change joins the cut's complete ledger
+        res = rec.get("result") or {}
+        taken = [(res.get("ops") or [])[i] for i in acc if i < len(res.get("ops") or [])]
+        back = next((o.get("n") for o in taken if isinstance(o, dict) and o.get("op") == "take_back"), 0)
+        lines = [x for i, x in enumerate(res.get("lines") or []) if i in acc]
+        assist_note_accept(rec.get("text") or "", res.get("summary") or "; ".join(lines[:2]), lines,
+                           job=job, take_back=back or 0, label=body.get("label") or "")
     return JSONResponse({"ok": True, "answer": rec["answer"]})
 
 

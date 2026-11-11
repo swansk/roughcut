@@ -6424,13 +6424,14 @@ async function paintRecent() {
     const what = r.note ? `“${escapeHtml(r.note.length > 70 ? `${r.note.slice(0, 70)}…` : r.note)}”` : 'first cut';
     const other = r.this_cut ? '' : ` · for the cut “${escapeHtml(r.cut || 'another')}”`;
     const when = r.created ? ago(now - r.created) : '';
-    const open = here ? '' : r.this_cut
+    const open = here || r.reopen === false ? '' : r.this_cut
       ? `<button type="button" class="rr-open" data-job="${escapeHtml(r.job)}" data-testid="recent-open">${r.status === 'waiting' ? 'Open' : 'Open again'}</button>` : '';
     return `<div class="rr" data-job="${escapeHtml(r.job)}" data-status="${here ? 'screen' : r.status}" data-testid="recent-proposal">`
       + `<span class="rr-st">${escapeHtml(status)}</span><span class="rr-what">${what}</span>`
-      + `<span class="hint">${r.colour_only ? 'colour only' : `${r.shots} shots`} · ${escapeHtml(when)}${other}</span>${open}</div>`;
+      + `<span class="hint">${r.colour_only ? 'colour only' : r.edits ? `${r.edits} edit${r.edits === 1 ? '' : 's'}` : `${r.shots} shots`} · ${escapeHtml(when)}${other}</span>${open}</div>`;
   }).join('');
 }
+window.addEventListener('rc:assist-answered', () => setTimeout(paintRecent, 400));   // the prompt box's own proposals are listed too
 document.addEventListener('click', (e) => {
   const b = e.target.closest && e.target.closest('#askRecent .rr-open');
   if (!b) return;
