@@ -265,7 +265,8 @@ def test_an_empty_sequence_draws_its_tracks_behind_the_drop_box(board, project):
     pg.wait_for_timeout(1200)                        # the empty state re-checks each second
     shown = pg.evaluate("""[...document.querySelectorAll('#tlEmpty button')].filter(b => b.getClientRects().length)
         .map(b => b.id || b.className)""")
-    assert shown == ["fp-empty-btn"], shown
+    # (wave 24 START: "New film from a folder…" is the card's first line, not an AI action)
+    assert [x for x in shown if x != "fp-newfilm"] == ["fp-empty-btn"], shown
     shots = os.environ.get("ROUGHCUT_STRUCT_SHOTS")
     if shots:
         Path(shots).mkdir(parents=True, exist_ok=True)

@@ -141,7 +141,7 @@
     if (e.target instanceof Element && e.target.closest('#tl, .screen, .transport, button, a, select, summary')) textAt = -1e9;
   }, true);
 
-  const run = { n: 0, at: -1e9, snap: null, tripped: false };
+  const run = { n: 0, at: -1e9, snap: null, tripped: false, keys: new Set() };
   function snapshot() {
     const g = typeof gradeApi === 'function' ? gradeApi() : null;
     return {
@@ -171,9 +171,11 @@
     const hint = now - textAt < 3000;
     const gap = hint ? 350 : 150, need = hint ? 3 : 8;
     if (now - run.at < gap) run.n += 1;
-    else { run.n = 1; run.snap = snapshot(); run.tripped = false; }
+    else { run.n = 1; run.snap = snapshot(); run.tripped = false; run.keys = new Set(); }
     run.at = now;
-    if (run.n < need) return false;
+    run.keys.add(e.key.toLowerCase());
+    // one key pressed again and again (an editor walking an edge a frame at a time with [ or ]) is not a word
+    if (run.n < need || (!run.tripped && run.keys.size < 2)) return false;
     if (!run.tripped) {
       run.tripped = true;
       putBack(run.snap);

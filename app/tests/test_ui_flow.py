@@ -221,20 +221,21 @@ def test_the_inspector_carries_a_poster_not_a_video_stream(page):
 
 def test_trimming_the_in_point_moves_the_poster_without_one_frame_per_nudge(page):
     """A poster that lags a nudge by a moment is fine; one that fetches a frame on
-    every 0.25 s press is not. (The timeline's block catches up on the same settle,
+    every one-frame press is not. (The timeline's block catches up on the same settle,
     so two requests for the one frame is the ceiling.)"""
     asked: list[str] = []
     page.on("request",
             lambda r: asked.append(r.url) if "/media/poster/" in r.url else None)
     select_shot(page, 0)
     for _ in range(6):
-        page.keyboard.press("]")                   # in +0.25 — the strip has no trim buttons
-    assert page.evaluate("segs[0].in") == pytest.approx(2.5, abs=0.01)
+        page.keyboard.press("]")                   # in +1 frame — the strip has no trim buttons
+    landed = 1.0 + 6 / 24
+    assert page.evaluate("segs[0].in") == pytest.approx(landed, abs=0.01)
     page.wait_for_function(
-        "document.querySelector('#inspector img.poster').src.includes('t=2.50')",
+        "document.querySelector('#inspector img.poster').src.includes('t=1.25')",
         timeout=10000)
     page.wait_for_timeout(400)         # any straggler request would have started by now
-    assert any("t=2.50" in u for u in asked), asked
+    assert any("t=1.25" in u for u in asked), asked
     # (the other shot's own filmstrip poster is fetched when its block first scrolls into view,
     # whenever that lands: it is not the trimmed shot's frame, so only the trimmed clip counts)
     # and it counts frames, not requests: the inspector's, the monitor's rest still and the block
@@ -245,11 +246,16 @@ def test_trimming_the_in_point_moves_the_poster_without_one_frame_per_nudge(page
 
 def test_the_strip_has_no_trim_buttons_and_the_trim_keys_need_a_shot(page):
     """INTAKE M16 decision 5: the four in/out ± buttons are gone — trims are the block's
-    edges and [ ] { }. With nothing selected (the start) a trim key does nothing."""
+    edges and the keys [ ] (in-point) and Alt+[ Alt+] (out-point), a frame a press, Shift five.
+    With nothing selected (the start) a trim key does nothing."""
     before = page.evaluate("JSON.stringify(segs)")
-    page.keyboard.press("}")
+    for key in ("BracketRight", "Alt+BracketRight"):
+        page.keyboard.press(key)
     assert page.evaluate("JSON.stringify(segs)") == before, "nothing selected, nothing trimmed"
     select_shot(page, 0)
+    out0 = page.evaluate("segs[0].out")
+    page.keyboard.press("Alt+BracketRight")
+    assert page.evaluate("segs[0].out") == pytest.approx(out0 + 1 / 24, abs=2e-3), "a selected shot does trim"
     assert page.locator("#inspector button[data-act=in], #inspector button[data-act=out]").count() == 0
     assert page.locator("#inspector .speedrow").count() == 0
 
@@ -257,7 +263,9 @@ def test_the_strip_has_no_trim_buttons_and_the_trim_keys_need_a_shot(page):
 def test_keyboard_trim_matches_button_trim(page):
     select_shot(page, 0)
     before = total_text(page)
-    page.keyboard.press("}")                       # extend out by 0.25
+    out0 = page.evaluate("segs[0].out")
+    page.keyboard.press("Alt+BracketRight")        # extend the out-point one frame
+    assert page.evaluate("segs[0].out") == pytest.approx(out0 + 1 / 24, abs=2e-3)
     after_key = total_text(page)
     assert after_key != before
     page.locator("#undo").click()
@@ -303,16 +311,21 @@ def test_undo_restores_exact_state_after_snap(page):
     assert page.evaluate("JSON.stringify(segs)") == before
 
 
-def test_remove_from_the_inspector_takes_the_shot_out_and_moves_on(page):
-    """remove in the inspector is tl.remove: the shot goes, the one that takes its place
-    is selected, and the inspector shows that one."""
+def test_remove_from_the_inspector_takes_the_shot_out_and_leaves_nothing_selected(page):
+    """remove in the inspector is tl.remove: the shot goes and, as in Premiere, nothing is
+    selected after a delete (HANDS round 3: the board does not hand the selection on, so a
+    later Delete cannot take a shot nobody chose); the inspector falls back to the film's
+    panel, which counts the one shot left, and the remove is one named undo."""
     assert page.locator("#tl .blk").count() == 2
     select_shot(page, 0)
     first_clip = page.locator("#inspector .clip").text_content()
     open_assistant(page)
     page.locator("#inspector button[data-act=del]").click()
     assert page.locator("#tl .blk").count() == 1
-    assert page.locator("#inspector .clip").text_content() != first_clip
+    assert page.evaluate("tl.state.anchor") is None
+    assert page.locator("#inspector .clip").count() == 0
+    assert page.locator("#inspector .film .totals").inner_text().startswith("1 shot")
+    assert first_clip not in page.evaluate("segs[0].clip"), "the other shot is the one left"
     assert page.locator("#undo").get_attribute("title").startswith("undo: remove")
 
 
@@ -331,14 +344,14 @@ def test_edits_reach_the_disk_without_being_asked(page, project):
     page.locator("#story").fill("the milk is the running joke")
     page.evaluate("document.activeElement.blur()")   # the keys are the board's, not the story's
     select_shot(page, 0)
-    page.keyboard.press("}")                       # extend the out point
+    page.keyboard.press("Alt+BracketRight")        # extend the out point one frame (HANDS round 3)
     page.wait_for_function(
         "document.querySelector('#saveState').textContent.startsWith('saved')",
         timeout=8000)
 
     on_disk = json.loads(Path(project["edl"]).read_text(encoding="utf-8"))
     assert on_disk["story"] == "the milk is the running joke"
-    assert on_disk["segments"][0]["out"] == 3.25
+    assert on_disk["segments"][0]["out"] == pytest.approx(3.0 + 1 / 24, abs=1e-3)
 
 
 def test_the_cut_survives_a_reload(page):
@@ -439,9 +452,9 @@ def test_an_empty_timeline_offers_a_first_cut_and_gets_one(page):
     inference.set_backend(Scripted())
     inference.reset_spend()
     try:
-        select_shot(page, 0)
-        page.keyboard.press("x")
-        page.keyboard.press("x")
+        for _ in range(2):         # a delete leaves nothing selected (HANDS round 3): select the next one
+            select_shot(page, 0)
+            page.keyboard.press("x")
         page.wait_for_selector("#tlEmpty .empty")
         assert page.locator("#tl .blk").count() == 0
         assert "No cut yet" in page.locator(".empty").inner_text()
@@ -837,8 +850,12 @@ def test_selecting_a_block_fills_the_shot_strip(page):
     assert insp.locator(".clip").text_content() == "CLIP_B"
     assert "0:00 hello there" in insp.locator(".whybox .lines").first.inner_text()
     assert insp.locator(".lines.seen").is_hidden(), "nothing was seen on this bin"
-    # ↑ goes back to the previous cut, the strip follows and why? is closed again
+    # ↑ moves the playhead to the previous cut and nothing else: the selection is only what
+    # the editor selects (HANDS round 3), so the strip stays on shot 2; selecting shot 1 by a
+    # click fills it in and why? is closed again
     page.keyboard.press("ArrowUp")
+    assert insp.locator(".sname").inner_text() == "Shot 2 · 2.0 s"
+    page.locator("#tl .blk").nth(0).click()
     assert insp.locator(".sname").inner_text() == "Shot 1 · 2.0 s"
     assert insp.locator(".clip").text_content() == "CLIP_A"
     assert insp.locator(".why").text_content() == "first"
@@ -1197,7 +1214,9 @@ def test_the_versions_list_says_which_render_is_the_cut_on_the_board(page, proje
 
     # trim the timeline and the render is no longer what is on the board
     select_shot(page, 0)
-    page.keyboard.press("}")
+    out0 = page.evaluate("segs[0].out")
+    page.keyboard.press("Alt+BracketRight")        # the out-point one frame later
+    assert page.evaluate("segs[0].out") == pytest.approx(out0 + 1 / 24, abs=2e-3)
     assert not page.locator("#filmNewest").is_visible(), \
         "an edited timeline is not the rendered one any more"
     assert page.locator("#filmSince").inner_text().startswith("changed since your last film")
@@ -1259,14 +1278,15 @@ def test_what_the_visual_pass_saw_shows_in_the_inspector_and_in_the_library(page
         assert "lens" not in insp.locator(".warns").inner_text()
         # …until the in-point is trimmed back into it: a warning in plain words, on the
         # shot, with its own fix (INTAKE M16 I16.4)
-        for _ in range(4):
-            page.keyboard.press("[")
+        for _ in range(5):          # five frames a press (HANDS round 3); five keys stay under the typing guard's eight
+            page.keyboard.press("Shift+BracketLeft")
+        assert page.evaluate("segs[tl.indexOf(tl.state.anchor)].in") == pytest.approx(1.5 - 25 / 24, abs=1e-3)
         assert "⚠ 0:00.0–0:00.1 the lens is covered · Trim it out" in insp.locator(".warns").inner_text()
         assert insp.locator(".warns .w", has_text="lens").get_attribute("title") == "lens covered"
         insp.locator("button[data-act=trimbad]").click()
-        assert page.evaluate("segs[sel].clip") == "CLIP_C.MP4"
+        assert page.evaluate("segs[tl.indexOf(tl.state.anchor)].clip") == "CLIP_C.MP4"
         # past the covered lens on the frame grid, never into it: 0.6 -> 15/24 (not 14/24)
-        assert page.evaluate("segs[sel].in") == pytest.approx(0.625, abs=1e-4)
+        assert page.evaluate("segs[tl.indexOf(tl.state.anchor)].in") == pytest.approx(0.625, abs=1e-4)
         assert "lens" not in insp.locator(".warns").inner_text()
     finally:
         sidecar.unlink(missing_ok=True)
@@ -1848,9 +1868,9 @@ def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
         # fixed note is the app's words and must not become the story
         page.fill("#story", "")
         page.evaluate("document.activeElement.blur()")
-        select_shot(page, 0)
-        page.keyboard.press("x")
-        page.keyboard.press("x")
+        for _ in range(2):         # a delete leaves nothing selected (HANDS round 3): select the next one
+            select_shot(page, 0)
+            page.keyboard.press("x")
         page.wait_for_selector("#tlEmpty .empty")
         assert not page.locator("#askPanel").is_visible()
         assert page.locator(".empty button:not(.fp-empty-btn):not(.fp-newfilm)").count() == 1   # (wave 24 START: "New film" is not an AI action)

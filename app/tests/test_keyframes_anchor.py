@@ -360,10 +360,10 @@ def test_the_trim_keys_keep_the_keys_on_the_media_and_the_grid(page):
     they were (lead, wave 7)."""
     page.locator("#tl .blk").nth(0).click()
     page.wait_for_function("tl.state.anchor === 'shot-a'", timeout=5000)
-    page.keyboard.press("]")                                    # in +0.25 s
+    page.keyboard.press("]")                                    # in one frame later (HANDS round 3: [ ] trim one frame, Shift five)
     seg = page.evaluate("tl.state.segs[0]")
     dt = seg["in"] - 1.0
-    assert dt == pytest.approx(0.25, abs=0.02)
+    assert dt == pytest.approx(1 / 24, abs=0.002)
     assert page.evaluate("(t) => tl.isOnGrid(t)", seg["in"]), seg["in"]
     k = seg["controls"]["keys"]["opacity"]
     assert k[0] == [0, pytest.approx(100 - 50 * dt, abs=0.01)]

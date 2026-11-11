@@ -20,6 +20,13 @@ Fixed: the title card's check line keeps its Fit to frame / Move it action whole
 Fixed: the journey's first-pass step reads the panel as a person now does — the plain words first (what it will run, that nothing changes until accepted), then Details for the steps — and checks both
 Tests: the assist's price tests pin the plan's one wording (hover is 'free on your plan', the API estimate is api_note) and an API backend test keeps proving it says API
 Fixed: a silent film's export no longer answers 500 — its true peak measures -inf dBFS, which JSON cannot carry, so the figure is now 'not measured' and the export finishes
+The typing guard no longer takes one key pressed again and again for typing: a run counts only when it holds two different keys, so tapping [ or ] quickly to walk an edge several frames keeps every trim (a quick run of different letters is still put back)
+test: x, Delete, Q, W, [ ] and Enter act on the shot the editor selected, never the one under the playhead (pinned with the playhead parked over another shot)
+test: the three trim tests that pressed } now press Alt+] and check the out-point moved a frame
+test: insert and overwrite past the end pin the wave 25 behaviour (the shot lands at the end, no gap, one undo)
+test: the empty-timeline tests follow the New film line (not an AI action) and a delete that leaves nothing selected
+test: the selection tests follow HANDS round three (a delete leaves nothing selected, the arrow keys move only the playhead, a shot is selected by clicking it, the typing guard's eight quick keys stay out of the lens test)
+test: the trim-step tests follow the one-frame [ ] and Alt+] steps HANDS round three made on purpose (colour block, keys on the media, poster per settle, edits to disk)
 - Karl's try-list rewritten for the build after round two (seven asks, six trades to decide).
 - Loop State after round two of the editors; the rubric log names three behaviours that changed against earlier verdicts (insert past the end, selection and playhead, the AI looking by default).
 - Tests: the Find drag test checks the row that names its clip (Find's ranking and windows changed with wave 25 FIND2).

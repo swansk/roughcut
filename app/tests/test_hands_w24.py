@@ -971,3 +971,100 @@ def test_a_rotation_is_one_step_on_the_boards_own_undo_stack(page):
     page.wait_for_timeout(500)
     assert not page.evaluate("tl.nextUndo() && /rotate/.test(tl.nextUndo().label)")
     assert any('"sensor"' in (c or "") for c in calls)             # the undo turned the clip back
+
+
+# ------------------------------------------- the single-key edits act on the editor's selection
+
+def _park_on_shot_1_then_select_shot_2(page):
+    """The playhead over shot 1, shot 2 selected by selecting it (not by clicking, which would
+    cue the playhead onto it): the case where a stale index would take the wrong shot."""
+    page.evaluate("tl.setPlayhead(0.5)")
+    page.evaluate("tl.select([tl.idAt(1)])")
+    assert page.evaluate("tl.state.playhead") == pytest.approx(0.5, abs=1e-6)
+    assert page.evaluate("tl.indexOf(tl.state.anchor)") == 1
+
+
+def test_x_removes_the_selected_shot_not_the_one_under_the_playhead_and_names_it(page):
+    first = page.evaluate("segs[0].clip")
+    second = page.evaluate("segs[1].clip")
+    _park_on_shot_1_then_select_shot_2(page)
+    page.keyboard.press("x")
+    assert page.evaluate("segs.map(s => s.clip)") == [first], "shot 2 went, shot 1 stayed"
+    said = toast_text(page)
+    assert second.split(".")[0] in said and "removed" in said, said
+    # and nothing is selected after it: x again removes nothing and says so
+    page.keyboard.press("x")
+    assert page.evaluate("segs.length") == 1
+    assert "nothing selected" in toast_text(page)
+
+
+def test_x_with_nothing_selected_removes_nothing_wherever_the_playhead_is(page):
+    page.evaluate("tl.select([])")
+    page.evaluate("tl.setPlayhead(0.5)")
+    before = page.evaluate("JSON.stringify(segs)")
+    page.keyboard.press("x")
+    assert page.evaluate("JSON.stringify(segs)") == before
+    assert "nothing selected" in toast_text(page)
+
+
+def test_delete_acts_on_a_chosen_shot_and_never_on_the_one_under_the_playhead(page):
+    first = page.evaluate("segs[0].clip")
+    click_shot(page, 1)
+    page.evaluate("tl.setPlayhead(0.5)")             # the playhead back over shot 1, shot 2 still chosen
+    page.keyboard.press("Delete")
+    assert page.evaluate("segs.map(s => s.clip)") == [first]
+
+
+def test_q_and_w_trim_the_selected_shot_and_say_when_the_playhead_is_elsewhere(page):
+    a0 = page.evaluate("[segs[0].in, segs[0].out]")
+    _park_on_shot_1_then_select_shot_2(page)        # shot 2 selected, playhead in shot 1
+    page.keyboard.press("q")
+    assert page.evaluate("[segs[0].in, segs[0].out]") == a0, "shot 1 is not the selection"
+    assert "playhead is outside the selected shot" in toast_text(page)
+    page.evaluate("tl.select([])")
+    page.keyboard.press("w")
+    assert page.evaluate("[segs[0].in, segs[0].out]") == a0
+    assert "select a shot" in toast_text(page)
+
+
+def test_the_bracket_trims_act_on_the_selected_shot_not_the_one_under_the_playhead(page):
+    a0 = page.evaluate("[segs[0].in, segs[0].out]")
+    b0 = page.evaluate("segs[1].in")
+    _park_on_shot_1_then_select_shot_2(page)
+    page.keyboard.press("BracketRight")
+    assert page.evaluate("[segs[0].in, segs[0].out]") == a0
+    assert page.evaluate("segs[1].in") == pytest.approx(b0 + 1 / 24, abs=2e-3)
+
+
+def test_enter_plays_the_selected_shot_only(page):
+    """Enter is "this shot only" (app.js playFrom): it must be the selected shot."""
+    _park_on_shot_1_then_select_shot_2(page)
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(300)
+    assert page.evaluate("player.idx") == 1
+    assert page.evaluate("player.single") is True
+
+
+# ------------------------------------------- the typing guard and one key pressed again and again
+
+def _tap(page, key: str, code: str, n: int) -> None:
+    """n keydowns of one key in a single task: far quicker than the guard's 150 ms gaps."""
+    page.evaluate("""([key, code, n]) => { for (let i = 0; i < n; i++) document.body.dispatchEvent(
+        new KeyboardEvent('keydown', {key, code, bubbles: true, cancelable: true})); }""", [key, code, n])
+
+
+def test_eight_quick_taps_of_one_trim_key_walk_the_edge_and_are_not_typing(page):
+    page.evaluate("tl.select([tl.idAt(0)])")
+    in0 = page.evaluate("segs[0].in")
+    _tap(page, "]", "BracketRight", 8)
+    page.wait_for_timeout(200)
+    assert page.evaluate("segs[0].in") == pytest.approx(in0 + 8 / 24, abs=3e-3), "eight frames, none put back"
+    assert "looked like typing" not in toast_text(page)
+
+
+def test_a_quick_run_of_different_letters_is_still_typing_and_put_back(page):
+    click_shot(page, 0)
+    burst(page, "bnbnbnbnbnbn")                  # two different keys: a word, not one key tapped
+    page.wait_for_timeout(200)
+    assert "looked like typing" in toast_text(page)
+    assert page.evaluate("tl.state.tool") == "select"

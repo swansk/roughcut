@@ -337,10 +337,10 @@ def test_a_trim_keeps_the_colour_block(page, live_server):
     sid = select_first(page)
     page.locator("#inspector .clook").select_option("crisp")
     wait_saved(page)
-    page.keyboard.press("]")                  # in-point 0.25 s later, through app.js
+    page.keyboard.press("]")                  # in-point one frame later, through app.js
     wait_saved(page)
     saved = colour_on_disk(page, live_server)
     assert saved["shots"][sid]["look"] == "crisp"
     segs = api(page, live_server, "/api/project")["segments"]
-    assert segs[0]["in"] == pytest.approx(1.25)
+    assert segs[0]["in"] == pytest.approx(1.0 + 1 / 24, abs=1e-3)
     assert page.locator("#tl .blk").count() == 2

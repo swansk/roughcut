@@ -930,6 +930,12 @@ def test_accepting_it_saves_a_copy_in_9_16_and_makes_the_edits_there(served):
             assert made["frame"] == "9:16" and [s["id"] for s in made["segments"]] == ["s1", "s2"]
             assert made["segments"][0]["controls"] == {"reframe_x": 30.0}
             assert made["cut"]["from"] and made["effects"], "a copy: the title travels with its shot"
+            # nothing is selected until the editor selects (HANDS round 3): a click on the reframed
+            # shot opens its Effect Controls on the copy
+            pg.locator("#tl .blk").nth(0).click()
+            pg.locator("#pInspector .ws-tab", has_text="Effect Controls").click()    # the Assistant tab is the one showing
+            pg.wait_for_selector("#inspector .ec-sec", timeout=8000)
+            assert pg.evaluate("tl.state.anchor") == "s1"
             assert pg.locator("#inspector .ec-sec").count() >= 1
             # one undo takes the edits back, on the copy (the copy itself stays)
             pg.evaluate("document.activeElement && document.activeElement.blur()")
