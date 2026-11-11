@@ -709,3 +709,12 @@ next judge runs, and the next judge rules it honest or lenient.
   baseline (0.632 / 0.421) with the ranking restored; a score floor that hides hits could not be made to hold on
   both bins (Killington's right picture hits score 0.19-0.20, Copper's absent queries 0.15-0.20), so "nothing
   convincing like that" is now said above the hits and nothing is filtered. `baseline.json` untouched.
+- 2026-11-11 (wave 24, lane GATEFIX at the merge; one bar LOOSER, said plainly): `test_workspace::
+  test_the_index_panel_opens_at_a_working_size[1440x900]` asked for at least 10 index rows in view with a clip's detail
+  open (verdict 14, punch 8) and now asks for 8 at 900 px high (still 10 at 1080). The cause is wave 23 DESCRIBE's
+  "what it found" block under the detail (24 px: the description, the moments, what was said), which is what the
+  Copper finder asked the Index for (FINDER-02, -08). The lead accepted the trade; to get the two rows back the
+  detail would have to fold a line. GATEFIX's other changes were regressions fixed (a split's or an insert's
+  selection collapsed by the Program's catch-up; the "Refine" Next chip hidden over any cut; the proposal line
+  blanked after a ghost click; an empty undo-history write on a board nobody touched) and tests brought to behaviour
+  the lanes changed on purpose (the scope chip stays as chosen; Next does not offer a first cut over a cut).
