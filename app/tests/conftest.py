@@ -113,7 +113,10 @@ def no_cli_problem_carried_over():
 # reads, as an init script; a test that wants the first run opens its context through the
 # `first_run_context` fixture. The judge's own fresh browser has no flag: it sees the first
 # run, as Karl would.
-TOUR_SEEN_JS = "try { localStorage.setItem('roughcut.tour', 'seen') } catch (e) {}"
+# wave 24 START: the first pass's Details (the steps, the models) are closed on a first visit and
+# remembered once opened; the suite's browsers have them open, as the panel read before.
+TOUR_SEEN_JS = ("try { localStorage.setItem('roughcut.tour', 'seen');"
+                " localStorage.setItem('rc.fp.details', '1'); localStorage.setItem('rc.ix.details', '1') } catch (e) {}")
 _PLAIN_CONTEXT = {}
 
 

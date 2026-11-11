@@ -192,7 +192,7 @@ def test_new_clips_carry_the_looks_price_and_the_rerun_says_what_it_did(page, li
     tag = offer.locator(".fp-offer-cost")
     assert tag.inner_text() == "Looking at them: free on your plan"
     hover = tag.get_attribute("title")
-    assert "if it went through the API — no charge on your plan" in hover and "~$" in hover
+    assert hover == "free on your plan" and "$" not in hover      # one wording; the figure is under Details
 
     # the panel: which clips a re-run hears and looks at, and what looking costs
     pg.locator('[data-testid="firstpass-new-clips-go"]').click()

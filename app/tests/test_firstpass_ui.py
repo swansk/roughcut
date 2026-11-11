@@ -199,9 +199,10 @@ def test_fresh_bin_offers_run_first_pass_in_the_header_and_both_empty_states(pag
     text = _one_click_to_panel(pg)
     for word in ("Index", "Picks", "Rough cut", "free on your plan", "No cut yet"):
         assert word in text, (word, text)
-    assert "$" not in text, "no dollar figure in view on the plan (the hover has it)"
+    assert "$" not in text.split("Details:")[0], "no dollar figure in view on the plan (it is under Details)"
     hover = pg.locator(f"{PANEL} .fp-scost").first.get_attribute("title") or ""
-    assert "$" in hover and "no charge on your plan" in hover
+    assert hover == "free on your plan", "one wording, no figure beside it in a tooltip"
+    assert "nothing is charged on your plan" in pg.locator(f"{PANEL} [data-testid=firstpass-apinote]").inner_text()
     assert pg.locator(RUN).inner_text().strip() == "Run first pass"
     # Esc closes it; the Timeline's empty state opens it too (the Program monitor's copy
     # is not drawn: two "Run first pass" on a cold screen, not three — verdict 5, punch 9)

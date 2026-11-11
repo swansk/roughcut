@@ -416,7 +416,7 @@ def test_the_price_before_enter_is_whole_with_selects_open(live_server, project,
                              arg=STATUS, timeout=5000)
         assert st.inner_text().strip() == "↵ ask · free on your plan", st.inner_text()
         cost = st.locator(".aip-cost")
-        assert cost.is_visible() and "API" in cost.get_attribute("title")
+        assert cost.is_visible() and cost.get_attribute("title") == "free on your plan"
         u = pg.evaluate(USABLE_JS)
         for (a, b) in zip(u["prompt"], u["prompt"][1:]):      # the line beside the field, inside
             assert a[2] <= b[1] + 0.5 and a[1] >= u["panel_l"] - 0.5, u["prompt"]
@@ -495,7 +495,7 @@ def test_enter_shows_working_within_100ms_with_the_honest_cost_and_a_stop(live_s
     assert st.get_attribute("data-state") == "working"
     words = st.inner_text()
     assert "Working" in words and "free on your plan" in words and "$" not in words, words
-    assert "API" in st.locator(".aip-cost").get_attribute("title")   # the estimate is in the hover
+    assert st.locator(".aip-cost").get_attribute("title") == "free on your plan"   # one wording (wave 24 START): the figure is under Details
     # the field's own hover says what it does, what it costs and what it changes
     hover = pg.locator(INPUT).get_attribute("title")
     assert "free on your plan" in hover and "review" in hover and "Ctrl+J" in hover, hover

@@ -120,7 +120,7 @@ def at_settings(browser, live):
     pg.locator("#menubar .menu[data-menu=file] .mtop").click()
     pg.locator("[data-testid=menu-project-settings]").click()
     pg.wait_for_selector("[data-testid=project-settings][open]", timeout=5000)
-    pg.wait_for_function("/\\$0\\.27/.test(document.querySelector('[data-testid=ps-spent]').textContent)",
+    pg.wait_for_function("/\\$0\\.27/.test(document.querySelector('[data-testid=ps-spent]').title)",
                          timeout=10000)
     return pg
 
@@ -131,10 +131,10 @@ def test_project_settings_never_says_spent_on_the_plan(browser, live):
     pg = at_settings(browser, live)
     line = pg.locator("[data-testid=ps-spent]").inner_text()
     assert not SPENT.search(line), line
-    assert line == "This project: ~$0.27 API-equivalent · free on your plan", line
-    # the estimate's meaning is in the hover
+    assert line == "This project: free on your plan", line
+    # the estimate's meaning is in the hover, said as the API's
     title = pg.locator("[data-testid=ps-spent]").get_attribute("title") or ""
-    assert "free on your Claude plan" in title and "$0.27" in title, title
+    assert "free on your plan" in title and "$0.27" in title and "through the API" in title, title
     text = visible(pg)
     assert not SPENT.search(text), [ln for ln in text.splitlines() if SPENT.search(ln)]
     assert not pg._price_errors, pg._price_errors

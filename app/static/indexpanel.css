@@ -121,3 +121,14 @@ button.ix-open-link:hover { background: transparent; text-decoration: underline;
 .ix-modeline.bad { color: var(--bad, #e46a6a); }
 table.ixt col.c-local { width: 92px; }
 table.ixt td.s-unavailable { color: var(--dim); font-style: italic; }
+
+/* wave 24 START (COLD-06): the panel opens, until the footage is indexed, with what it is in plain
+   words; who looks (the models) and what the run costs are behind a Details toggle on the
+   mode row, closed on a first visit, so the row keeps its height and the list its rows */
+.ix-plain { flex: none; padding: 5px 8px; color: var(--dim); font-size: 11px; line-height: 1.4;
+            border-bottom: 1px solid #0f0f10; }
+.ix-plain[hidden] { display: none; }
+.ix-dtoggle { flex: none; border: 0; background: transparent; color: var(--accent, #4a9df8); padding: 0 2px;
+              font-size: 11px; height: 16px; cursor: pointer; }
+.ix-dtoggle:hover { background: transparent; text-decoration: underline; }
+.ix-mode:not(.open) .ix-modesel, .ix-mode:not(.open) .ix-modeline { display: none; }

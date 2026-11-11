@@ -141,3 +141,37 @@ header #firstpass { flex: 0 0 auto; position: relative; display: flex;
 .cert.c-unchecked { border-style: dashed; }
 .cert.c-unsupported, .cert.c-contradicted { border-color: #b5694a; color: #e2a187; }
 .certslot:empty { display: none; }
+
+/* ---------------------------------------------------------------- wave 24 START
+   The first layer is plain: what it does and how closely it looks, how long the film should
+   be, and the time and price before it runs. The models and the steps are under Details. */
+#firstpass .fp-plain { margin: 0 0 8px; }
+#firstpass .fp-plain ul { margin: 0 0 4px; padding: 0 0 0 16px; line-height: 1.4; }
+#firstpass .fp-plain li { padding: 1px 0; }
+#firstpass .fp-safe { color: var(--dim, #94949c); }
+#firstpass .fp-eta { margin-top: 2px; font-weight: 600; }
+#firstpass .fp-eta .fp-note { font-weight: 400; flex-basis: auto; }
+#firstpass .fp-etafoot { color: var(--dim, #94949c); cursor: help; }
+#firstpass .fp-ask { margin: 8px 0; padding: 8px 0; border-top: 1px solid var(--line, #333337);
+                     border-bottom: 1px solid var(--line, #333337); }
+#firstpass .fp-q { font-weight: 600; margin: 0 0 4px; display: block; }
+#firstpass .fp-q i { font-weight: 400; font-style: normal; color: var(--dim, #94949c); margin-left: 4px; }
+#firstpass .fp-ask .fp-q + .fp-chips { margin-bottom: 4px; }
+#firstpass .fp-chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+#firstpass .fp-chip { padding: 3px 11px; border-radius: 12px; }
+#firstpass .fp-chip.on { background: #2b4f78; border-color: #3a6698; color: #fff; }
+#firstpass .fp-lentype { width: 128px; padding: 3px 7px; font-size: 12px; }
+#firstpass .fp-lentype.bad { border-color: var(--bad, #e46a6a); }
+#firstpass .fp-ask .fp-note { flex-basis: auto; display: block; margin-top: 2px; }
+#firstpass .fp-ask .fp-note[hidden] { display: none; }
+#firstpass .fp-brief { width: 100%; box-sizing: border-box; min-height: 40px; resize: vertical; margin-top: 2px;
+                       font: inherit; font-size: 12px; }
+#firstpass .fp-ask .fp-q + .fp-brief { margin-top: 2px; }
+#firstpass .fp-ask > .fp-q:not(:first-child) { margin-top: 8px; }
+#firstpass .fp-details { margin: 6px 0 2px; }
+#firstpass .fp-detailstoggle { padding: 0; }
+#firstpass .fp-detailsbody { margin-top: 6px; }
+#firstpass .fp-apinote { color: var(--dim, #94949c); margin-bottom: 6px; }
+.fp-empty .fp-newfilm { border: 0; background: transparent; color: var(--accent, #4a9df8); padding: 0; font: inherit; cursor: pointer; }
+.fp-empty .fp-newfilm:hover { background: transparent; text-decoration: underline; }
+.cert-legend { font-size: 11px; color: var(--dim, #94949c); margin: 0 0 6px; line-height: 1.4; }

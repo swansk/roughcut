@@ -27,11 +27,16 @@
 (function () {
   'use strict';
   const POLL_MS = 5000, FAST_MS = 1500;
+  /* The Details under the plain words are closed on a first visit and stay open once opened. */
+  function detailsWas() { try { return localStorage.getItem('rc.fp.details') === '1'; } catch (_) { return false; } }
+  function detailsNow(on) { try { localStorage.setItem('rc.fp.details', on ? '1' : '0'); } catch (_) { /* private window */ } }
   const FP = { s: null, open: false, keepMine: true, keptOpen: false, busy: false, watching: null,
+               len: null, brief: '', detailsOpen: detailsWas(),
                shown: null, timer: 0, err: '', jobs: [], jobsKey: '[]',
                acct: null, acctKey: '', acctAt: 0, acctBusy: false };
 
   const $ = (sel, root) => (root || document).querySelector(sel);
+  const $$ = (sel, root) => [...(root || document).querySelectorAll(sel)];
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"]/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
@@ -187,6 +192,24 @@
       $('.fp-btn', host).addEventListener('click', (e) => { e.stopPropagation(); toggle(); });
       $('.fp-x', host).addEventListener('click', (e) => { e.stopPropagation(); cancel(); });
       $('.fp-panel', host).addEventListener('click', onPanelClick);
+      $('.fp-panel', host).addEventListener('input', (e) => {
+        if (e.target.matches('.fp-brief')) FP.brief = e.target.value;
+        else if (e.target.matches('.fp-lentype')) {
+          const sec = parseLen(e.target.value);
+          FP.len = sec;
+          e.target.classList.toggle('bad', !!e.target.value.trim() && sec == null);
+          $$('.fp-chip', host).forEach((c) => {
+            const on = sec != null && Number(c.dataset.sec) === sec;
+            c.classList.toggle('on', on);
+            c.setAttribute('aria-pressed', String(on));
+          });
+          const now = $('.fp-ask .fp-note', host);
+          if (now) now.hidden = sec != null;
+          const last = $('.fp-plain li:last-child', host);
+          if (last) last.textContent = `Picks the best moments and proposes a rough cut ${aimWords(FP.s && FP.s.would)} long.`;
+        }
+      });
+      $('.fp-panel', host).addEventListener('keydown', (e) => e.stopPropagation());
       document.addEventListener('mousedown', (e) => {
         if (FP.open && !host.contains(e.target) && !e.target.closest('[data-fp-open]')) close();
       });
@@ -326,7 +349,7 @@
       return `Running — ${esc((s.counts && s.counts.index && s.counts.index.words) || 'starting')}.`
         + ' The picks and the cut start once every clip is heard and looked at.' + bg;
     }
-    if (s.state === 'never-run') return 'Not run on this bin yet.';
+    if (s.state === 'never-run') return 'Not run on this film yet.';
     if (s.state === 'stopped' || s.state === 'failed') {
       const line = `${esc(endedLine(s))}.`;
       const why = s.state === 'failed'
@@ -397,12 +420,80 @@
     return cut || all ? `<div class="fp-cert" data-testid="firstpass-certainty">${cut}${all}</div>` : '';
   }
 
+  /* ------------------------------------------------------------ how long, and what for
+   * Wave 24 START (COLD-09, CLUMSY-02: 60-120 s asked, 2:56 and 2:41 delivered): before a first
+   * pass the panel asks how long the film should be, and, optionally, what it is and who it
+   * is for. The length is the project's target when the pass is sent, so the cut is written
+   * to it; the brief rides with the run as the editor's own note. */
+  const LENGTHS = [[30, '30 s'], [60, '1 min'], [120, '2 min'], [180, '3 min']];
+  function lenWords(sec) {
+    const s = Math.round(Number(sec) || 0);
+    if (s >= 60 && s % 60 === 0) return `${s / 60} min`;
+    if (s < 90) return `${s} s`;
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+  }
+  /* "1", "1.5" (minutes), "90s", "2m", "1:30" -> seconds, or null */
+  function parseLen(text) {
+    const t = String(text || '').trim().toLowerCase();
+    if (!t) return null;
+    let m = /^(\d+):(\d{1,2})$/.exec(t);
+    let sec = null;
+    if (m) sec = Number(m[1]) * 60 + Number(m[2]);
+    else if ((m = /^(\d+(?:\.\d+)?)\s*(s|sec|secs|seconds?)$/.exec(t))) sec = Number(m[1]);
+    else if ((m = /^(\d+(?:\.\d+)?)\s*(m|min|mins|minutes?)?$/.exec(t))) sec = Number(m[1]) * 60;
+    return sec != null && sec >= 10 && sec <= 1800 ? Math.round(sec) : null;
+  }
+  function aimWords(w) {
+    const p = (w && w.plain) || {};
+    return FP.len ? `about ${lenWords(FP.len)}` : (p.aims || 'about 2–3 min');
+  }
+  function lengthHtml(w, hasCut) {
+    const cur = FP.len;
+    const chips = LENGTHS.map(([sec, t]) =>
+      `<button type="button" class="fp-chip${cur === sec ? ' on' : ''}" data-fp="len" data-sec="${sec}"`
+      + ` data-testid="firstpass-len-${sec}" aria-pressed="${cur === sec}">${t}</button>`).join('');
+    const custom = cur && !LENGTHS.some(([sec]) => sec === cur) ? lenWords(cur) : '';
+    const typed = `<input type="text" class="fp-lentype" data-testid="firstpass-len-typed" placeholder="or type: 90 s"`
+      + ` aria-label="film length, typed" value="${esc(custom)}" size="11" spellcheck="false" autocomplete="off">`;
+    const now = FP.len ? '' : ` <span class="fp-note">It aims for ${esc((w.plain || {}).aims || 'about 2–3 min')} unless you pick a length.</span>`;
+    const brief = hasCut ? '' : `<label class="fp-q" for="fpBrief">What is the film, and who is it for? <i>optional</i></label>`
+      + `<textarea id="fpBrief" class="fp-brief" data-testid="firstpass-brief" rows="2"`
+      + ` placeholder="a ski trip with friends, to send round the group chat">${esc(FP.brief)}</textarea>`;
+    return `<div class="fp-ask" data-testid="firstpass-ask"><div class="fp-q">How long should the film be?</div>`
+      + `<div class="fp-chips">${chips}${typed}</div>${now}${brief}</div>`;
+  }
+
+  /* The first layer: what it does and how closely it looks, in plain words (K5 stands: the
+   * models and pipeline terms are in the Details under it). */
+  function plainHtml(s, w) {
+    const p = w.plain;
+    if (!p || !Array.isArray(p.lines)) return '';
+    const lines = p.lines.slice(0, 2).concat([`Picks the best moments and proposes a rough cut ${aimWords(w)} long.`]);
+    const t = w.time || {};
+    const eta = t.words ? `<div class="fp-eta" data-testid="firstpass-eta" title="${esc(t.basis || '')}">`
+      + `Takes ${esc(t.words)} <span class="fp-note">(${esc(t.basis || '')})</span></div>` : '';
+    return `<div class="fp-plain" data-testid="firstpass-plain"><ul>`
+      + lines.map((l) => `<li>${esc(l)}</li>`).join('') + `</ul>`
+      + `<div class="fp-safe">${esc(p.safe || 'Nothing changes until you accept it.')}</div>${eta}</div>`;
+  }
+
+  function detailsHtml(inner, cost) {
+    const api = cost && cost.api_note ? `<div class="fp-apinote" data-testid="firstpass-apinote">Cost: ${esc(cost.api_note)}.</div>` : '';
+    return `<div class="fp-details${FP.detailsOpen ? ' open' : ''}" data-testid="firstpass-details">`
+      + `<button type="button" class="fp-link fp-detailstoggle" data-fp="details" aria-expanded="${FP.detailsOpen}">`
+      + `${FP.detailsOpen ? '▾' : '▸'} Details: the steps, the models and the checks</button>`
+      + (FP.detailsOpen ? `<div class="fp-detailsbody">${api}${inner}</div>` : '') + '</div>';
+  }
+
   function paintPanel() {
     const host = mount();
     if (!host) return;
     const panel = $('.fp-panel', host);
     panel.hidden = !FP.open;
     if (!FP.open) return;
+    // never repaint under someone typing a length or a sentence: the next paint will do
+    const ae = document.activeElement;
+    if (ae && panel.contains(ae) && (ae.tagName === 'TEXTAREA' || (ae.tagName === 'INPUT' && ae.type === 'text'))) return;
     const s = FP.s;
     if (!s) {
       panel.innerHTML = '<div class="fp-head"><b>First pass</b></div>'
@@ -431,6 +522,8 @@
       : `<button type="button" class="fp-run" data-fp="run" data-testid="firstpass-run"`
         + `${FP.busy || w.error ? ' disabled' : ''} title="${esc(cost.hover || '')}">${esc(label(s))}</button>`
         + `<span class="fp-cost" title="${esc(cost.hover || '')}">${esc(cost.words || '')}</span>`
+        + (w.time && w.time.words ? `<span class="fp-etafoot" data-testid="firstpass-eta-foot" title="${esc(w.time.basis || '')}">`
+          + `takes ${esc(w.time.words)}</span>` : '')
         + '<span class="fp-note">nothing changes until you accept the proposal</span>';
     // the keep line: what a re-run keeps, with "▸" to list the shots (collapsed by default,
     // so the panel stays short and the Run button stays on screen: verdict 16 punch 1)
@@ -444,15 +537,17 @@
     const prev = panel.querySelector('.fp-body');
     const scroll = prev ? prev.scrollTop : 0;
     panel.innerHTML = '<div class="fp-head"><b>First pass</b>'
-      + '<span class="fp-sub">index · picks · a proposed rough cut</span>'
+      + '<span class="fp-sub">hears and looks at your clips, then proposes a rough cut</span>'
       + '<button type="button" class="fp-close" data-fp="close" aria-label="close">×</button></div>'
       + '<div class="fp-body" data-testid="firstpass-body">'
       + `<div class="fp-status">${statusLine(s)}</div>${pending}${headlineHtml()}`
-      + `<ol class="fp-steps">${steps}</ol>${linesHtml()}${certaintyHtml()}`
+      + plainHtml(s, w)
+      + (live || !w.plain ? '' : lengthHtml(w, !!w.has_cut))
       + (w.error ? `<div class="fp-bad">${esc(w.error)}</div>` : '')
       + `${keepRow}${kept}${toggleKeep}`
       + rejectedLine(w)
       + (FP.err ? `<div class="fp-bad">${esc(FP.err)}</div>` : '')
+      + detailsHtml(`<ol class="fp-steps">${steps}</ol>${linesHtml()}${certaintyHtml()}`, cost)
       + `</div><div class="fp-foot" data-testid="firstpass-foot">${foot}</div>`;
     fit(panel, host);
     const body = panel.querySelector('.fp-body');
@@ -485,6 +580,8 @@
     else if (what === 'stop') cancel();
     else if (what === 'show') showResult(FP.s && FP.s.proposal && FP.s.proposal.job, true);
     else if (what === 'index') openIndex();
+    else if (what === 'len') { FP.len = Number(t.dataset.sec) || null; paintPanel(); }
+    else if (what === 'details') { FP.detailsOpen = !FP.detailsOpen; detailsNow(FP.detailsOpen); paintPanel(); }
     else if (what === 'keepmine') { FP.keepMine = !!t.checked; paintPanel(); }
     else if (what === 'keptlist') { FP.keptOpen = !FP.keptOpen; paintPanel(); }
   }
@@ -517,17 +614,26 @@
     const s = FP.s;
     if (!s || FP.busy || running(s)) return;
     const w = s.would || {};
+    const typed = $('.fp-lentype', mount());
+    if (typed && typed.value.trim() && parseLen(typed.value) == null) {
+      FP.err = 'the length is not something I can read: try 90 s, 1:30 or 2 min';
+      paintPanel();
+      return;
+    }
     FP.busy = true;
     FP.err = '';
     paintPanel();
     try {
       const r = await fetch('/api/firstpass', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ mode: w.mode, keep: FP.keepMine ? 'manual' : 'none' }),
+        body: JSON.stringify({ mode: w.mode, keep: FP.keepMine ? 'manual' : 'none',
+          ...(FP.len ? { length_s: FP.len } : {}),
+          ...(FP.brief.trim() && !w.has_cut ? { note: FP.brief.trim() } : {}) }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
       FP.watching = d.job;
+      if (window.rcAimsChanged && d.target) window.rcAimsChanged(d);
       const k = (d.keep || []).length;
       const kept = ((FP.s && FP.s.would && FP.s.would.keep) || []).filter((r) => (d.keep || []).includes(r.id));
       say(`first pass started — ${k ? `keeping ${kept.length === k ? keptWho(kept) : plural(k, 'edited shot')}` : 'nothing changes until you accept'}`);
@@ -596,12 +702,35 @@
         const hint = document.createElement('span');
         hint.className = 'hint fp-empty-hint';
         box.appendChild(hint);
-        (tl.querySelector('.empty') || tl).appendChild(box);
+        const host = tl.querySelector('.empty') || tl;
+        host.appendChild(box);
+        // wave 24 START (COLD-01, -04): starting your own film is the first thing on the card
+        const nf = document.createElement('div');
+        nf.className = 'fp-newfilm-row hint';
+        nf.innerHTML = 'Your own footage? <button type="button" class="fp-newfilm" data-testid="empty-new-film">'
+          + 'New film from a folder…</button>';
+        nf.querySelector('button').addEventListener('click', (e) => {
+          e.preventDefault(); e.stopPropagation();
+          if (window.rcNewFilm) window.rcNewFilm.open();
+        });
+        host.insertBefore(nf, host.firstChild);
+        const aims = document.createElement('span');
+        aims.className = 'fp-aims hint';
+        aims.dataset.aims = '1';
+        aims.dataset.testid = 'empty-aims';
+        aims.title = 'Change how long the film should be';
+        aims.setAttribute('role', 'button');
+        aims.setAttribute('tabindex', '0');
+        box.appendChild(aims);
       }
       const span = $('button span', box);
       if (span.textContent !== words) span.textContent = words;
+      const aimsEl = $('.fp-aims', box);
+      if (aimsEl && typeof window.aimsFor === 'function' && aimsEl.textContent !== window.aimsFor()) {
+        aimsEl.textContent = window.aimsFor();
+      }
       const hint = $('.fp-empty-hint', box);
-      const h = `index · picks · a proposed cut${cost && cost.words ? ` — ${cost.words}` : ''}`;
+      const h = `hears and looks at your clips, then proposes a rough cut${cost && cost.words ? ` — ${cost.words}` : ''}`;
       if (hint.textContent !== h) hint.textContent = h;
       hint.title = (cost && cost.hover) || '';
     }
@@ -708,10 +837,47 @@
    * settled it and with what ("air 0.39 s · telemetry · confirmed by Claude"). A shot with
    * no moment under it, or a server that does not answer, gets none. */
   const CERT = { timer: 0 };
+  /* What a chip means, in plain words (wave 24 START, COLD-10: "unchecked" and a red
+   * "unsupported" sat on a proposed shot and explained nothing). The hover leads with this;
+   * the server's own line (the numbers, who settled it) follows. */
+  const CHIP_PLAIN = {
+    felt: 'A sensor on the camera measured this; no one has looked at the picture yet.',
+    local: 'This computer looked closely at the frames and agreed with the description.',
+    claude: 'Claude looked closely at the frames and agreed with the description.',
+    heard: 'Found in the words that were said; no one has checked the picture.',
+    once: 'One close look saw this; nothing else has confirmed it.',
+    unchecked: 'Not checked yet: the AI chose this from the contact sheets and has not looked closely at it. It is a guess from the description.',
+    unsupported: 'A closer look found nothing there: the picture does not back up the description of this shot. Check it before you keep it.',
+    contradicted: 'A closer look found something different from what the description says.',
+  };
   function chipHtml(c) {
+    const plain = CHIP_PLAIN[c.level] || c.name;
     return `<i class="cert c-${esc(c.level)}" data-level="${esc(c.level)}" data-testid="certainty-chip" `
-      + `title="${esc(`${c.name}: ${c.title}`)}">${esc(c.chip)}</i>`;
+      + `title="${esc(`${plain}\n${c.name}: ${c.title}`)}">${esc(c.chip)}</i>`;
   }
+  /* The one-line legend under a list of chips: only the levels on screen. */
+  function legend(root) {
+    const host = root && root.nodeType === 1 ? root : document;
+    ['proposalDiff', 'library'].forEach((id) => {
+      const box = document.getElementById(id);
+      if (!box || !host.contains(box) && host !== document) return;
+      const levels = [...new Set([...box.querySelectorAll('i.cert[data-level]')].map((x) => x.dataset.level))]
+        .filter((l) => ['unchecked', 'unsupported', 'contradicted', 'once', 'felt', 'heard'].includes(l));
+      let el = box.querySelector(':scope > .cert-legend');
+      if (!levels.length) { if (el) el.remove(); return; }
+      const text = levels.map((l) => `${l === 'once' ? 'seen once' : l} = ${CHIP_LEGEND[l]}`).join(' · ');
+      if (!el) {
+        el = document.createElement('div');
+        el.className = 'cert-legend hint';
+        el.dataset.testid = 'certainty-legend';
+        box.insertBefore(el, box.firstChild);
+      }
+      if (el.textContent !== text) el.textContent = text;
+    });
+  }
+  const CHIP_LEGEND = { unchecked: 'not looked at closely yet', unsupported: 'a closer look found nothing there',
+    contradicted: 'a closer look found something else', once: 'one close look saw it', felt: 'a sensor measured it',
+    heard: 'found in the words' };
   async function decorate(root) {
     const slots = [...(root || document).querySelectorAll('.certslot:not([data-cert-done])')];
     if (!slots.length) return;
@@ -729,6 +895,7 @@
       const c = out && out[i];
       if (c && c.level && el.isConnected) el.innerHTML = chipHtml(c);
     });
+    legend(root);
   }
   function watchChips() {
     if (!('MutationObserver' in window)) return;
@@ -742,7 +909,9 @@
   window.rcCertainty = { decorate };
 
   window.rcFirstPass = { open, close, toggle, refresh, run, cancel, jobs,
-                         state: () => FP.s, label: () => label(FP.s),
+                         state: () => FP.s, label: () => label(FP.s), parseLen,
+                         details: (on) => { FP.detailsOpen = on !== false; paintPanel(); },
+                         length: (sec) => { FP.len = sec; paintPanel(); },
                          account: () => FP.acct, refreshAccount };
   // the one rule for a clip's name on screen (a generated clip by Premiere's name for it)
   window.rcClipName = clipName;
