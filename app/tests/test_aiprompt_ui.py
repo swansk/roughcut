@@ -425,7 +425,7 @@ def test_the_price_before_enter_is_whole_with_selects_open(live_server, project,
         _close(pg)
 
 
-def test_a_click_on_the_chip_changes_the_scope_until_the_selection_moves(live_server, project, browser):
+def test_a_click_on_the_chip_changes_the_scope_and_it_stays_until_changed(live_server, project, browser):
     pg = _open(browser, live_server, project)
     pg.locator("#tl .blk").nth(0).click()
     pg.wait_for_function(f"document.querySelector('{SCOPE}').innerText.trim() === 'Shot 1 · CLIP_A'", timeout=3000)
@@ -438,9 +438,36 @@ def test_a_click_on_the_chip_changes_the_scope_until_the_selection_moves(live_se
     assert not menu.is_visible()
     assert _scope_text(pg) == "Sequence" and pg.evaluate("rcAI.scope().kind") == "sequence"
     assert pg.evaluate("document.activeElement.dataset.testid") == "ai-prompt-input"
-    # the selection moves: the chip follows it again
+    # the selection moves (playback does this too): the chosen scope stays (WORDS-01, -05)
     pg.locator("#tl .blk").nth(1).click()
+    pg.wait_for_timeout(1300)                                  # past the chip's one-second repaint
+    assert _scope_text(pg) == "Sequence" and pg.evaluate("rcAI.scope().kind") == "sequence"
+    assert pg.locator(SCOPE).get_attribute("data-chosen") == "1"
+    assert "You chose this" in pg.locator(SCOPE).get_attribute("title")
+    # the editor lets go of it: the chip follows the selection again
+    pg.locator(SCOPE).click()
+    pg.locator('[data-testid="ai-scope-menu"] button[data-scope="auto"]').click()
     pg.wait_for_function(f"document.querySelector('{SCOPE}').innerText.trim() === 'Shot 2 · CLIP_B'", timeout=3000)
+    assert "following what is selected" in pg.locator(SCOPE).get_attribute("title")
+    _close(pg)
+
+
+def test_a_chosen_scope_survives_the_selection_changing_under_playback(live_server, project, browser):
+    pg = _open(browser, live_server, project)
+    pg.locator("#tl .blk").nth(0).click()
+    pg.locator(SCOPE).click()
+    pg.locator('[data-testid="ai-scope-menu"] button[data-scope="sequence"]').click()
+    for i in (1, 0, 1):                                        # what Play does to the selection
+        pg.evaluate(f"tl.select([tl.state.segs[{i}].id])")
+        pg.wait_for_timeout(1200)
+        assert pg.evaluate("rcAI.scope().kind") == "sequence"
+    # a chosen selection whose shot is gone is dropped, not kept
+    pg.evaluate("tl.select([tl.state.segs[0].id])")
+    pg.locator(SCOPE).click()
+    pg.locator('[data-testid="ai-scope-menu"] button[data-scope="selection"]').click()
+    assert pg.evaluate("rcAI.scope().kind") == "selection"
+    pg.evaluate("tl.select([])")
+    assert pg.evaluate("rcAI.scope().kind") == "selection"      # still the shot the editor chose
     _close(pg)
 
 

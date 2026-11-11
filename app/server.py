@@ -16255,9 +16255,12 @@ def _assist_write(job: str, record: dict) -> None:
     tmp.replace(path)
 
 
-def _assist_start_ask(note: str) -> str:
+def _assist_start_ask(plan: str, words: str = "") -> str:
     """A whole-cut rewrite: an ordinary Ask job (the /api/ask path, the whole cut), so
-    the proposal panel reviews it exactly as it reviews an Ask."""
+    the proposal panel reviews it exactly as it reviews an Ask. The note it carries is the
+    editor's own words and, labelled as such, the planner's brief written from them
+    (`revise.compose_note`): the cut-writer never takes the brief for the editor's text."""
+    note = revise.compose_note(words, plan) if words.strip() and plan.strip() != words.strip() else plan
     clips, payload = _ask_clips(None, drop_junk=True)
     if not clips:
         raise ValueError("no analysed clips yet — run the audio pass first")
@@ -16277,20 +16280,114 @@ def _assist_start_ask(note: str) -> str:
     return job
 
 
+ASSIST_EVENTS = "events.jsonl"          # what the editor did beside the asks: undo, redo
+
+
+def assist_cut() -> str:
+    """The cut the board is on, by name: the conversation belongs to it."""
+    try:
+        return str(cut_name_of(read_edl(), STATE["edl"]))
+    except Exception:  # noqa: BLE001 — a name that cannot be read is no cut's
+        return ""
+
+
+def assist_note_event(kind: str, label: str) -> None:
+    """One line on the cut's record: the editor undid or redid something (the prompt box
+    posts it). Appended under this bin, tagged with this cut."""
+    row = {"at": time.time(), "cut": assist_cut(), "kind": kind, "label": str(label or "")[:120]}
+    with ASSIST_LOCK, (assist_home() / ASSIST_EVENTS).open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row) + "\n")
+
+
+def _turn_text(rec: dict, plan_state: Callable[[str], str] | None = None) -> str:
+    """One finished ask as the next ask reads it: the editor's words, what the AI answered or
+    proposed, and what the editor did with it."""
+    res = rec.get("result") or {}
+    when = time.strftime("%H:%M", time.localtime(rec.get("created") or 0))
+    sc = (rec.get("scope") or {}).get("kind") or "sequence"
+    out = [f"[{when}] The editor asked ({sc}): “{rec.get('text', '')}”"]
+    kind = res.get("kind")
+    if kind == "answer":
+        out.append(f"  The AI answered: {res.get('text') or res.get('summary') or ''}")
+    elif kind == "ops":
+        out.append(f"  The AI proposed {len(res.get('ops') or [])} edit(s): {res.get('summary') or ''}")
+        for i, ln in enumerate((res.get("lines") or [])[:8]):
+            out.append(f"    {i + 1}. {ln}")
+        ans = rec.get("answer")
+        if ans:
+            out.append(f"  The editor accepted edits {[i + 1 for i in ans.get('accepted') or []] or 'none'}"
+                       f" and rejected {[i + 1 for i in ans.get('rejected') or []] or 'none'}.")
+        else:
+            out.append("  The editor had not answered it when the next ask came (it may still be waiting).")
+    elif kind == "plan":
+        st = plan_state(res.get("plan_ask") or "") if plan_state and res.get("plan_ask") else ""
+        out.append(f"  The AI chose to re-cut the whole sequence. Brief: {res.get('note') or ''}"
+                   + (f"\n  The new cut was {st}." if st else ""))
+    return "\n".join(out)
+
+
+def assist_history(cut: str, budget: int = assistmod.HISTORY_CHARS) -> list[str]:
+    """The earlier turns of THIS bin's THIS cut, oldest first, within `budget` characters
+    (newest kept first). Another bin's or another cut's turns are never in it."""
+    rows: list[tuple[float, str]] = []
+    home = assist_home()
+
+    def plan_state(ask_id: str) -> str:
+        try:
+            rec = json.loads((STATE["asks"] / f"{ask_id}.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return ""
+        a = (rec.get("answered") or {}).get("answer")
+        return {"accept": "accepted", "discard": "discarded"}.get(a, "not answered yet")
+
+    for path in home.glob("*.json"):
+        try:
+            rec = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if rec.get("status") != "done" or rec.get("cut") != cut or not cut:
+            continue
+        rows.append((float(rec.get("created") or 0), _turn_text(rec, plan_state)))
+    try:
+        for ln in (home / ASSIST_EVENTS).read_text(encoding="utf-8").splitlines()[-200:]:
+            try:
+                ev = json.loads(ln)
+            except ValueError:
+                continue
+            if ev.get("cut") == cut and cut:
+                when = time.strftime("%H:%M", time.localtime(ev.get("at") or 0))
+                rows.append((float(ev.get("at") or 0),
+                             f"[{when}] The editor chose {ev.get('kind')}: {ev.get('label') or 'the last change'}"))
+    except OSError:
+        pass
+    rows.sort(key=lambda r: r[0])
+    kept: list[str] = []
+    used = 0
+    for _, text in reversed(rows):
+        text = text if len(text) <= assistmod.TURN_CHARS else assistmod.fit(text, assistmod.TURN_CHARS) + " …"
+        if used + len(text) > budget:
+            break
+        kept.append(text)
+        used += len(text)
+    return list(reversed(kept))
+
+
 def _assist_job(job: str, text: str, scope: dict) -> None:
     entry = ASSISTS[job]
-    record = {"job": job, "created": time.time(), "text": text, "scope": scope}
+    record = {"job": job, "created": time.time(), "text": text, "scope": scope,
+              "cut": entry.get("cut") or ""}
     try:
         clips, payload = _ask_clips(None, drop_junk=True)
         state = assist_state(payload)
+        history = assist_history(record["cut"])
         entry["cost"] = assistmod.estimate_cost(
-            assistmod.build_prompt(text, scope, state, clips))
+            assistmod.build_prompt(text, scope, state, clips, history))
         entry.note("asking the model")
-        res = assistmod.run(text, scope, state, clips)
+        res = assistmod.run(text, scope, state, clips, history)
         if entry.get("state") == "cancelled":
             return                                   # stopped: the answer is not wanted
         if res["kind"] == "plan":
-            res["plan_ask"] = _assist_start_ask(res.get("note") or text)
+            res["plan_ask"] = _assist_start_ask(res.get("note") or text, text)
     except HTTPException as exc:
         if entry.get("state") == "cancelled":
             return
@@ -16357,7 +16454,7 @@ def _assist_view(job: str) -> dict:
     if rec is not None and rec.get("answer"):
         out["answer"] = rec["answer"]
     for k in ("kind", "ops", "lines", "refused", "index", "families", "preview", "plan_ask",
-              "text", "note", "summary", "cost"):
+              "text", "note", "summary", "cost", "from_picture", "from_descriptions"):
         if k in res:
             out[k] = res[k]
     if out.get("plan_ask") and out["plan_ask"] in ASKS:
@@ -16380,10 +16477,21 @@ async def api_assist(request: Request) -> JSONResponse:
     ASSISTS[job] = progress.Job(
         "assist", "Asking the AI", id=job, state="running",
         detail="reading the sequence", eta_s=assistmod.ETA_S, text=text, scope=scope,
-        result=None, error=None, code=0)
+        result=None, error=None, code=0, cut=assist_cut())
     threading.Thread(target=_assist_job, args=(job, text, scope), daemon=True).start()
     return JSONResponse({"job": job, "status": "running", "scope": scope,
                          **config.cost_terms()})
+
+
+@app.post("/api/assist/event")
+async def api_assist_event(request: Request) -> JSONResponse:
+    """The editor undid or redid something: the next ask on this cut is told (`{kind, label}`)."""
+    body = await request.json()
+    kind = str(body.get("kind") or "")
+    if kind not in ("undo", "redo"):
+        raise HTTPException(400, "kind must be undo or redo")
+    await asyncio.to_thread(assist_note_event, kind, body.get("label") or "")
+    return JSONResponse({"ok": True})
 
 
 @app.post("/api/assist/preview")
@@ -16476,7 +16584,7 @@ def api_assist_price(text: str = "", scope: str = "") -> JSONResponse:
         sc = None
     clips, state = _price_inputs()
     prompt = assistmod.build_prompt(text.strip()[:assistmod.TEXT_MAX] or "…", clean_scope(sc),
-                                    state, clips)
+                                    state, clips, assist_history(assist_cut()))
     return JSONResponse(assistmod.estimate_cost(prompt))
 
 
@@ -16502,7 +16610,7 @@ def api_assist_cancel(job: str) -> JSONResponse:
         entry.update(error="cancelled by the editor")
         entry.finish("cancelled", detail="cancelled")
         _assist_write(job, {"job": job, "created": entry.get("started"), "text": entry.get("text"),
-                            "scope": entry.get("scope"), "status": "cancelled",
+                            "scope": entry.get("scope"), "cut": entry.get("cut") or "", "status": "cancelled",
                             "error": "cancelled by the editor"})
     return JSONResponse({"ok": True, "status": "cancelled"})
 

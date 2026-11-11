@@ -112,7 +112,7 @@
     job: null, text: '', scope: null, t0: 0, timer: 0, tick: 0, gen: 0, planTimer: 0,
     result: null,           // the finished GET /api/assist/{job}, plus its job id
     error: '', hint: '',    // a failure's words, and what to do about it
-    override: null, overrideKey: '',   // a scope chosen on the chip, until the auto one changes
+    override: null, overrideKey: '',   // a scope chosen on the chip: kept until the editor changes it or what it names is gone
     lastPanel: 'timeline',  // the panel in use before the prompt took the focus
     hist: store.get(HIST_KEY, []), histAt: -1, draft: '',
     price: null,            // GET /api/assist/price: {usd, charged, words, hover, …} before a run
@@ -168,9 +168,24 @@
 
   const keyOf = (s) => JSON.stringify(s || {});
 
+  /* A scope the editor chose on the chip stays until they choose another or what it names is
+   * gone (a selection whose shots left the cut). Playback and the selection following the
+   * playhead never change it (WORDS-01, -05: Play re-scoped the AI to "Shot 1"). */
+  function overrideAlive(o) {
+    if (!o) return false;
+    if (o.kind === 'selection') {
+      const t = TL();
+      const have = new Set(((t && t.state.segs) || []).map((x) => x.id));
+      const keep = (o.ids || []).filter((id) => have.has(id));
+      if (!keep.length) return false;
+      if (keep.length !== o.ids.length) o.ids = keep;
+    }
+    return true;
+  }
+
   function scope() {
     const auto = autoScope();
-    if (AI.override && AI.overrideKey !== keyOf(auto)) AI.override = null;   // it moved on
+    if (AI.override && !overrideAlive(AI.override)) AI.override = null;
     const s = AI.override || auto;
     return { ...s, playhead: playhead() };
   }
@@ -526,7 +541,14 @@
     chip.dataset.kind = s.kind;
     const say = chipFit(chip, [w.text].concat(w.short || []));
     if (l.textContent !== say) l.textContent = say;
-    const t = `The AI works on ${w.title}. Click to change it: the selected clips, the In/Out,`
+    // chosen = the editor picked it (it stays); otherwise the chip follows what is selected,
+    // and a selection made by playing the film is the playhead's shot (WORDS-01)
+    const chosen = !!AI.override;
+    chip.dataset.chosen = chosen ? '1' : '';
+    const how = chosen ? ' You chose this; it stays until you change it.'
+      : s.kind === 'sequence' ? ''
+      : ' It is following what is selected (and the playhead, when you play).';
+    const t = `The AI works on ${w.title}.${how} Click to change it: the selected clips, the In/Out,`
       + ' the Source clip or the whole sequence.';
     if (chip.title !== t) chip.title = t;
   }
@@ -680,7 +702,9 @@
         cur.kind === 'range', !r, 'mark I and O first')
       + item('clip', src ? `Source clip: ${clipName(src.clip)}` : 'Source clip',
         cur.kind === 'clip', !src, 'open one in Source')
-      + item('sequence', 'Whole sequence', cur.kind === 'sequence', false, '');
+      + item('sequence', 'Whole sequence', cur.kind === 'sequence', false, '')
+      + (AI.override ? '<button type="button" role="menuitem" data-scope="auto"><span class="aip-check"></span>'
+        + '<span>Follow my selection again</span></button>' : '');
     m.setAttribute('role', 'menu');
     m.hidden = false;
     chip.setAttribute('aria-expanded', 'true');
@@ -689,7 +713,8 @@
       const b = e.target.closest('button[data-scope]');
       if (!b || b.disabled) return;
       const k = b.dataset.scope;
-      setOverride(k === 'selection' ? { kind: 'selection', ids: selectedIds() }
+      if (k === 'auto') setOverride(null);
+      else setOverride(k === 'selection' ? { kind: 'selection', ids: selectedIds() }
         : k === 'range' ? rangeScope() : k === 'clip' ? sourceScope() : { kind: 'sequence' });
       closeFloating();
       input.focus();
@@ -904,6 +929,11 @@
   /* The undo stack moved: another entry on top takes the line's undo hint away; that
    * accept's own undo (Ctrl+Z, Edit › Undo, the header's ↶) puts the prompt back to idle. */
   function onUndoStack(ev) {
+    // the next ask on this cut is told what the editor took back (the server keeps it)
+    if (ev && (ev.kind === 'undo' || ev.kind === 'redo')) {
+      fetch('/api/assist/event', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ kind: ev.kind, label: ev.label || '' }) }).catch(() => {});
+    }
     const a = AI.result && AI.result.answered;
     if (!ev || !a || !a.top) return;
     if (ev.kind === 'undo' && ev.label === a.label) {

@@ -38,7 +38,10 @@ from .inference import complete
 
 ROLE = config.ROLE_SKELETON            # a judgement about the footage, as the Ask is
 KINDS = ("ops", "plan", "answer")
-TEXT_MAX = 2000
+TEXT_MAX = 2000                        # the editor's words, and an answer's text
+PLAN_MAX = 6000                        # a re-cut's brief: whole, cut at a sentence if it ever must be
+HISTORY_CHARS = 6000                   # earlier turns the prompt carries (~1,500 tokens), newest first
+TURN_CHARS = 1100                      # one earlier turn, at most
 SEG_ROWS_MAX = 400                     # shots listed in full; the rest are counted
 CLIP_LINE_MAX = 220                    # characters of what is said / seen per clip
 CLIPS_BLOCK_MAX = 12000                # characters for the whole clip inventory
@@ -57,7 +60,48 @@ OUTPUT_SCHEMA = {
     "ops": [{"op": "razor", "id": "a shot id from the list", "at": 12.5}],
     "text": "kind answer only: the answer, in a few sentences",
     "note": "kind plan only: the brief for re-cutting the whole sequence",
+    "from_picture": "true when the edit depends on what the pictures show (a wobble, a jump, where "
+                    "the camera points), which you know only from the written descriptions",
 }
+
+
+def fit(text: str, limit: int) -> str:
+    """`text` within `limit` characters, cut at the end of a sentence or a line, never in
+    the middle of one (COLD-17: a brief cut at 2,000 characters read "Lay a")."""
+    text = str(text or "").strip()
+    if len(text) <= limit:
+        return text
+    head = text[:limit]
+    cut = max(head.rfind(". "), head.rfind(".\n"), head.rfind("\n"), head.rfind("; "))
+    if cut < 0:
+        cut = head.rfind(" ")
+    return (head[:cut + 1] if cut > 0 else head).rstrip()
+
+
+# What exists in the app to point the editor at (CLUMSY-12: the AI sent an editor to "the
+# History panel"). Kept equal to index.html's Window menu by a test.
+WINDOW_PANELS = ("Project", "Selects", "Effects", "Source Monitor", "Program Monitor", "Timeline",
+                 "Effect Controls", "Designed Effects", "Audio", "Assistant", "Export", "Index",
+                 "Events")
+
+APP_GUIDE = (
+    "Panels (the Window menu): " + ", ".join(WINDOW_PANELS) + ". Menus: File, Edit, Clip, Sequence, "
+    "AI, Window, Help. Undo and redo are Edit › Undo (Ctrl+Z) and Edit › Redo (Ctrl+Shift+Z), "
+    "and the arrows at the top right. There is no History panel, no undo list and no version "
+    "list; you cannot undo or redo anything yourself. To take an accepted edit back the editor "
+    "uses Undo, or asks for the opposite edit and you propose it. Name only panels and commands "
+    "from this list.")
+
+# Words that mean an edit rests on what the picture shows. The index gives the AI a written
+# description of each clip and its transcript, never the frames themselves (wave 24 will let
+# it look); until then a proposal on such words says so first (WORDS-08, -17).
+PICTURE_WORDS = re.compile(
+    r"\b(wobble|wobbly|shak(?:e|y|ing)|jitter\w*|blur\w*|out of focus|in focus|jump(?:s|ing|ed)?|"
+    r"tricks?|crash\w*|falls?|flips?|spins?|horizon|tilt\w*|framing|looks? (?:like|good|bad)|"
+    r"on screen|visible|snow spray|best skiing|lens|camera (?:is|was|at|on|pointing|pointed))\b", re.I)
+FROM_TEXT = ("From the written descriptions and the transcript; I have not looked at these frames. ")
+LOOKED_WORDS = re.compile(r"not looked|have not seen|haven't looked|did not look|from the description|"
+                          r"written description", re.I)
 
 
 # ---------------------------------------------------------------- the prompt
@@ -328,10 +372,21 @@ def clips_block(clips: dict) -> str:
     return "\n".join(rows) if rows else "  (no clips)"
 
 
-def build_prompt(text: str, scope: dict | None, state: dict, clips: dict) -> str:
+def history_block(history: list[str] | None) -> str:
+    """The earlier turns of this cut, oldest first, as the server wrote them."""
+    if not history:
+        return ""
+    return ("## Earlier in this conversation (this cut only, oldest first)\n"
+            "Shot numbers are as they were when each turn happened; the sequence below is how it "
+            "is now. \"Both\", \"the second one\", \"put it back\", \"what did you just change\" "
+            "refer to these turns.\n" + "\n".join(history) + "\n\n")
+
+
+def build_prompt(text: str, scope: dict | None, state: dict, clips: dict,
+                 history: list[str] | None = None) -> str:
     looks = ", ".join(state.get("looks") or []) or "(none)"
     presets = ", ".join(f"{k} ({v})" for k, v in (state.get("presets") or {}).items()) or "(none)"
-    return f"""The editor asked:
+    return f"""{history_block(history)}The editor asked now:
 “{text}”
 
 ## Scope (what the editor had selected when they asked; act there unless the words plainly say otherwise)
@@ -372,6 +427,21 @@ Export presets: {presets}
   (only what no tool above draws).
 - a review copy, a file to upload, the final file → export with quick, youtube or master.
 
+## The app (name only what exists here)
+{APP_GUIDE}
+
+## What you can and cannot see
+You have the transcript and a short written description of each clip. You have not looked at
+any frames. When an edit depends on what the pictures show (a wobble, a jump, where the camera
+points, how a shot looks), set `from_picture` to true, and say in the first words of `summary`
+that it comes from the descriptions and not from the frames. When the editor states a visual
+fact the descriptions do not confirm ("there is a wobble at 0:40"), do not cut on it: answer
+(kind "answer") that you cannot find it in what you know, say what the descriptions do say near
+that time, and offer to look closer (AI › Look deeper at the selected clip). A clip the
+description marks as unconfirmed stays unconfirmed in your answer. Never say you saw something.
+If the request contradicts itself ("make it longer but cut half the shots"), answer with the
+conflict and ask which matters more, instead of doing one of them.
+
 ## What to answer
 JSON with `kind`:
 - "ops": the request is one or more edits the tools above make. `ops` lists them in the
@@ -379,7 +449,10 @@ JSON with `kind`:
   sequence and times from the tables. Prefer the fewest ops that do what was asked.
 - "plan": the request rewrites the whole cut (a new structure, a new length for the whole
   film, "make a teaser", "cut it to the music") — something better done by re-cutting than
-  by a handful of edits. `note` is the brief for the re-cut, in the editor's terms.
+  by a handful of edits. `note` is the brief for the re-cut, in the editor's terms: only what
+  the editor asked, plus the shots and moments they named; the cutter reads the same written
+  descriptions you do, so never tell it to choose "from the pictures". Under 1,500 characters, whole
+  sentences, no instruction the editor did not give, and never "you asked" for your own idea.
 - "answer": the request is a question; `text` answers it from what is listed above. No ops.
 
 The editor reads `summary`, `text`, `note` and every design_effect `note`: there a shot is
@@ -408,12 +481,27 @@ def validate_answer(payload: Any) -> dict:
             raise ValueError("kind ops needs a non-empty `ops` list")
         out["ops"] = ops[: actions.MAX_OPS * 2]
     elif kind == "plan":
-        out["note"] = str(payload.get("note") or payload.get("summary") or "").strip()[:TEXT_MAX]
+        out["note"] = fit(payload.get("note") or payload.get("summary") or "", PLAN_MAX)
     else:
         txt = str(payload.get("text") or payload.get("summary") or "").strip()
         if not txt:
             raise ValueError("kind answer needs `text`")
-        out["text"] = txt[:TEXT_MAX]
+        out["text"] = fit(txt, TEXT_MAX)
+    out["from_picture"] = payload.get("from_picture") is True
+    return out
+
+
+def honest_summary(out: dict, text: str, flagged: bool) -> dict:
+    """An edit that rests on the picture, from an AI that has only the descriptions, says so
+    in its first line. The model is asked to; the editor's words and its own summary are
+    checked here as well, because a model that writes "so the shot picks up just after the
+    wobble" has not said it (WORDS-08, -17)."""
+    summary = out.get("summary") or ""
+    rests = flagged or bool(PICTURE_WORDS.search(text or "")) or bool(PICTURE_WORDS.search(summary))
+    out["from_picture"] = rests
+    if rests and not LOOKED_WORDS.search(summary[:160]):
+        out["summary"] = (FROM_TEXT + summary).strip()[:420]
+        out["from_descriptions"] = True
     return out
 
 
@@ -427,11 +515,12 @@ def estimate_cost(prompt: str) -> dict:
             "basis": f"~{tin:,} tokens in and ~{OUT_TOKENS_TYPICAL:,} out, priced for {model}"}
 
 
-def run(text: str, scope: dict | None, state: dict, clips: dict) -> dict:
+def run(text: str, scope: dict | None, state: dict, clips: dict,
+        history: list[str] | None = None) -> dict:
     """One call. Returns `{kind, summary, ops?, lines?, refused?, preview?, families?,
     text?, note?, cost}`; raises `inference.InferenceError` / `ValueError` on a failed
     call (the server's job marks itself failed with the sentence)."""
-    prompt = build_prompt(text, scope, state, clips)
+    prompt = build_prompt(text, scope, state, clips, history)
     result = complete(prompt, role=ROLE, schema=OUTPUT_SCHEMA, system=SYSTEM,
                       validate=validate_answer, retries=1)
     got = dict(result.content)
@@ -453,5 +542,7 @@ def run(text: str, scope: dict | None, state: dict, clips: dict) -> dict:
         out["note"] = got.get("note") or text
     else:
         out["text"] = got["text"]
+    if out["kind"] == "ops" and out.get("ops"):
+        out = honest_summary(out, text, bool(got.get("from_picture")))
     # the editor's words name shots as the editor does, whatever the model wrote
     return _named(out, state.get("segments") or [])
