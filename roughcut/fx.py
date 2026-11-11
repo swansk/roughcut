@@ -134,6 +134,18 @@ def _colour(v: Any, name: str) -> str:
     return v.lower()
 
 
+def _at(raw: dict) -> Any:
+    """A shape's place in the box: the designer's `at`, or — on a shape already validated,
+    which carries `x` and `y` instead — those. Validating twice (an effect is validated on
+    design, on accept, on every hand edit) used to read no `at` and reset every shape to the
+    centre: an end card's two lines both landed at (0, 0), on each other (wave 23)."""
+    if raw.get("at") is not None:
+        return raw["at"]
+    if "x" in raw or "y" in raw:
+        return [raw.get("x", 0), raw.get("y", 0)]
+    return [0, 0]
+
+
 def validate_shape(raw: Any) -> dict:
     """One shape in the sprite's unit box: x and y run -1..1 across the box (the box is
     `size` × frame width on screen, square), so a shape may poke a little past it
@@ -168,12 +180,12 @@ def validate_shape(raw: Any) -> dict:
         out["from"] = _point(raw.get("from"), "line.from")
         out["to"] = _point(raw.get("to"), "line.to")
     elif kind in ("circle", "ring"):
-        out["x"], out["y"] = _point(raw.get("at", [0, 0]), "circle.at")
+        out["x"], out["y"] = _point(_at(raw), "circle.at")
         out["r"] = _num(raw.get("r", 0.5), "circle.r", 0.01, 1.5)
         if kind == "ring":
             out["r2"] = _num(raw.get("r2", out["r"] * 0.7), "ring.r2", 0.0, out["r"])
     elif kind == "rect":
-        out["x"], out["y"] = _point(raw.get("at", [0, 0]), "rect.at")
+        out["x"], out["y"] = _point(_at(raw), "rect.at")
         out["w"] = _num(raw.get("w", 1.0), "rect.w", 0.01, 3.0)
         out["h"] = _num(raw.get("h", 1.0), "rect.h", 0.01, 3.0)
         out["rotate"] = _num(raw.get("rotate", 0.0), "rect.rotate", -360, 360)
@@ -191,7 +203,7 @@ def validate_shape(raw: Any) -> dict:
         if not lines or len(lines) > MAX_TEXT_LINES:
             raise ValueError(f"text.text needs 1–{MAX_TEXT_LINES} lines")
         out["text"] = "\n".join(lines)
-        out["x"], out["y"] = _point(raw.get("at", [0, 0]), "text.at")
+        out["x"], out["y"] = _point(_at(raw), "text.at")
         # the cap height of one line as a fraction of the BOX side — the same on the
         # master and on the monitor (the two used to disagree by a factor of two)
         out["h"] = _num(raw.get("h", 0.2), "text.h", 0.02, 1.0)
@@ -1066,8 +1078,19 @@ def synth_sound(sound: dict, out: Path, *, sr: int = 48000) -> Path:
 
 # ---- the part's graph
 
+def frame_space(effect: dict) -> bool:
+    """A title, a lower third, an end card — an effect with text — is in the FRAME's space
+    (wave 23): drawn after the shot's own Motion (rotation, scale, position), level and at
+    its own size, wherever the shot under it is turned or moved to. Every other effect (a
+    marker on a rock, a ring on a skier) is on the picture and moves with it. The monitor
+    (fx.js `frameSpace`) and the export (assemble.py `encode_part`) both split on this; the
+    proof and the frame check draw the shot unmoved, which is the frame."""
+    return any(s.get("type") == "text" for s in (effect.get("overlay") or {}).get("shapes") or [])
+
+
 def part_graph(effects: list[tuple[dict, list[dict]]], w: int, h: int, fps: float,
-               workdir: Path, *, vin: str = "vbase", ain: str = "abase") -> tuple[list[str], str, str, str]:
+               workdir: Path, *, vin: str = "vbase", ain: str = "abase",
+               first_input: int = 1, tag: str = "") -> tuple[list[str], str, str, str]:
     """For one part: `effects` is `[(effect, events_in_shot(effect, seg)), …]`. Renders
     every event's overlay `.mov` and every effect's sound `.wav` into `workdir`, and
     returns `(extra_inputs, graph, vout, aout)`: the `-i` arguments to append after the
@@ -1087,7 +1110,7 @@ def part_graph(effects: list[tuple[dict, list[dict]]], w: int, h: int, fps: floa
     aparts: list[str] = []
     mix_inputs: list[str] = []
     cur = vin
-    idx = 1
+    idx = first_input                 # a second call for the frame's own effects goes on after the first's inputs
     rate = _fps_value(fps)
     for effect, events in effects:
         if not events:
@@ -1106,8 +1129,8 @@ def part_graph(effects: list[tuple[dict, list[dict]]], w: int, h: int, fps: floa
                 mov = workdir / f"{eid}_ev{j:02d}.mov"
                 render_overlay_mov(overlay, w, h, rate, mov, anchor=(ev["x"], ev["y"]))
                 extra += ["-i", str(mov)]
-            lab = f"fxv{idx}"
-            nxt = f"fxo{idx}"
+            lab = f"{tag}fxv{idx}"
+            nxt = f"{tag}fxo{idx}"
             vparts.append(f"[{idx}:v]setpts=PTS-STARTPTS+{t0:.4f}/TB[{lab}]")
             vparts.append(f"[{cur}][{lab}]overlay=0:0:eof_action=pass"
                           f":enable='between(t,{t0:.4f},{t0 + overlay['duration']:.4f})'[{nxt}]")
@@ -1121,16 +1144,16 @@ def part_graph(effects: list[tuple[dict, list[dict]]], w: int, h: int, fps: floa
             # every input at one rate and layout
             conv = "aresample=48000,aformat=sample_fmts=fltp:channel_layouts=stereo"
             if len(events) > 1:
-                outs = "".join(f"[fxs{idx}_{j}]" for j in range(len(events)))
+                outs = "".join(f"[{tag}fxs{idx}_{j}]" for j in range(len(events)))
                 aparts.append(f"[{idx}:a]{conv},asplit={len(events)}{outs}")
-                heads = [f"[fxs{idx}_{j}]" for j in range(len(events))]
+                heads = [f"[{tag}fxs{idx}_{j}]" for j in range(len(events))]
                 chain = ""
             else:
                 heads = [f"[{idx}:a]"]
                 chain = conv + ","
             for j, ev in enumerate(events):
                 samples = int(round(float(ev["t_part"]) * 48000))
-                lab = f"fxa{idx}_{j}"
+                lab = f"{tag}fxa{idx}_{j}"
                 aparts.append(f"{heads[j]}{chain}adelay={samples}S|{samples}S[{lab}]")
                 mix_inputs.append(f"[{lab}]")
             idx += 1
@@ -1139,13 +1162,13 @@ def part_graph(effects: list[tuple[dict, list[dict]]], w: int, h: int, fps: floa
     vout, aout = vin, ain
     if vparts:
         # rename the last overlay's label to the fixed output label
-        vparts[-1] = vparts[-1][: vparts[-1].rfind("[")] + "[vout]"
-        vout = "vout"
+        vparts[-1] = vparts[-1][: vparts[-1].rfind("[")] + f"[{tag}vout]"
+        vout = f"{tag}vout"
     if mix_inputs:
-        aparts.append(f"[{ain}]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[fxabase]")
-        aparts.append(f"[fxabase]{''.join(mix_inputs)}amix=inputs={len(mix_inputs) + 1}"
-                      f":normalize=0:duration=first[aout]")
-        aout = "aout"
+        aparts.append(f"[{ain}]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[{tag}fxabase]")
+        aparts.append(f"[{tag}fxabase]{''.join(mix_inputs)}amix=inputs={len(mix_inputs) + 1}"
+                      f":normalize=0:duration=first[{tag}aout]")
+        aout = f"{tag}aout"
     return extra, ";".join(vparts + aparts), vout, aout
 
 
@@ -1352,7 +1375,7 @@ of those — a title on a slide you generate):
   for what it is for: a title slide before a shot is a generated black clip plus a text
   effect on it; a fade-in of the video is an overlay; slow motion is an edit.
 
-TEXT MUST BE INSIDE THE FRAME. The renderer draws the text fitted to the BOX (95 % of its width), not to the frame, and the check MEASURES the pixels: it rejects any text outside the middle 90 % of the frame (the title-safe area), a shape cut by the frame's edge (unless it runs across the whole frame), a shape lying across a text (the stripe through a letter; a plate shorter than its words) and two texts drawn on each other. A line of bold text is about characters × 0.65 × h × size of the frame's width: "Copper Mountain · February 2026" (31 characters) at h 0.055 and size 1.6 is 1.5 frame widths wide — off both sides. So: a centred title has its anchor at x 0.5 and a width of at most 0.85; a box of `size` s centred at x reaches x ± s/2, so a lower third at x 0.18 needs size ≤ 0.36 or its anchor moved right; put two lines in ONE text shape with \n; a plate (filled rect) is wider and taller than its words, an accent bar goes at the plate's end beside the words, never at the middle (x 0) where the text is; keep titles above y 0.92 and below y 0.08. A title, a lower third or an end card is silent: "sound": null unless the note asks for a sound.
+TEXT MUST BE INSIDE THE FRAME. The renderer draws the text fitted to the BOX (95 % of its width), not to the frame, and the check MEASURES the pixels: it rejects any text outside the middle 90 % of the frame (the title-safe area), a shape cut by the frame's edge (unless it runs across the whole frame), a shape lying across a text (the stripe through a letter; a plate shorter than its words) and two texts drawn on each other. A line of bold text is about characters × 0.65 × h × size of the frame's width: "Copper Mountain · February 2026" (31 characters) at h 0.055 and size 1.6 is 1.5 frame widths wide — off both sides. So: a centred title has its anchor at x 0.5 and a width of at most 0.85; a box of `size` s centred at x reaches x ± s/2, so a lower third at x 0.18 needs size ≤ 0.36 or its anchor moved right; put two lines in ONE text shape with \n; a plate (filled rect) is wider and taller than its words, an accent bar goes at the plate's end beside the words, never at the middle (x 0) where the text is; keep titles above y 0.92 and below y 0.08. A title, a lower third or an end card is drawn in the FRAME's space — after the shot's own rotation, scale and position (Effect Controls), level and at its own size, wherever the shot under it is turned or moved: never rotate or counter-scale it to match the picture, and never turn the words; write them horizontal. A title, a lower third or an end card is silent: "sound": null unless the note asks for a sound.
 
 SIZES that read well (with size 1.0, the box as wide as the frame): a headline line h 0.10–0.14, a subtitle 0.06–0.08, a caption 0.04–0.05; a full-frame slide is a filled rect w 3 h 3 at size 1.6. Stack lines with \\n in ONE text shape, never several shapes at the same spot.
 
@@ -2185,15 +2208,23 @@ _REMOVE_NOTE = re.compile(r"^\W*(?:please\s+|and\s+|also\s+)*(?:remove|delete|ta
 _ADDING = re.compile(r"\b(?:add|then|instead|replace|with a|new)\b", re.I)
 
 
+def text_keys(effect: dict) -> set[str]:
+    """Each distinct text an effect draws, lower-cased and squeezed to letters and digits (a
+    drop shadow's copy is the same text)."""
+    out = set()
+    for s in (effect.get("overlay") or {}).get("shapes") or []:
+        if s.get("type") == "text":
+            k = re.sub(r"[^0-9a-z\u00c0-\uffff]+", " ", str(s.get("text") or "").lower()).strip()
+            if k:
+                out.add(k)
+    return out
+
+
 def text_key(effect: dict) -> str | None:
-    """The words an effect's title says, lower-cased and squeezed to letters and digits; two
-    effects with one key are the same title."""
-    texts = [str(s.get("text") or "") for s in ((effect.get("overlay") or {}).get("shapes") or [])
-             if s.get("type") == "text"]
-    if not texts:
-        return None
-    key = re.sub(r"[^0-9a-z\u00c0-\uffff]+", " ", max(texts, key=len).lower()).strip()
-    return key or None
+    """All the words an effect says, as one key: two effects with one key are the same title
+    (a fix or a move of it). An end card that adds a line to a title is not the title."""
+    keys = text_keys(effect)
+    return " | ".join(sorted(keys)) if keys else None
 
 
 def removal_targets(note: str, candidates: list[dict]) -> list[dict] | None:
@@ -2208,7 +2239,7 @@ def removal_targets(note: str, candidates: list[dict]) -> list[dict] | None:
     if not _REMOVE_NOTE.search(note) or _ADDING.search(note):
         return None
     flat = " " + re.sub(r"[^0-9a-z\u00c0-\uffff]+", " ", note.lower()) + " "
-    named = [c for c in candidates if (k := text_key(c)) and f" {k} " in flat]
+    named = [c for c in candidates if any(f" {k} " in flat for k in text_keys(c))]
     if named:
         return named
     texted = [c for c in candidates if text_key(c)]

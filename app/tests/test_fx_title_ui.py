@@ -127,3 +127,14 @@ def test_a_text_effect_with_no_sound_never_says_the_sound_is_not_heard(page):
     assert "sound is not heard" not in text
     page.locator("#fx button[data-act=why]").first.click()
     assert "sound" not in page.locator("#fx .fxchecks").first.inner_text().lower()
+
+
+def test_an_accepted_title_says_it_is_inside_the_frame_and_never_stays_silent(page):
+    e = _design(page)
+    page.locator("#fx button[data-act=fit]").first.click()
+    wait_effect(page, e["id"], "e => e.bounds && e.bounds.ok === true")
+    page.wait_for_function("(document.querySelector('#fx .fxcheck') || {}).textContent && "
+                           "document.querySelector('#fx .fxcheck').textContent.includes('inside the frame')", timeout=20000)
+    page.locator("#fx button[data-act=accept]").first.click()
+    wait_effect(page, e["id"], "e => e.status === 'accepted'")
+    page.wait_for_function("(document.querySelector('#fx .fxcheck') || {}).textContent === '✓ inside the frame'", timeout=20000)

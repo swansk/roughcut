@@ -1780,8 +1780,14 @@ def encode_part(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path
         graph.append(vig)
     if vg:
         graph.append(vg)
-    if shot_effects:
-        extra, fxg, vcur, acur = fx.part_graph(shot_effects, video["w"], video["h"],
+    # Effects on the picture (a marker on a rock) are drawn before Motion and move with the
+    # shot; an effect with text (a title) is in the FRAME's space: drawn after Motion and
+    # Opacity, level and at its own size whatever the shot is turned, scaled or moved to
+    # (wave 23; the Program's `#fxFrame` canvas does the same)
+    on_picture = [x for x in (shot_effects or []) if not fx.frame_space(x[0])]
+    in_frame = [x for x in (shot_effects or []) if fx.frame_space(x[0])]
+    if on_picture:
+        extra, fxg, vcur, acur = fx.part_graph(on_picture, video["w"], video["h"],
                                                video["fps"], workdir or dest.parent)
         if fxg:
             graph.append(fxg)
@@ -1790,6 +1796,13 @@ def encode_part(src: Path, t_in: float, t_out: float, gain_db: float, dest: Path
     if mg:
         graph.append(mg)
         vcur = "vmo"
+    if in_frame:
+        fextra, ffxg, vcur, acur = fx.part_graph(in_frame, video["w"], video["h"], video["fps"],
+                                                 workdir or dest.parent, vin=vcur, ain=acur,
+                                                 first_input=1 + extra.count("-i"), tag="f")
+        extra += fextra
+        if ffxg:
+            graph.append(ffxg)
     # transitions (verdict 6 punch 6; the kinds: verdict 8 punch 5): `apply_blends`
     vcur, acur = apply_blends(graph, extra, blends or [], video, vcur, acur, frames, rate)
     if v1_hidden:

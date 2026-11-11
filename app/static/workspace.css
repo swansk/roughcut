@@ -289,6 +289,10 @@ body.ws-resizing.col { cursor: col-resize; } body.ws-resizing.row { cursor: row-
 .screen canvas#fxCanvas { position: absolute; inset: 0; width: 100%; height: 100%;
                           display: none; object-fit: contain; z-index: 3; pointer-events: none; }
 .screen canvas#fxCanvas.live { display: block; }
+/* titles and the title-safe guides: the frame's own space, never moved by the shot's Motion */
+.screen canvas#fxFrame { position: absolute; inset: 0; width: 100%; height: 100%;
+                         display: none; object-fit: contain; z-index: 3; pointer-events: none; }
+.screen canvas#fxFrame.live { display: block; }
 .screen canvas#fxCanvas.sketch { display: block; pointer-events: auto; cursor: crosshair; z-index: 4; }
 #screenMsg, .monMsg { position: absolute; inset: 0; z-index: 2; display: flex;
              align-items: center; justify-content: center; text-align: center;

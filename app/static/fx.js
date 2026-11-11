@@ -542,6 +542,7 @@
     const n = (s) => h.items.filter((it) => s.includes(it.state)).length;
     return { label: h.label, total: h.items.length, designing: n(['queued', 'asking', 'running']),
              ready: n(['landed']), failed: n(['failed']),
+             why: h.items.filter((it) => it.state === 'failed' && it.why).map((it) => it.why),
              discarded: n(['skipped', 'stopped', 'withdrawn', 'discarded']),
              withdrawn: h.withdrawn };
   }
@@ -1064,16 +1065,18 @@
   function checkLine(e) {
     if (e.status === 'removed') return '';
     const b = boundsBad(e);              // measured on the drawn pixels, at once, before the proof renders
+    const framed = !!(e.bounds && e.bounds.ok === true);
+    // one true thing at each moment: checking…, ✓ inside the frame, or ✗ with the reason
     if (S.checking.has(e.id)) return `<div class="fxcheck wait">checking…</div>` + (b ? boundsLine(b) : '');
     if (b) return boundsLine(b);
     const v = e.verify;
-    if (!v || !Array.isArray(v.checks)) return '';
-    if (v.ok) return e.status === 'proposed' ? `<div class="fxcheck ok">✓ checked</div>` : '';
+    if (!v || !Array.isArray(v.checks)) return framed ? `<div class="fxcheck ok">✓ inside the frame</div>` : '';
     const bad = v.checks.find((c) => c.ok === false && (e.sound || !SOUND_CHECKS.includes(c.key)));
-    if (!bad && v.checks.every((c) => c.ok !== false || (!e.sound && SOUND_CHECKS.includes(c.key)))) {
-      return e.status === 'proposed' ? `<div class="fxcheck ok">✓ checked</div>` : '';
+    if (!bad) {
+      if (e.status === 'proposed') return `<div class="fxcheck ok">✓ checked${framed ? ' · inside the frame' : ''}</div>`;
+      return framed ? `<div class="fxcheck ok">✓ inside the frame</div>` : '';    // accepted: said too, not silent
     }
-    return `<div class="fxcheck bad">✗ ${esc(bad ? plain(bad, true) : 'not checked')}</div>`;
+    return `<div class="fxcheck bad">✗ ${esc(plain(bad, true))}</div>`;
   }
 
   function checkRow(c) {
@@ -1789,7 +1792,7 @@
    * rotates and offsets the whole sprite; `flash` tints the whole frame for its
    * duration. An event draws while `t ≤ clipT < t + duration` and only when it is
    * inside the shot's range. */
-  const O = { canvas: null, ctx: null, frameGen: 0, armedFor: null };
+  const O = { canvas: null, ctx: null, frame: null, fctx: null, frameGen: 0, armedFor: null };
 
   function sampleTrack(track, t, dflt) {
     if (!track || !track.length) return dflt;
@@ -1945,27 +1948,50 @@
     return p && p.idx >= 0 && list[p.idx] ? list[p.idx] : null;
   }
 
-  function draw() {
-    const c = O.canvas;
-    if (!c || !O.ctx) return;
-    const v = live();
-    const sg = liveShot();
-    const effs = sg ? drawnForShot(sg.id) : [];
-    const on = !!(v && effs.length);
-    c.classList.toggle('live', on || !!S.guides);
-    if (!on && !S.sketch && !S.guides) return;
-    if (!v || !v.videoWidth || !v.videoHeight) return;   // no frame yet; the next one draws
+  /* A title is in the FRAME's space (wave 23): drawn after the shot's own Motion — level, at
+   * its own size, wherever the shot is turned, scaled or moved to. `effects.js` moves
+   * `#fxCanvas` with the shot's Motion (the render draws a marker on the picture before
+   * Motion), so a title has a canvas of its own (`#fxFrame`) that Motion does not touch;
+   * the export draws it after Motion too (assemble.py encode_part), as fx.frame_space. */
+  const frameSpace = (e) => !!(e && e.overlay && (e.overlay.shapes || []).some((s) => s.type === 'text'));
+
+  function sizeTo(c, v) {
     if (c.width !== v.videoWidth || c.height !== v.videoHeight) {
       c.width = v.videoWidth;
       c.height = v.videoHeight;
     }
-    const ctx = O.ctx, W = c.width, H = c.height;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.globalAlpha = 1;
-    ctx.clearRect(0, 0, W, H);
-    if (sg) for (const e of effs) drawEffect(ctx, e, sg, v.currentTime, W, H);
-    if (S.sketch) drawStrokes(ctx, W, H);
-    if (S.guides) drawGuides(ctx, W, H);
+  }
+
+  function draw() {
+    const c = O.canvas;
+    if (!c || !O.ctx) return;
+    const f = O.frame;
+    const v = live();
+    const sg = liveShot();
+    const effs = sg ? drawnForShot(sg.id) : [];
+    const pic = effs.filter((e) => !frameSpace(e)), ttl = effs.filter(frameSpace);
+    const on = !!(v && pic.length), onF = !!(v && ttl.length) || !!S.guides;
+    c.classList.toggle('live', on);
+    if (f) f.classList.toggle('live', onF);
+    if (!v || !v.videoWidth || !v.videoHeight) return;   // no frame yet; the next one draws
+    if (on || S.sketch) {
+      sizeTo(c, v);
+      const ctx = O.ctx, W = c.width, H = c.height;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 1;
+      ctx.clearRect(0, 0, W, H);
+      if (sg) for (const e of pic) drawEffect(ctx, e, sg, v.currentTime, W, H);
+      if (S.sketch) drawStrokes(ctx, W, H);
+    }
+    if (f && O.fctx && onF) {
+      sizeTo(f, v);
+      const ctx = O.fctx, W = f.width, H = f.height;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 1;
+      ctx.clearRect(0, 0, W, H);
+      if (sg) for (const e of ttl) drawEffect(ctx, e, sg, v.currentTime, W, H);
+      if (S.guides) drawGuides(ctx, W, H);
+    }
   }
 
   /* ------------------------------------------------------------ the sound */
@@ -2051,6 +2077,12 @@
     O.canvas = c;
     try { O.ctx = c.getContext('2d'); } catch (e) { O.ctx = null; }
     if (!O.ctx) return;
+    // the frame-space canvas for titles, over the picture canvas, which Motion never moves
+    const fc = document.createElement('canvas');
+    fc.id = 'fxFrame';
+    c.insertAdjacentElement('afterend', fc);
+    O.frame = fc;
+    try { O.fctx = fc.getContext('2d'); } catch (e) { O.fctx = null; }
     const vids = [...document.querySelectorAll('#player video.pvbuf')];   // app.js player.vids
     vids.forEach((v) => {
       v.addEventListener('seeked', () => { S.fired.clear(); S.prevV = v; S.prevT = v.currentTime; step(); });
