@@ -1389,6 +1389,12 @@ def test_the_scope_chip_names_a_block_as_the_review_does(browser, live_server, p
         p.locator("[data-testid=ai-ctx-ask]").click()
         assert text() in ("CLIP_C", "Source: CLIP_C"), text()
         p.keyboard.press("Escape")
+        def follow_selection():
+            # (wave 23 DIRECT: a scope chosen on the chip, or by asking about a clip, stays until the
+            # editor changes it: "Follow my selection again" hands the chip back to the selection)
+            p.locator(chip).click()
+            p.locator("[data-scope=auto]").click()
+        follow_selection()
         # a generated clip is never its internal file name ("gen_black_78a418d8", the lead's
         # wave-13 note): on a block, and asked about as a clip
         gen = "gen_black_0a1b2c3d.mp4"
@@ -1402,6 +1408,7 @@ def test_the_scope_chip_names_a_block_as_the_review_does(browser, live_server, p
         said = p.evaluate("(s) => document.querySelector(s).innerText + ' ' + document.querySelector(s).title", chip)
         assert "gen_" not in said and "0a1b2c3d" not in said, said
         p.keyboard.press("Escape")
+        follow_selection()
         # the board's own name for a clip (lane PRICED's rcClipName) is the one the chip says
         p.evaluate("""(c) => { window.__rcClipNameWas = window.rcClipName;
           window.rcClipName = (x) => (x === c ? 'Black Video (test)' : (window.__rcClipNameWas ? window.__rcClipNameWas(x) : null)); }""", gen)
