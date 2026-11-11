@@ -200,6 +200,7 @@
     const k = e.key;
     if (MODIFIER_ONLY.has(k) || k === 'Tab' || /^F\d+$/.test(k)) return false;
     if ((e.ctrlKey || e.metaKey) && !EDIT_COMBOS.test(k)) return false;  // reload, zoom, devtools
+    if (layer.closest('#keysOverlay') && k === '?') return false;           // the sheet's own toggle
     if (k === 'Escape') {
       if (layer.tagName === 'DIALOG') {
         e.preventDefault();
