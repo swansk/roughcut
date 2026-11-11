@@ -81,6 +81,9 @@ from roughcut import flow as flowmod  # noqa: E402
 from roughcut import deep as deepmod  # noqa: E402
 from roughcut import firstpass as fpmod  # noqa: E402
 from roughcut import startwords  # noqa: E402     # wave 24 START: length, time, plain words
+from roughcut import reconcile as reconcilemod  # noqa: E402     # wave 25 FIND2: the description's last step
+from roughcut import findthink  # noqa: E402     # wave 25 FIND2: the model step of Find
+from roughcut import look as lookmod_find  # noqa: E402
 from roughcut import procscope  # noqa: E402
 from roughcut import telemetry_events  # noqa: E402
 from roughcut import orient as orientmod  # noqa: E402     # wave 23 FILM: rotation per clip
@@ -1575,11 +1578,13 @@ def load_visual(clip: str) -> dict:
     # before: its words are verdicts, but they are still what was said). `summary` carries
     # the same text so every older reader (the Project column, the Ask) keeps reading.
     mine = load_description_mine(stem)
-    text = mine["text"] if mine else str(d.get("description") or d.get("summary") or "")
+    look_text = str(d.get("description") or d.get("summary") or "")
+    rec = None if mine else reconcilemod.load(STATE["visual"], stem)
+    text = mine["text"] if mine else (rec["description"] if rec else look_text)
     return {"moments": moments, "unsupported": held,
             "unusable": d.get("unusable", []) + fine.get("unusable", []),
-            "summary": text, "description": text,
-            "description_by": "editor" if mine else ("model" if text else ""),
+            "summary": text, "description": text, "description_look": look_text,
+            "description_by": "editor" if mine else ("index" if rec else ("model" if text else "")),
             "prompt_version": int((d.get("params") or {}).get("prompt_version") or 1)}
 
 
@@ -3898,10 +3903,117 @@ def _rerank_job(job: str, query: str, rows: list[dict]) -> None:
 # These two endpoints are the clip's record in the editor's terms: the transcript with its
 # times, the description, the moments the look and the sensors found. Free: they read files.
 
+_VERDICT_STRIPPER: list = []
+
+
+def _strip_verdicts(text: str):
+    """research/tools/visual_pass.strip_verdicts (the look's own net), loaded once."""
+    if not _VERDICT_STRIPPER:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("visual_pass_rc", TOOLS / "visual_pass.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _VERDICT_STRIPPER.append(mod.strip_verdicts)
+    return _VERDICT_STRIPPER[0](text)
+
+
+def _reconcile_inputs(clip: str) -> tuple[str, list[dict], list[dict]]:
+    """(the look's description, the found moments with the close looks, the transcript)."""
+    f = found_payload(clip, with_state=False)
+    stem = Path(clip).stem
+    side = STATE["visual"] / f"{stem}.visual.json"
+    coarse = ""
+    if side.exists():
+        try:
+            sd = read_json_file(side)
+            coarse = str(sd.get("description") or sd.get("summary") or "")
+        except (OSError, ValueError):
+            coarse = ""
+    return coarse, f["moments"], f["transcript"]
+
+
+def reconcile_state(clip: str) -> str:
+    """"mine" (the editor's words: never touched) | "none" (nothing to rewrite from) | "fresh" | "stale"."""
+    stem = Path(clip).stem
+    if load_description_mine(stem) is not None:
+        return "mine"
+    coarse, moments, said = _reconcile_inputs(clip)
+    if not coarse or not reconcilemod.has_new_evidence(moments, said):
+        return "none"
+    rec = reconcilemod.load(STATE["visual"], stem)
+    sig = reconcilemod.inputs_sig(coarse, moments, said)
+    return "fresh" if rec and rec.get("inputs") == sig and int(rec.get("version") or 0) >= reconcilemod.VERSION else "stale"
+
+
+def reconcile_clip(clip: str, *, force: bool = False) -> dict:
+    """Rewrite one clip's description from what the index knows (one text-only call). Returns
+    {clip, state: written|fresh|mine|none, ...}. Never touches a description the editor wrote."""
+    st = reconcile_state(clip)
+    if st in ("mine", "none") or (st == "fresh" and not force):
+        return {"clip": clip, "state": st}
+    coarse, moments, said = _reconcile_inputs(clip)
+    res = reconcilemod.reconcile(clip, clip_duration(clip) or 0.0, coarse, moments, said, _strip_verdicts)
+    rec = reconcilemod.store(STATE["visual"], Path(clip).stem, clip, res,
+                             reconcilemod.inputs_sig(coarse, moments, said), coarse)
+    return {"clip": clip, "state": "written", "description": rec["description"],
+            "usd": res["usage"]["projected_usd"]}
+
+
+def reconcile_stale(entry=None, only: list[str] | None = None, *, force: bool = False) -> dict:
+    """Every clip whose close looks or transcript landed after its description (or the named ones).
+    Text only, one small call each, in order; a failure on one clip leaves it as it was."""
+    done, failed, usd = 0, [], 0.0
+    clips = [c for c in (only if only is not None else footage_clips())]
+    for c in clips:
+        if entry is not None and (entry.get("cancel") or entry.get("state") == "cancelled"):
+            break
+        try:
+            r = reconcile_clip(c, force=force)
+        except inference.BudgetExceeded:
+            break
+        except (inference.InferenceError, ValueError) as exc:
+            failed.append({"clip": c, "error": str(exc)[:160]})
+            continue
+        if r["state"] == "written":
+            done += 1
+            usd += float(r.get("usd") or 0.0)
+            if entry is not None:
+                entry.note(f"rewrote the description of {Path(c).stem} ({done})")
+    return {"written": done, "failed": failed, "usd": round(usd, 4)}
+
+
 DESCRIPTION_MAX = 1500
 
 
-def found_payload(clip: str) -> dict:
+_FELT_KIND = {"air": "felt: air", "impact": "felt: knock", "speed_drop": "felt: slowed", "stopped": "felt: stopped",
+              "lift": "felt: lift", "riding": "felt: riding"}
+_FELT_TAIL = re.compile(r"\s+(air jump airborne flying landing|impact crash hit fall bump|fall crash stop slowed down|"
+                        r"stopped stop standing|lift chairlift ride up|riding skiing fast)\s*$")
+
+
+def _felt_kind(kind: str) -> str:
+    return _FELT_KIND.get(kind, f"felt: {kind}")
+
+
+def _felt_plain(m: dict) -> str:
+    """What the sensors recorded, in words (FINDER-10: "stopped 2-60 stopped stop standing" and "impact
+    6.2 g at 0.3 (check) impact crash hit fall bump" were Find's search keywords printed as the row)."""
+    kind = m.get("kind", "")
+    text = _FELT_TAIL.sub("", str(m.get("what", ""))).strip()
+    span = max(0.0, float(m.get("end", 0)) - float(m.get("start", 0)))
+    g = re.search(r"(\d+(?:\.\d+)?)\s*g\b", text)
+    if kind == "stopped":
+        return f"the camera stood still for about {span:.0f} s"
+    if kind == "impact":
+        return (f"a hard knock of {g.group(1)} g" if g else "a hard knock") + " (the camera was hit, dropped or landed hard)"
+    if kind == "air":
+        return "the camera was in free fall: an air or a drop" + (f" ({g.group(1)} g on landing)" if g else "")
+    if kind == "speed_drop":
+        return "speed dropped sharply"
+    return text or kind
+
+
+def found_payload(clip: str, *, with_state: bool = True) -> dict:
     stem = Path(clip).stem
     sc = STATE["sidecars"] / f"{stem}.audio.json"
     audio = read_json_file(sc) if sc.exists() else {}
@@ -3925,8 +4037,8 @@ def found_payload(clip: str) -> dict:
     seen = [{"start": m["start"], "end": m["end"], "kind": m.get("kind", ""), "what": m.get("what", ""),
              "notable": bool(m.get("notable")), "source": "seen"} for m in vis.get("moments", [])]
     try:
-        felt = [{"start": m["start"], "end": m["end"], "kind": m.get("kind", ""), "what": m.get("what", ""),
-                 "notable": bool(m.get("notable")), "source": "felt"}
+        felt = [{"start": m["start"], "end": m["end"], "kind": _felt_kind(m.get("kind", "")),
+                 "what": _felt_plain(m), "notable": bool(m.get("notable")), "source": "felt"}
                 for m in telemetry_events.felt_words(clip)]
     except Exception:                                   # noqa: BLE001  no telemetry is not an error
         felt = []
@@ -3935,9 +4047,17 @@ def found_payload(clip: str) -> dict:
     held = [{"start": m["start"], "end": m["end"], "kind": m.get("kind", ""), "what": m.get("what", ""),
              "notable": False, "source": "seen", "unchecked": True} for m in vis.get("unsupported", [])]
     moments = sorted(seen + held + felt, key=lambda m: (m["start"], m["end"]))
+    labels = {str(u["speaker"]) for u in transcript if u.get("speaker")}
+    separated = len(labels) > 1
+    if not separated:
+        for u in transcript:                      # "S1" on every line says nothing: leave it off
+            u["speaker"] = None
     return {"clip": clip, "heard": bool(audio), "transcript": transcript,
+            "speakers": {"separated": separated, "labels": sorted(labels)},
             "n_words": sum(len(u["text"].split()) for u in transcript),
             "looked": bool(vis), "basis": basis, "description": vis.get("description", ""),
+            "description_look": vis.get("description_look", ""),
+            "reconcile": reconcile_state(clip) if with_state else None,
             "description_by": vis.get("description_by", ""), "moments": moments,
             "events": [m for m in moments if m["kind"] in ("jump", "fall", "crash") and m["notable"]],
             "unchecked": [m for m in held if m["kind"] in ("jump", "fall", "crash")],
@@ -3972,6 +4092,140 @@ async def api_found_description(clip: str, request: Request) -> JSONResponse:
         tmp.write_text(json.dumps({"clip": clip, "text": text, "at": time.time()}), encoding="utf-8")
         os.replace(tmp, p)
     return JSONResponse(found_payload(clip))
+
+
+@app.post("/api/found/{clip}/reconcile")
+async def api_found_reconcile(clip: str, request: Request) -> JSONResponse:
+    """Write this clip's description again from its moments and its words (one text-only call)."""
+    if clip not in footage_clips():
+        raise HTTPException(404, f"no clip {clip}")
+    body = await request.json() if request.headers.get("content-length") not in (None, "0") else {}
+    try:
+        r = await asyncio.to_thread(reconcile_clip, clip, force=bool((body or {}).get("force")))
+    except inference.BudgetExceeded as exc:
+        raise HTTPException(429, str(exc))
+    except (inference.InferenceError, ValueError) as exc:
+        raise HTTPException(502, str(exc))
+    return JSONResponse({**r, **found_payload(clip)})
+
+
+def _think_default() -> bool:
+    """The model step of Find is on unless the environment says otherwise (the test suite turns it
+    off so a plain /api/find never calls a model; a body `think` overrides)."""
+    return os.environ.get("ROUGHCUT_FIND_THINK", "1") not in ("0", "false", "no")
+
+
+def _think_job(job: str, query: str, rows: list[dict], clips: dict) -> None:
+    """The model step above the instant hits (wave 25 FIND2): widen the query, judge the candidates'
+    own text, say "nothing" only if the model agrees, offer a frame scan when the question is about
+    the picture and nothing is strong. Stop: the job reads cancelled and what it returns is dropped."""
+    entry = FINDS[job]
+    t0 = time.time()
+
+    def stopped() -> bool:
+        return entry.get("state") == "cancelled" or bool(entry.get("cancel"))
+    try:
+        entry.note("looking closer: widening the question")
+        ex = findthink.expand(query, STATE["work"] / "find")
+        if stopped():
+            return
+        terms = ex.get("terms") or []
+        cand = findthink.widen(rows, query, terms, clips)
+        cand = findthink.prepare(cand, clips, demote=False)
+        entry.note("looking closer: reading the candidates")
+        got = findthink.judge(query, cand, clips, terms)
+        if stopped():
+            return
+    except inference.BudgetExceeded as exc:
+        entry.update(code=429)
+        entry.finish("failed", detail=str(exc))
+        return
+    except (inference.InferenceError, ValueError) as exc:
+        if stopped():
+            return
+        entry.update(code=502)
+        entry.finish("failed", detail=str(exc)[:200])
+        return
+    rows_out = got["rows"]
+    strong = any(r.get("strength") == "strong" for r in rows_out)
+    offer = None
+    if ex.get("about_picture") and not strong:
+        names = findthink.scan_clips(rows_out, clips)
+        if names:
+            plan = findthink.scan_plan(names, clips)
+            if plan["frames"]:
+                offer = {"clips": names, "frames": len(plan["frames"]), "sheets": plan["sheets"],
+                         "words": f"{len(plan['frames'])} frames from {', '.join(Path(c).stem for c in names)}",
+                         "cost": lookmod_find.price(plan, len(query) + 400)}
+    entry["found"] = {"matches": _match_rows(rows_out), "nothing": got["nothing"], "notes": got.get("notes", ""),
+                      "terms": terms, "about_picture": bool(ex.get("about_picture")), "scan_offer": offer,
+                      "seconds": round(time.time() - t0, 1),
+                      "usage": {"expand": ex.get("usage"), "judge": got.get("usage")}}
+    entry.finish("done", detail="judged")
+
+
+def _scan_job(job: str, query: str, names: list[str], clips: dict) -> None:
+    entry = FINDS[job]
+
+    def stopped() -> bool:
+        return entry.get("state") == "cancelled" or bool(entry.get("cancel"))
+
+    def proxy_of(clip: str) -> Path:
+        p = STATE["proxy_dir"] / f"{Path(clip).stem}.mp4"
+        if not p.exists():
+            raise RuntimeError(f"{clip} has no proxy to cut frames from yet")
+        return p
+    out_dir = STATE["work"] / "looks" / STATE["footage"].name / f"find-{job}"
+    try:
+        plan = findthink.scan_plan(names, clips)
+        entry.note(f"looking through {len(plan['frames'])} frames")
+        got = findthink.scan(query, plan, clips, proxy_of, STATE["work"] / "looks" / STATE["footage"].name / "frames",
+                             out_dir, stop=stopped,
+                             on_progress=lambda d, n: entry.note(f"cutting frames {d} of {n}"))
+    except lookmod_find.Stopped:
+        shutil.rmtree(out_dir, ignore_errors=True)
+        return
+    except inference.BudgetExceeded as exc:
+        entry.update(code=429)
+        entry.finish("failed", detail=str(exc))
+        return
+    except (inference.InferenceError, ValueError, RuntimeError) as exc:
+        if stopped():
+            return
+        entry.update(code=502)
+        entry.finish("failed", detail=str(exc)[:200])
+        return
+    if stopped():
+        return
+    entry["found"] = {"matches": _match_rows(got["rows"]), "nothing": got["nothing"], "frames": got["frames"],
+                      "usage": got.get("usage")}
+    entry.finish("done", detail=f"{len(got['rows'])} found in the frames" if got["rows"] else "nothing in the frames")
+
+
+@app.post("/api/find/scan")
+async def api_find_scan(request: Request) -> JSONResponse:
+    """Look through the footage for it (wave 25 FIND2): a bounded frame scan over the clips the
+    candidates came from, about a frame a second, read in one call; a job with a Stop."""
+    body = await request.json()
+    query = (body.get("query") or "").strip()
+    names = [str(c) for c in (body.get("clips") or [])][: findthink.SCAN_CLIPS]
+    if not query or not names:
+        raise HTTPException(400, "a scan needs the question and the clips to look through")
+    clips, _ = _ask_clips(drop_junk=True)
+    names = [c for c in names if c in clips]
+    if not names:
+        raise HTTPException(400, "none of those clips is in the bin")
+    running = next((f for f in FINDS.values() if f["state"] not in progress.TERMINAL and f.get("kind_scan")), None)
+    if running is not None:
+        raise HTTPException(409, "a scan is already running")
+    plan = findthink.scan_plan(names, clips)
+    job = uuid.uuid4().hex[:8]
+    FINDS[job] = progress.Job("find", f"Looking through the footage - {query[:40]}", id=job, state="running", found=None,
+                              code=0, query=query, detail="cutting frames", kind_scan=True)
+    FINDS[job].set_estimate(30.0 + len(plan["frames"]) * 0.4, [progress.milestone("write", "reading the frames", 1.0)],
+                            source="measured")
+    threading.Thread(target=_scan_job, args=(job, query, names, clips), daemon=True).start()
+    return JSONResponse({"job": job, "frames": len(plan["frames"]), "sheets": plan["sheets"]})
 
 
 @app.get("/api/find/price")
@@ -4029,8 +4283,9 @@ async def api_find(request: Request) -> JSONResponse:
         done = sum(1 for c in want if c in have)
         if done < len(want):
             floor["indexing"] = {"done": done, "total": len(want)}
-    resp: dict = {"matches": _match_rows(found["matches"]), "job": None, "local": found["local"],
-                  "floor": floor,
+    instant = findthink.prepare(found["matches"], clips)
+    resp: dict = {"matches": _match_rows(instant), "job": None, "local": found["local"],
+                  "floor": floor, "think_job": None,
                   "deep_projected_usd": find.projected_usd(clips),
                   "rerank": {**policy, "usd": find.rerank_projected_usd()}, **config.cost_terms()}
     if body.get("rerank") and body.get("deep"):
@@ -4041,7 +4296,8 @@ async def api_find(request: Request) -> JSONResponse:
                                      "Hybrid or Claude only to rerank")
         if not found["matches"]:
             raise HTTPException(400, "nothing to rerank")
-        running = next((f for f in FINDS.values() if f["state"] not in progress.TERMINAL), None)
+        running = next((f for f in FINDS.values() if f["state"] not in progress.TERMINAL
+                        and not f.get("kind_think") and not f.get("kind_scan")), None)
         if running is not None:
             raise HTTPException(409, "a model search is already running - "
                                      f"{running.get('detail') or running['label']}")
@@ -4054,9 +4310,17 @@ async def api_find(request: Request) -> JSONResponse:
                                 source="measured")
         threading.Thread(target=_rerank_job, args=(job, query, found["matches"]), daemon=True).start()
         resp["job"] = job
+    if body.get("think", _think_default()) and not body.get("deep") and not body.get("rerank") and instant is not None:
+        job = uuid.uuid4().hex[:8]
+        FINDS[job] = progress.Job("find", f"Looking closer - {query[:40]}", id=job, state="running", found=None,
+                                  code=0, query=query, detail="looking closer", kind_think=True)
+        FINDS[job].set_estimate(25.0, [progress.milestone("write", "reading the candidates", 1.0)], source="measured")
+        threading.Thread(target=_think_job, args=(job, query, found["matches"], clips), daemon=True).start()
+        resp["think_job"] = job
     if body.get("deep"):
         running = next((f for f in FINDS.values()
-                        if f["state"] not in progress.TERMINAL), None)
+                        if f["state"] not in progress.TERMINAL and not f.get("kind_think")
+                        and not f.get("kind_scan")), None)
         if running is not None:
             raise HTTPException(409, "a model search is already running — "
                                      f"{running.get('detail') or running['label']}")
@@ -8738,6 +9002,16 @@ def _index_walk(job: str, order: str, scope: procscope.Scope) -> None:
     if entry.get("cancel") or scope.cancelled:
         entry.finish("cancelled", detail="stopped — what finished is kept; index the rest any time")
         return
+    # The description's last step (wave 25 FIND2): the close looks and the words have landed, so
+    # each clip's description is written again from them. Text only, one small call per clip whose
+    # inputs changed; a failure here never fails the index.
+    try:
+        scope_clips = list((INDEX_RERUNS.get(job) or {}).get("scope") or {}) if _scoped(entry) else None
+        if load_settings().get("reconcile", True) and (scope_clips is None or scope_clips):
+            entry.note("writing the descriptions from what the index found")
+            reconcile_stale(entry, scope_clips)
+    except Exception as exc:  # noqa: BLE001
+        entry.note(f"descriptions not rewritten: {str(exc)[:80]}")
     entry.complete("index")
     if _scoped(entry):
         # the picks wait on stages a re-run may not have touched (a close look nobody

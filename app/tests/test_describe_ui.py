@@ -222,3 +222,106 @@ def test_a_slow_answer_to_an_older_search_does_not_land_under_the_newer_question
     txt = page.locator("#findResults").inner_text()
     assert "goodbye" in txt.lower() and "dog" not in txt.lower()
     assert page.locator("#findResults .cand").count() >= 1
+
+
+# ------------------------------------------------------------------ wave 25 (FIND2)
+
+def test_a_saved_description_reaches_the_project_list_and_its_search_at_once(page):
+    _open_found(page)
+    page.locator('[data-testid="index-found-edit"]').click()
+    page.locator('[data-testid="index-found-text"]').fill("A skier is airborne off the kicker.")
+    page.locator('[data-testid="index-found-save"]').click()
+    page.wait_for_selector('[data-testid="index-found-rewritten"], .ixf-by', timeout=8000)
+    page.evaluate("dock.open('project')")
+    # the Project list's Description column, without a reload
+    page.wait_for_function(
+        "[...document.querySelectorAll('#projList td.note')].some(td => td.textContent.includes('airborne off the kicker'))",
+        timeout=10000)
+    # and the bin's own search reads descriptions (and what is found and said), not only names
+    page.evaluate("dock.open('project')")
+    page.locator("#projQ").fill("airborne")
+    page.wait_for_function("document.querySelectorAll('#projList [data-key^=\"c|\"]').length === 1", timeout=5000)
+    page.locator("#projQ").fill("goodbye")             # a spoken word: three clips say it
+    page.wait_for_function("document.querySelectorAll('#projList [data-key^=\"c|\"]').length === 3", timeout=5000)
+
+
+def test_a_search_with_no_hit_carries_its_words_over_to_find(page):
+    page.evaluate("dock.open('project')")
+    page.locator("#projQ").fill("a porcupine on skis")
+    page.wait_for_selector('[data-testid="project-find-hint"]', timeout=5000)
+    page.locator('[data-testid="project-find-link"]').click()
+    page.wait_for_function("document.querySelector('#findQ').value === 'a porcupine on skis'", timeout=5000)
+    page.wait_for_selector('[data-testid="find-nothing"], [data-testid="find-running"]', timeout=15000)
+
+
+def test_the_transcript_view_gives_the_panel_to_the_transcript_and_says_speakers_are_not_separated(page):
+    _open_found(page)
+    assert page.locator('[data-testid="index-speakers"]').count() == 1
+    assert "not separated" in page.locator('[data-testid="index-speakers"]').inner_text()
+    assert page.locator('[data-testid="index-transcript-line"] i').count() == 0        # no S1 on every line
+    page.locator('[data-testid="index-transcript-size"]').click()
+    page.wait_for_function("document.querySelector('section[data-tool=index]').classList.contains('ix-wide')")
+    box = page.evaluate("(() => { const d = document.querySelector('.ix-detail').getBoundingClientRect(); "
+                        "const s = document.querySelector('section[data-tool=index]').getBoundingClientRect(); "
+                        "return [d.height, s.height]; })()")
+    assert box[0] > 0.6 * box[1]                              # the detail owns the panel now
+    page.evaluate("dock.project.select('CLIP_B.MP4')")
+    page.locator('.menu[data-menu="clip"] .mtop').click()
+    page.locator('[data-testid="clip-transcript"]').click()
+    page.wait_for_function("document.querySelector('section[data-tool=index]').classList.contains('ix-wide')")
+
+
+def test_a_find_row_is_one_tidy_line_with_a_strength_and_the_rest_on_demand(page):
+    _find(page, "goodbye")
+    page.wait_for_selector("#findResults .cand", timeout=15000)
+    row = page.locator("#findResults .cand").first
+    t = row.locator(".t").inner_text()
+    assert t.startswith("CLIP_") and t.rstrip().split(" · ")[-1] in ("strong", "possible", "weak")
+    assert row.locator('[data-testid="find-why"]').inner_text().strip() != ""
+    assert "matches the picture" not in row.inner_text()
+    assert row.locator(".full").is_hidden()
+    row.locator('[data-testid="find-more"]').click()
+    assert row.locator(".full").is_visible()
+    assert row.bounding_box()["height"] < 140                 # no wall of text
+    # clicking the details does not open the clip: only the row does
+    assert page.evaluate("window.rcSource && rcSource.clip") in (None, "CLIP_A.MP4", "CLIP_B.MP4", "CLIP_C.MP4")
+
+
+def test_find_looks_closer_by_default_and_the_judged_list_replaces_the_instant_one(page, monkeypatch):
+    from test_find_think import Fake
+    from roughcut import inference
+    monkeypatch.setenv("ROUGHCUT_FIND_THINK", "1")
+    fake = Fake(strong={1}, about_picture=False)
+    inference.set_backend(fake)
+    try:
+        _find(page, "goodbye")
+        page.wait_for_selector("#findResults .cand", timeout=15000)          # the instant hits first
+        page.wait_for_function(
+            "[...document.querySelectorAll('#findResults [data-testid=find-strength]')].some(e => e.title.startsWith('judged'))",
+            timeout=20000)
+        first = page.locator("#findResults .cand").first
+        assert first.locator('[data-testid="find-strength"]').inner_text() == "strong"
+        assert first.locator('[data-testid="find-why"]').inner_text() == "line 1"
+        assert fake.kinds()[:2] == ["expand", "judge"]
+    finally:
+        inference.set_backend(None)
+
+
+def test_the_closer_look_shows_a_line_and_can_be_stopped(page, monkeypatch):
+    import threading
+    from test_find_think import Fake
+    from roughcut import inference
+    monkeypatch.setenv("ROUGHCUT_FIND_THINK", "1")
+    fake = Fake(strong={1})
+    fake.hold = threading.Event()
+    inference.set_backend(fake)
+    try:
+        _find(page, "goodbye")
+        page.wait_for_selector('[data-testid="find-thinking"]', timeout=15000)
+        assert "looking closer" in page.locator('[data-testid="find-thinking"]').inner_text()
+        page.locator('[data-testid="find-think-stop"]').click()
+        page.wait_for_function("document.querySelector('#findThink') && document.querySelector('#findThink').textContent.includes('Stopped')", timeout=10000)
+        assert page.locator("#findResults .cand").count() >= 1       # the instant hits stay
+    finally:
+        fake.hold.set()
+        inference.set_backend(None)

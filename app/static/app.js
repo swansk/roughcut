@@ -6543,29 +6543,51 @@ function renderFindResults(rows, note, meta) {
       : `<div class="hint" data-testid="find-nothing">Nothing like ${qq} in this footage. Try other words, or Ask the model.</div>`);
     return;
   }
-  // wave 23: when nothing clears the confidence floors, say so above the hits (they are still
-  // listed: a floor that removed hits lost a real one on Killington)
-  if (meta && meta.confident === false && meta.indexing) {
+  // The banner. Once the model has read the candidates it decides ("nothing" only when it agrees,
+  // never over a strong hit); before that, and when it could not run, the instant layers' floors say
+  // it (wave 23: they are listed anyway; a floor that removed hits lost a real one on Killington).
+  const nothing = meta && meta.judged ? !!meta.nothing : (meta && meta.confident === false);
+  findLastRows = rows;
+  findLastNothing = !!nothing;
+  if (nothing && meta && meta.indexing) {
     box.insertAdjacentHTML('beforeend',
       `<div class="hint" data-testid="find-indexing">Still indexing the pictures: ${meta.indexing.done} of ${meta.indexing.total} clips. This answer may change when it is done.</div>`);
-  } else if (meta && meta.confident === false) {
+  } else if (nothing) {
     box.insertAdjacentHTML('beforeend',
       `<div class="hint" data-testid="find-nothing">Nothing convincing like ${qq} in this footage. These are only the closest guesses.</div>`);
   }
+  if (meta && meta.scan) {
+    const o = meta.scan;
+    box.insertAdjacentHTML('beforeend',
+      `<div class="hint findscan" data-testid="find-scan-offer"><button type="button" id="findScan" data-testid="find-scan">Look through the footage for it</button>
+       <span>${escapeHtml(o.words)} · ${escapeHtml((o.cost && (o.cost.text || o.cost.label)) || '')}</span></div>`);
+    $('#findScan').onclick = () => startFindScan(o, q, meta.seq);
+  }
+  const first = (t) => String(t || '').split(/(?<=[.!?])\s+| · /)[0].slice(0, 160);
   rows.forEach((m) => {
     const d = document.createElement('div');
     d.className = 'cand';
     d.dataset.clip = m.clip;
     d.dataset.start = m.start;
-    // what was said or seen, the picture at the moment, WHICH CLIP and where in it, and how
-    // long (wave 23: a hit named no clip). The clip is the first thing on the second line.
+    // One tidy row (wave 25): the clip and the time first, the strength in words, one line of why;
+    // the rest (the whole text, where it matched) on demand. A whole-clip hit was a 20-line wall.
     d.title = `${stem(m.clip)} ${fmt(m.start)}–${fmt(m.end)}${m.why ? ` · ${m.why}` : ''}`;
     const poster = (P.clips[m.clip] || {}).poster;
     const still = poster ? `${poster}${poster.includes('?') ? '&' : '?'}t=${Math.max(0, m.start).toFixed(2)}` : '';
+    const str = m.strength ? ` · <span class="str ${escapeHtml(m.strength)}" data-testid="find-strength" title="${m.judged ? 'judged by the model from the clip\'s own text' : 'from how many of the ways of searching agree'}">${escapeHtml(m.strength)}</span>` : '';
+    const span = m.whole ? 'the whole clip' : `${Math.max(0, m.end - m.start).toFixed(1)} s`;
     d.innerHTML = `${still ? `<img class="still" loading="lazy" decoding="async" draggable="false" alt="" src="${escapeHtml(still)}">`
                             : '<div class="still"></div>'}
-      <div class="body"><span class="w">${escapeHtml(m.what || '')}</span>
-      <span class="t"><b class="fclip" data-testid="find-clip">${escapeHtml(stem(m.clip))}</b> · at ${clock(m.start)} · ${Math.max(0, m.end - m.start).toFixed(1)} s${m.label ? ` · ${escapeHtml(m.label)}` : ''}</span></div>`;
+      <div class="body"><span class="t"><b class="fclip" data-testid="find-clip">${escapeHtml(stem(m.clip))}</b> · at ${clock(m.start)} · ${span}${str}</span>
+      <span class="w" data-testid="find-why">${escapeHtml(m.line || first(m.what) || '')}</span>
+      <a href="#" class="more" data-testid="find-more">details</a>
+      <div class="full" hidden>${escapeHtml(m.what || '')}${m.label ? `<div class="hint">${escapeHtml(m.label)}${m.via ? ` · via “${escapeHtml(m.via)}”` : ''}</div>` : ''}</div></div>`;
+    d.querySelector('.more').onclick = (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const f = d.querySelector('.full');
+      f.hidden = !f.hidden;
+      e.target.textContent = f.hidden ? 'details' : 'less';
+    };
     d.onclick = () => openFindMatch(m, d);
     box.appendChild(d);
   });
@@ -6655,6 +6677,87 @@ function followFind(job) {
   }, 1000);
 }
 
+/* The model step of Find (wave 25): after the instant hits are shown, a "looking closer…" line with a
+ * Stop; when the model has read the candidates their strengths and one-line whys replace the instant
+ * ones, "nothing convincing" is said only if it agrees, and a picture question with nothing strong
+ * offers a bounded frame scan. A newer search, or Stop, drops it. */
+function thinkLine(html) {
+  let el = $('#findThink');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'findThink';
+    el.className = 'hint findthink';
+    el.dataset.testid = 'find-thinking';
+    $('#findResults').insertAdjacentElement('afterbegin', el);
+  }
+  el.innerHTML = html;
+  return el;
+}
+
+function followThink(job, q, seq, instantMeta) {
+  const t0 = Date.now();
+  let busy = false;
+  const stopBtn = `<button type="button" class="findstop" data-testid="find-think-stop">Stop</button>`;
+  const paint = (detail) => {
+    const el = thinkLine(`<span class="spin"></span>${escapeHtml(detail || 'looking closer…')} ${Math.round((Date.now() - t0) / 1000)} s ${stopBtn}`);
+    el.querySelector('.findstop').onclick = async () => {
+      try { await fetch(`/api/jobs/${encodeURIComponent(job)}/stop`, { method: 'POST' }); } catch (e) { /* the poll says */ }
+    };
+  };
+  paint('looking closer…');
+  const iv = setInterval(async () => {
+    if (seq !== findSeq) { clearInterval(iv); return; }
+    if (busy) return;
+    busy = true;
+    let s;
+    try { s = await (await fetch(`/api/job/${encodeURIComponent(job)}`)).json(); } catch (e) { busy = false; return; }
+    busy = false;
+    if (seq !== findSeq) { clearInterval(iv); return; }
+    if (s.state === 'running') { paint(s.detail && s.detail.startsWith('looking closer') ? s.detail : 'looking closer…'); return; }
+    clearInterval(iv);
+    const el = $('#findThink');
+    if (s.state === 'cancelled') { if (el) el.innerHTML = 'Stopped looking closer: these are the instant hits.'; return; }
+    if (s.state !== 'done' || !s.found) { if (el) el.remove(); return; }
+    const f = s.found;
+    renderFindResults(f.matches, '', { ...instantMeta, judged: true, nothing: f.nothing, scan: f.scan_offer, query: q, seq });
+    $('#findState').textContent = f.matches.length && !f.nothing ? `${f.matches.length} hits, read by the model · ${f.seconds} s` : '';
+  }, 800);
+}
+
+let findScanJob = null;
+async function startFindScan(offer, q, seq) {
+  const btn = $('#findScan');
+  if (btn) btn.disabled = true;
+  let r;
+  try {
+    r = await (await fetch('/api/find/scan', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query: q, clips: offer.clips }) })).json();
+  } catch (e) { toast('could not start the scan'); return; }
+  if (!r.job) { toast(r.detail || 'could not start the scan'); if (btn) btn.disabled = false; return; }
+  findScanJob = r.job;
+  const t0 = Date.now();
+  const stopBtn = `<button type="button" class="findstop" data-testid="find-scan-stop">Stop</button>`;
+  const paint = (d) => {
+    const el = thinkLine(`<span class="spin"></span>${escapeHtml(d || 'looking through the footage…')} · ${r.frames} frames ${Math.round((Date.now() - t0) / 1000)} s ${stopBtn}`);
+    el.querySelector('.findstop').onclick = () => fetch(`/api/jobs/${encodeURIComponent(r.job)}/stop`, { method: 'POST' });
+  };
+  paint();
+  const iv = setInterval(async () => {
+    if (seq !== findSeq) { clearInterval(iv); return; }
+    let s;
+    try { s = await (await fetch(`/api/job/${encodeURIComponent(r.job)}`)).json(); } catch (e) { return; }
+    if (s.state === 'running') { paint(s.detail); return; }
+    clearInterval(iv);
+    const el = $('#findThink');
+    if (s.state === 'cancelled') { if (el) el.innerHTML = 'Stopped looking through the footage.'; if (btn) btn.disabled = false; return; }
+    if (s.state !== 'done' || !s.found) { if (el) el.innerHTML = `The scan did not finish: ${escapeHtml(s.detail || '')}`; return; }
+    const rows = s.found.matches.concat(findLastRows.filter((m) => !s.found.matches.some((x) => x.clip === m.clip && Math.abs(x.start - m.start) < 1)));
+    renderFindResults(rows, '', { query: q, seq, judged: true, nothing: !s.found.matches.length && findLastNothing });
+    $('#findState').textContent = s.found.matches.length ? `${s.found.matches.length} found by looking at ${s.found.frames} frames` : `nothing in ${s.found.frames} frames`;
+  }, 1000);
+}
+
+let findLastRows = [], findLastNothing = false;   // what is listed, for a scan to add to
 let findSeq = 0;                 // the newest search: an older answer arriving late is dropped
 async function doFind(deep = false, weak = false) {
   const q = $('#findQ').value.trim();
@@ -6685,7 +6788,9 @@ async function doFind(deep = false, weak = false) {
     // newer question: COLD-14 showed the "a dog" guess under "milk jug"
     if (seq !== findSeq) return;
     paintFindDeepPrice(data.deep_projected_usd, data);
-    renderFindResults(data.matches, '', { confident: (data.floor || {}).confident, indexing: (data.floor || {}).indexing, query: q });
+    const instantMeta = { confident: (data.floor || {}).confident, indexing: (data.floor || {}).indexing, query: q, seq };
+    renderFindResults(data.matches, '', instantMeta);
+    if (data.think_job) followThink(data.think_job, q, seq, instantMeta);
     $('#findState').textContent = (data.floor || {}).confident === false || !data.matches.length ? ''
       : `${data.matches.length} match${data.matches.length > 1 ? 'es' : ''} in the words and the frames`;
     if (data.job) {

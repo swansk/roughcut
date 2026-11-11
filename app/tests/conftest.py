@@ -39,6 +39,13 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "live: needs the real model; run with ROUGHCUT_LIVE=1")
 
 
+@pytest.fixture(autouse=True)
+def no_find_think(monkeypatch):
+    """Find's model step (wave 25) is off unless a test asks for it (body `think`): a plain /api/find
+    never calls a model."""
+    monkeypatch.setenv("ROUGHCUT_FIND_THINK", "0")
+
+
 @pytest.fixture(scope="session", autouse=True)
 def no_local_gpu():
     """The local GPU stage (wave 20) is off for the whole suite: the suite must pass on a

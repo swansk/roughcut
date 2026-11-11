@@ -419,7 +419,7 @@
     // moments): the Index panel on that clip. Also on the Source monitor's right-click menu.
     transcript: () => {
       if (!source.clip) return toastSay('pick a clip in the Project panel first');
-      if (window.rcIndex) window.rcIndex.open([source.clip.clip]);
+      if (window.rcIndex) window.rcIndex.open([source.clip.clip], { wide: true });
     },
     markin: () => source.mark('in'),
     markout: () => source.mark('out'),
@@ -1197,13 +1197,21 @@
     const clips = [];
     for (const c of project.clips) {
       const subs = project.subs.get(c.clip) || [];
-      const hit = !q || c.clip.toLowerCase().includes(q);
+      const hit = !q || c.clip.toLowerCase().includes(q) || clipText(c).includes(q);
       // a search that finds a subclip shows its clip, open on what it found
       const found = hit ? subs : subs.filter((s) => `${s.name} ${s.why} ${s.note}`.toLowerCase().includes(q));
       if (hit || found.length) clips.push(clipItem(c, found, !hit));
     }
     const prop = seqs.filter((s) => s.type === 'prop');
     return { seqs: prop.concat(sortItems(seqs.filter((s) => s.type !== 'prop'))), clips: sortItems(clips) };
+  }
+  /* What the bin's search reads besides the name (wave 25 FIND2): the clip's description (the
+   * editor's own when they wrote one), what the index found in it and what is said in it. */
+  function clipText(c) {
+    const pc = boardClip(c.clip) || {};
+    const v = pc.visual || {};
+    return [v.summary, ...(v.moments || []).map((m) => m && m.what), ...(pc.transcript || []).map((u) => u && u.text)]
+      .filter(Boolean).join(' \n ').toLowerCase();
   }
   const isOpenClip = (it) => it.subs.length > 0 && (it.forced || project.open.has(it.name));
 
@@ -1422,6 +1430,19 @@
     project.items = new Map(all.map((it) => [it.key, it]));
     project.live = liveSig();
     paintCount(seqs.length + clips.length);
+    // a literal search that finds nothing points at the box that understands sentences (FINDER-05)
+    if (project.q.trim() && !seqs.length && !clips.length) {
+      box.insertAdjacentHTML('beforeend', '<div class="pempty pfind" data-testid="project-find-hint">No clip name, description or word matches. '
+        + '<a href="#" data-testid="project-find-link">Search inside the footage with Find</a></div>');
+      const a = box.querySelector('[data-testid="project-find-link"]');
+      a.onclick = (e) => {
+        e.preventDefault();
+        const text = project.q.trim();
+        open('bin');
+        const q = $('#findQ');
+        if (q) { q.value = text; if (typeof window.doFind === 'function') window.doFind(); }
+      };
+    }
   }
 
   /* A repaint the editor did not ask for (the pass's picks landed, a proposal came or
