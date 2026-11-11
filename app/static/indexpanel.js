@@ -949,19 +949,7 @@
     /* Run's hover card's words now (what / cost / changes): for the suite */
     runCard: () => ({ name: runName(), what: runWhat(), change: runChanges(), price: runPrice() }) };
 
-  /* The Source monitor's way in: its clip's record (the Transcript button in the monitor's
-   * head opens this panel on the clip it holds). */
-  function wireSource() {
-    const b = document.getElementById('srcFound');
-    if (!b) return;
-    const sync = () => { b.disabled = !(window.rcSource && window.rcSource.clip); };
-    b.addEventListener('click', () => { if (window.rcSource && window.rcSource.clip) open([window.rcSource.clip]); });
-    window.addEventListener('rcsource', sync);
-    sync();
-  }
-
   function init() {
-    wireSource();
     if (!registerCard()) window.addEventListener('load', registerCard, { once: true });
     const sec = mount();
     // the tab shown, whichever way (its click, Window › Index, dock.open('index'), a tab

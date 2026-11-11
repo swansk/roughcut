@@ -104,13 +104,20 @@ def test_a_click_on_a_line_cues_the_clip_in_the_source_monitor(page):
 
 
 def test_the_source_monitor_opens_its_clips_record(page):
+    """No always-visible button (the board's word budget): the Clip menu and the monitor's
+    right-click menu open the clip's transcript."""
     page.evaluate("dock.project.select('CLIP_B.MP4')")
     page.wait_for_function("window.rcSource && rcSource.clip === 'CLIP_B.MP4'", timeout=8000)
-    btn = page.locator('[data-testid="source-found"]')
-    assert btn.is_enabled()
-    btn.click()
+    assert page.locator("#srcFound").count() == 0
+    page.locator('.menu[data-menu="clip"] .mtop').click()
+    page.locator('[data-testid="clip-transcript"]').click()
     page.wait_for_selector('[data-testid="index-transcript-line"]', timeout=15000)
     assert page.locator('[data-testid="index-found"]').get_attribute("data-clip") == "CLIP_B.MP4"
+    page.evaluate("dock.project.select('CLIP_C.MP4')")
+    page.wait_for_function("window.rcSource && rcSource.clip === 'CLIP_C.MP4'", timeout=8000)
+    page.locator("#srcScreen").click(button="right")
+    page.locator('[data-testid="src-transcript"]').click()
+    page.wait_for_function("document.querySelector('[data-testid=index-found]') && document.querySelector('[data-testid=index-found]').dataset.clip === 'CLIP_C.MP4'", timeout=15000)
 
 
 def test_the_editor_can_correct_a_description_and_it_sticks(page, project):
@@ -157,8 +164,9 @@ def test_a_find_hit_names_its_clip_and_opens_in_the_source_monitor(page):
 def test_a_find_with_nothing_above_the_floor_says_so(page):
     _find(page, "a porcupine in the snow")
     page.wait_for_selector('[data-testid="find-nothing"]', timeout=15000)
-    assert "Nothing like" in page.locator('[data-testid="find-nothing"]').inner_text()
-    assert page.locator("#findResults .cand").count() == 0
+    assert "Nothing" in page.locator('[data-testid="find-nothing"]').inner_text()
+    assert page.locator('[data-testid="find-nothing"]').count() == 1      # one line, not two
+    assert page.locator("#findState").inner_text() == ""
 
 
 def test_a_running_find_shows_that_it_is_running(page):

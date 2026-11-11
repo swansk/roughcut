@@ -188,38 +188,35 @@ def test_a_word_in_every_clip_says_nothing_about_which_moment():
     assert find.lexical("a dog in the snow", clips)          # without the floor they are still the weak guesses
 
 
-def test_nothing_under_the_floor_says_so_and_counts_what_it_held_back():
+def test_nothing_above_the_floors_is_said_not_filtered():
+    """A floor that removed hits lost a real Killington hit (its right picture matches score
+    0.187-0.20, Copper's absent queries 0.15-0.196): nothing is removed by score, and
+    `floor.confident` says whether anything clears the floors."""
     clips = _clips()
-    got = _search("a dog in the snow", clips,
-                  [{"clip": "GX3", "start": 1.0, "end": 3.0, "score": 0.165}])
-    assert got["matches"] == []
-    assert got["floor"]["hidden"] >= 2 and got["floor"]["local"] == find.LOCAL_FLOOR
-    weak = _search("a dog in the snow", clips,
-                   [{"clip": "GX3", "start": 1.0, "end": 3.0, "score": 0.165}], weak=True)
-    assert weak["matches"] and weak["floor"]["weak"] is True
+    got = _search("a dog in the snow", clips, [{"clip": "GX3", "start": 1.0, "end": 3.0, "score": 0.165}])
+    assert got["floor"]["confident"] is False and got["floor"]["local"] == find.LOCAL_FLOOR
+    assert got["matches"] and got["floor"]["weak_rows"] >= 1       # the closest guesses are still listed
 
 
 def test_a_real_picture_match_clears_the_floor():
     got = _search("chairlift", _clips(), [{"clip": "GX4", "start": 3.0, "end": 5.0, "score": 0.24}])
-    assert got["matches"] and got["matches"][0]["clip"] == "GX4.MP4"
+    assert got["matches"] and got["matches"][0]["clip"] == "GX4.MP4" and got["floor"]["confident"] is True
 
 
-def test_a_weak_words_match_a_picture_agrees_with_is_kept():
+def test_a_weak_words_match_a_picture_agrees_with_counts_as_confident():
     clips = _clips()
     clips["GX4.MP4"]["visual"]["moments"] = [
         {"start": 2, "end": 8, "kind": "action", "notable": False, "what": "a chairlift, snow, a man in a cap"}]
     alone = _search("a man holding a chairlift ticket", clips)
-    assert alone["matches"] == []                         # one word in five: a guess
+    assert alone["floor"]["confident"] is False            # one word in five: a guess
     agreed = _search("a man holding a chairlift ticket", clips,
                      [{"clip": "GX4", "start": 3.0, "end": 5.0, "score": 0.24}])
-    assert agreed["matches"] and "seen" in agreed["matches"][0]["source"] and "local" in agreed["matches"][0]["source"]
+    assert agreed["floor"]["confident"] is True and "local" in agreed["matches"][0]["source"]
 
 
 def test_a_picture_match_in_a_black_stretch_is_dropped():
     got = _search("hot tub", _clips(), [{"clip": "GX2", "start": 1.0, "end": 3.0, "score": 0.30}])
     assert got["matches"] == []                  # a black frame looks like everything
-    weak = _search("hot tub", _clips(), [{"clip": "GX2", "start": 1.0, "end": 3.0, "score": 0.30}], weak=True)
-    assert weak["matches"] == []                 # not even on request: it shows nothing
 
 
 def test_a_spoken_phrase_outranks_a_look_alike_frame():
@@ -364,4 +361,4 @@ def test_find_names_its_floor_and_takes_weak(described):
     r = c.post("/api/find", json={"query": "hello", "local": False}).json()
     assert r["floor"]["lexical"] == find.LEXICAL_FLOOR and r["matches"]
     none = c.post("/api/find", json={"query": "porcupine", "local": False}).json()
-    assert none["matches"] == [] and none["floor"]["hidden"] == 0
+    assert none["matches"] == [] and none["floor"]["confident"] is False
