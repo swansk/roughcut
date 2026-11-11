@@ -4499,7 +4499,11 @@ function keepRow(s, cols) {
   // the quote, ellipsized; no thumbnail (the list view's, not the icon view's).
   const cell = (k) => {
     if (k === 'name') {
-      return `<td class="name"><span class="n">${who}${s.whole ? '' : certSlot(s.clip, s.start, s.end)}<span class="w${s.note ? ' note' : ''}">${
+      // the Clip column needs 740 px; narrower, the name carries the clip (FINDER-01: "Oh" and
+      // "Steady." in a row with no clip name anywhere)
+      const cn = !s.whole && !cols.some((c) => c.k === 'clip')
+        ? `<span class="clipname" data-testid="keep-clip">${escapeHtml(stem(s.clip))}</span> ` : '';
+      return `<td class="name"><span class="n">${who}${s.whole ? '' : certSlot(s.clip, s.start, s.end)}${cn}<span class="w${s.note ? ' note' : ''}">${
         s.hero ? '<span class="hero">★</span> ' : ''}${escapeHtml(keepLabel(s))}</span>${pv}</span></td>`;
     }
     if (k === 'clip') return `<td>${escapeHtml(stem(s.clip))}</td>`;

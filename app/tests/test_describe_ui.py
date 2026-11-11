@@ -174,3 +174,20 @@ def test_a_running_find_shows_that_it_is_running(page):
     assert "searching" in txt and txt.rstrip().endswith("s")
     page.wait_for_selector("#findResults .cand", timeout=15000)
     assert page.locator('[data-testid="find-running"]').count() == 0
+
+
+def test_a_selects_row_names_its_clip_in_a_narrow_panel(page):
+    """FINDER-01: a pick read "Oh" or "Steady." with no clip name anywhere in the row (the Clip
+    column needs 740 px; the Selects panel is narrower)."""
+    out = page.evaluate("""() => fetch('/api/selects', {method: 'PUT',
+        headers: {'content-type': 'application/json'},
+        body: JSON.stringify({selects: [{clip: 'CLIP_A.MP4', start: 4.0, end: 5.5, why: 'the goodbye'}]})})
+        .then(r => r.json())""")
+    assert out.get("ok"), out
+    page.reload()
+    page.evaluate("dock.open('bin')")
+    page.wait_for_selector("#library .keep")
+    if page.locator("#library table.sel-list th", has_text="Clip").count() == 0:
+        assert page.locator("#library .keep").first.locator('[data-testid="keep-clip"]').inner_text() == "CLIP_A"
+    # the label the older tests read is untouched by it
+    assert "CLIP_A" not in page.locator("#library .keep .w").first.inner_text()

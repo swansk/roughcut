@@ -755,3 +755,4 @@ a.floorbtn:hover { color: var(--text); background: var(--card-hi); border-color:
                      border-radius: 50%; animation: findspin .8s linear infinite; flex: none; }
 @keyframes findspin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .findrunning .spin { animation-duration: 2.4s; } }
+.keep .clipname { color: var(--dim); font-variant-numeric: tabular-nums; margin-right: 2px; }
