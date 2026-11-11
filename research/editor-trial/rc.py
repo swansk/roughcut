@@ -51,8 +51,8 @@ def board():
         page.on("dialog", on_dialog)
         page.on("pageerror", lambda e: (print("PAGE ERROR:", str(e)[:300], flush=True),
                                         note(f"page error: {str(e)[:300]}")))
-        if not page.url.startswith(URL):
-            page.goto(URL, wait_until="domcontentloaded")
+        if not page.url.startswith(URL) or "/api/" in page.url:      # blank, or the warm-up endpoint
+            page.goto(URL, wait_until="domcontentloaded", timeout=90000)
         yield page
     finally:
         pw.stop()
