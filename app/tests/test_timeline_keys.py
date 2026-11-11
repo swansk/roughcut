@@ -200,27 +200,26 @@ def test_k_held_with_l_plays_at_one_x_while_held(page):
 # ------------------------------------------------------------------ navigation
 
 def test_down_and_up_walk_the_cuts_and_home_end_the_film(page):
+    """Wave 25 (HANDS round 3): the playhead walks the cuts and NEVER changes what is selected —
+    this test used to assert the shot under the playhead became the selection."""
     a, b = ids(page)
+    before = page.evaluate("[...tl.state.sel]")
     page.keyboard.press("ArrowDown")
     assert page.evaluate("tl.state.playhead") == pytest.approx(2.0, abs=0.01)
-    assert page.evaluate("[...tl.state.sel]") == [b]
-    assert page.evaluate("sel") == 1
+    assert page.evaluate("[...tl.state.sel]") == before
+    assert page.evaluate("sel") == 1                  # the board's own notion: the shot under the playhead
     assert page.evaluate("player.idx") == 1 and not page.evaluate("player.playing")
     page.keyboard.press("ArrowDown")        # no next cut: the end of the film
     assert page.evaluate("tl.state.playhead") == pytest.approx(4.0, abs=0.01)
     page.keyboard.press("ArrowUp")          # back to this shot's head first
     assert page.evaluate("tl.state.playhead") == pytest.approx(2.0, abs=0.01)
-    assert page.evaluate("[...tl.state.sel]") == [b]
     page.keyboard.press("ArrowUp")          # then the previous cut
     assert page.evaluate("tl.state.playhead") == pytest.approx(0.0, abs=0.01)
-    assert page.evaluate("[...tl.state.sel]") == [a]
     page.keyboard.press("End")
     assert page.evaluate("tl.state.playhead") == pytest.approx(4.0, abs=0.01)
-    assert page.evaluate("tl.state.anchor") == b
     page.keyboard.press("Home")
     assert page.evaluate("tl.state.playhead") == pytest.approx(0.0, abs=0.01)
-    assert page.evaluate("tl.state.anchor") == a
-    assert page.locator("#tl .blk.sel").get_attribute("data-id") == a
+    assert page.evaluate("[...tl.state.sel]") == before
 
 
 def test_arrows_step_the_playhead_and_leave_the_selection_alone(page):
@@ -314,7 +313,7 @@ def test_x_removes_the_whole_selection_and_one_undo_restores_it(page):
     page.keyboard.press("Control+z")
     assert ids(page) == [a, b]
     assert page.locator("#tl .blk").count() == 2
-    # the shot that takes the place is selected; Delete and Backspace do the same
+    # a delete leaves nothing selected (wave 25: no heir is handed the selection); Delete does the same
     page.evaluate("tl.seek(tl.total())")               # adding lands at the playhead (INTAKE M11): at the end, so it appends
     page.evaluate("document.querySelector('#more').hidden && document.querySelector('#moreFound').click(); document.querySelector('#libTabs .tab[data-tab=heard]').click()")
     page.locator("#library .cand").first.click()        # a third shot, after the other two
@@ -324,62 +323,58 @@ def test_x_removes_the_whole_selection_and_one_undo_restores_it(page):
     assert page.evaluate("segs.length") == 2
     assert a not in ids(page)
     heir = page.evaluate("segs[0].id")
-    assert page.evaluate("[...tl.state.sel]") == [heir]
-    assert page.evaluate("sel") == 0
-    # the heir was handed on, not chosen: ⌫ asks for a choice (I16.0 n)…
+    assert page.evaluate("[...tl.state.sel]") == [], "nothing is selected after a delete"
+    # …so Backspace has nothing to take, and says so
     page.keyboard.press("Backspace")
     assert page.evaluate("segs.length") == 2 and heir in ids(page)
     page.wait_for_function(
-        "document.querySelector('#toast').textContent.includes('click a shot')", timeout=3000)
-    # …and takes it once it is chosen
+        "document.querySelector('#toast').textContent.includes('nothing selected')", timeout=3000)
+    # …and takes a shot once it is chosen
     page.locator(f'#tl .blk[data-id="{heir}"]').click()
     page.keyboard.press("Backspace")
     assert page.evaluate("segs.length") == 1
     assert heir not in ids(page)
-    assert page.evaluate("[...tl.state.sel]") == ids(page), "the last one left is selected"
+    assert page.evaluate("[...tl.state.sel]") == [], "nothing is selected after the delete"
 
 
 def test_backspace_never_takes_the_shot_the_board_picked(page):
-    """I16.0 (n): on the pass ⌫ is "the previous moment"; on the board it ripple-deleted
-    whatever was selected, and the board selects on its own — the first shot at load,
-    the shot under the playhead as the cut plays. ⌫ and Del take only a chosen shot;
-    X is unchanged."""
+    """I16.0 (n), kept in a stronger form (wave 25, HANDS round 3): the board no longer picks a
+    shot at all — app.js's index moving (playback, a jump) is the shot under the playhead, not the
+    selection — so Delete and Backspace take only what the editor selected, and with nothing
+    selected they say so."""
     a, b = ids(page)
-    # nothing is selected at start (INTAKE M16); the board picking one is the same case
     assert page.evaluate("[...tl.state.sel]") == [], "nothing is selected at start"
     page.evaluate("sel = 0; paint()")              # app.js's index moving, as playback does
-    assert page.evaluate("[...tl.state.sel]") == [a]
+    assert page.evaluate("[...tl.state.sel]") == [], "the playhead's shot is not the selection"
     for key in ("Backspace", "Delete"):
         page.keyboard.press(key)
         assert ids(page) == [a, b], key
-    # playback carries the selection to the shot under the playhead: still not chosen
-    page.evaluate("sel = 1; paint()")              # app.js's index moving, as playback does
-    assert page.evaluate("[...tl.state.sel]") == [b]
+        assert "nothing selected" in page.evaluate("document.querySelector('#toast').textContent"), key
+    page.evaluate("sel = 1; paint()")
+    assert page.evaluate("[...tl.state.sel]") == []
     page.keyboard.press("Backspace")
     assert ids(page) == [a, b]
-    # a click on it is a choice — even on the block already selected, which changes
-    # no selection and so emits nothing
+    # a click on it is a choice
     page.locator(f'#tl .blk[data-id="{b}"]').click()
     page.keyboard.press("Backspace")
     assert ids(page) == [a]
 
 
 def test_backspace_never_takes_the_heir_of_the_inspectors_remove(page):
-    """I16.0 (n), review: the heir of a delete is the board's pick whoever deleted. The X
-    key protected it, but the inspector's own remove (and remove-all) handed it on as an
-    ordinary selection, so a ⌫ right after took out a shot nobody chose."""
+    """I16.0 (n), review, kept: after the inspector's own remove nothing is selected (no heir is
+    handed the selection), so a Backspace right after takes no shot nobody chose."""
     a, b = ids(page)
     page.locator(f'#tl .blk[data-id="{a}"]').click()
     page.wait_for_selector('#inspector details.assist')
     page.evaluate("document.querySelectorAll('#inspector details.assist').forEach(d => { d.open = true; })")
     page.locator('#inspector button[data-act="del"]').click()
     page.wait_for_function(f"segs.length === 1 && segs[0].id === '{b}'", timeout=5000)
-    assert page.evaluate("[...tl.state.sel]") == [b], "the heir was handed the selection"
+    assert page.evaluate("[...tl.state.sel]") == [], "no heir was handed the selection"
     for key in ("Backspace", "Delete"):
         page.keyboard.press(key)
         assert ids(page) == [b], key
     page.wait_for_function(
-        "document.querySelector('#toast').textContent.includes('click a shot')", timeout=3000)
+        "document.querySelector('#toast').textContent.includes('nothing selected')", timeout=3000)
     # once chosen it goes
     page.locator(f'#tl .blk[data-id="{b}"]').click()
     page.keyboard.press("Backspace")

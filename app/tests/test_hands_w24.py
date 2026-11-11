@@ -263,17 +263,23 @@ def test_two_shots_copied_paste_together_as_one_undo_step(page):
 
 # ------------------------------------------------------------------ a typed timecode
 
-def test_parse_timecode_accepts_frames_seconds_m_ss_digits_and_offsets(page):
+def test_parse_timecode_is_one_grammar_filled_from_the_right(page):
+    """Round 3 (R2-03): 1:00 is one second, -100 is one second back, 12 is frames, 0.5s is half a second."""
     r = page.evaluate("1 / tl.frame()")             # the sequence's own rate
     n = round(r)                                    # the nominal count timecode runs at
     p = lambda s, frm=0: page.evaluate(f"tlKeys.parseTimecode({s!r}, {frm})")
     assert abs(p("00:00:40:00")["t"] - 40 * n / r) < 1e-6
     assert abs(p("40.")["t"] - 40 * n / r) < 1e-6           # timecode seconds: 40. is 00:00:40:00
-    assert abs(p("40.5")["t"] - round(40.5 * n) / r) < 1e-6
-    assert abs(p("1:05")["t"] - 65 * n / r) < 1e-6
+    assert abs(p("0.5s")["t"] - round(0.5 * n) / r) < 1e-6
+    assert abs(p("1:00")["t"] - n / r) < 1e-6               # one second, not one minute
+    assert abs(p("1:05:00")["t"] - 65 * n / r) < 1e-6
     assert abs(p("5108")["t"] - (51 * n + 8) / r) < 1e-6
+    assert abs(p("12")["t"] - 12 / r) < 1e-6                # digits fill from the right: twelve frames
+    assert abs(p("100")["t"] - n / r) < 1e-6
+    assert abs(p("12f")["t"] - 12 / r) < 1e-6
     assert abs(p("+2.", 10)["t"] - (10 + 2 * n / r)) < 0.05
-    assert abs(p("-10", 10)["t"] - (10 - 10 / r)) < 0.05
+    assert abs(p("-100", 10)["t"] - (10 - n / r)) < 0.05    # a second back, as the sheet says
+    assert abs(p("-1:00", 10)["t"] - (10 - n / r)) < 0.05
     assert p(f"00:00:40:{n}")["ok"] is False                # no such frame
     assert p("nonsense")["ok"] is False
 
@@ -294,7 +300,7 @@ def test_clicking_the_timeline_timecode_types_and_jumps(page):
 def test_a_timecode_past_the_end_goes_to_the_last_frame_and_says_so(page):
     type_tc(page, "9:00")
     assert "past the end" in toast_text(page)
-    assert tc_text(page) == "00:00:03:23"
+    assert tc_text(page) == "00:00:04:00"           # parked ON the end (round 3), not on the last frame
 
 
 def test_escape_leaves_the_timecode_field_and_a_bad_one_stays_open(page):
@@ -302,7 +308,7 @@ def test_escape_leaves_the_timecode_field_and_a_bad_one_stays_open(page):
     page.keyboard.type("zzz")
     page.keyboard.press("Enter")
     assert page.locator("input.hands-tc.bad").count() == 1
-    assert "not a timecode" in toast_text(page)
+    assert "is not a time" in toast_text(page)
     page.keyboard.press("Escape")
     assert page.locator("input.hands-tc").count() == 0
     assert tc_text(page) == "00:00:00:00"
@@ -725,3 +731,243 @@ def test_a_paste_into_an_emptied_cut_goes_to_zero(page):
     page.keyboard.press("Control+v")
     assert page.evaluate("segs.length") == 1
     assert page.evaluate("tl.filmStart(segs[0].id)") == 0
+
+
+# ------------------------------------------------------------ round 3: the Premiere editor
+
+def _sel_ids(page):
+    return page.evaluate("[...tl.state.sel]")
+
+
+def test_the_playhead_never_changes_the_selection(page):
+    """R2-09: a typed time, Home, Up / Down and a click on the ruler left the selection where the editor
+    put it; Delete took out that shot, not the one under the playhead."""
+    click_shot(page, 1)
+    chosen = _sel_ids(page)
+    assert len(chosen) == 1
+    type_tc(page, "1.")                             # a time inside shot 1
+    assert _sel_ids(page) == chosen
+    for key in ("Home", "ArrowDown", "ArrowUp", "End", "ArrowLeft"):
+        page.keyboard.press(key)
+        assert _sel_ids(page) == chosen, key
+    page.keyboard.press("Home")
+    page.keyboard.press("Delete")
+    assert page.evaluate("segs.length") == 1
+    assert ranges(page)[0][0] == "CLIP_A.MP4"      # shot 2 went, the one under the playhead stayed
+    assert "removed shot 2" in toast_text(page)
+
+
+def test_playing_does_not_move_the_selection(page):
+    click_shot(page, 0)
+    chosen = _sel_ids(page)
+    page.evaluate("playFrom(1)")
+    page.wait_for_function("player.idx === 1")
+    page.wait_for_timeout(400)
+    assert _sel_ids(page) == chosen
+    page.evaluate("pauseCut()")
+
+
+def test_delete_with_nothing_selected_says_so_and_does_nothing(page):
+    page.keyboard.press("Escape")
+    page.keyboard.press("Home")
+    for key in ("Delete", "Shift+Delete", "Backspace", "x"):
+        page.keyboard.press(key)
+        assert page.evaluate("segs.length") == 2, key
+        assert "nothing selected" in toast_text(page), key
+
+
+def test_a_delete_leaves_nothing_selected(page):
+    click_shot(page, 0)
+    page.keyboard.press("Delete")
+    assert _sel_ids(page) == []
+    page.keyboard.press("Delete")                   # the next shot is not taken by a second press
+    assert page.evaluate("segs.length") == 1
+
+
+def test_one_kind_is_selected_at_a_time_and_a_transition_delete_says_what_went(page):
+    click_shot(page, 1)
+    page.evaluate("tl.selectEdit(0)")
+    page.keyboard.press("Control+d")
+    assert page.evaluate("!!tl.tsel")
+    assert _sel_ids(page) == []                     # the shot is not outlined any more
+    assert page.locator("#tl .blk.sel").count() == 0
+    assert page.locator("#tl .tl-trans.sel").count() == 1
+    page.keyboard.press("Shift+Delete")
+    assert page.evaluate("tl.transitions().length") == 0 and page.evaluate("segs.length") == 2
+    assert "removed Cross Dissolve" in toast_text(page)
+    click_shot(page, 0)
+    assert page.evaluate("tl.tsel") is None and page.evaluate("tl.state.edit") is None
+
+
+def test_select_all_and_delete_takes_the_v2_clip_too(page):
+    """R2-14: Ctrl+A then Delete left the cutaway floating over an empty cut."""
+    page.evaluate("tl.addOverlay({clip: 'CLIP_C.MP4', in: 0, out: 1}, 1.0, 'V2')")
+    assert page.evaluate("tl.overlays().length") == 1
+    page.keyboard.press("Control+a")
+    assert "selected all" in toast_text(page)
+    page.keyboard.press("Delete")
+    assert page.evaluate("segs.length") == 0 and page.evaluate("tl.overlays().length") == 0
+    page.keyboard.press("Control+z")
+    assert page.evaluate("segs.length") == 2
+
+
+def test_a_locked_track_is_not_part_of_select_all(page):
+    page.evaluate("tl.addOverlay({clip: 'CLIP_C.MP4', in: 0, out: 1}, 1.0, 'V2')")
+    page.evaluate("tl.setTrack('V2', 'lock', true)")
+    page.keyboard.press("Control+a")
+    page.keyboard.press("Delete")
+    assert page.evaluate("segs.length") == 0 and page.evaluate("tl.overlays().length") == 1
+
+
+def test_a_typed_time_past_the_end_parks_on_the_end_and_an_overwrite_there_appends(page):
+    """R2-13: the last frame was eaten by an overwrite 'past the end'."""
+    page.evaluate("dock.project.select('CLIP_C.MP4', false)")
+    page.wait_for_function("document.querySelector('#srcVideo').readyState >= 2")
+    type_tc(page, "10.")
+    assert tc_text(page) == "00:00:04:00" and "past the end" in toast_text(page)
+    before = ranges(page)
+    page.keyboard.press(".")
+    after = ranges(page)
+    assert after[:2] == before                      # the two shots are whole
+    assert len(after) == 3 and after[2][0] == "CLIP_C.MP4"
+
+
+def test_the_transition_length_field_reads_frames_by_default_and_says_when_it_limits(page):
+    page.evaluate("tl.selectEdit(0)")
+    page.keyboard.press("Control+d")
+    tb = page.locator("#tl .tl-trans").bounding_box()
+    page.mouse.dblclick(tb["x"] + tb["width"] / 2, tb["y"] + tb["height"] / 2)
+    inp = page.locator("#tl .tl-trans input")
+    assert inp.bounding_box()["width"] >= 70        # wide enough to read what is typed
+    assert "frames" in page.inner_text("#tl .tl-trans-unit")
+    inp.fill("12")
+    inp.press("Enter")
+    r = page.evaluate("1 / tl.frame()")
+    assert abs(page.evaluate("tl.transitions()[0].dur") - 12 / r) < 0.01       # 12 is frames, not seconds
+    page.mouse.dblclick(tb["x"] + tb["width"] / 2, tb["y"] + tb["height"] / 2)
+    page.locator("#tl .tl-trans input").fill("0.5s")
+    page.keyboard.press("Enter")
+    assert abs(page.evaluate("tl.transitions()[0].dur") - 0.5) < 0.05
+    page.mouse.dblclick(tb["x"] + tb["width"] / 2, tb["y"] + tb["height"] / 2)
+    page.locator("#tl .tl-trans input").fill("9999")
+    page.keyboard.press("Enter")
+    assert "limited to" in toast_text(page)
+
+
+def test_bracket_keys_trim_one_frame_shift_five_and_shift_bracket_is_not_the_out_point(page):
+    """R2-20: 6 frames a press, and Shift+] trimmed the OUT by a second."""
+    click_shot(page, 0)
+    fr = page.evaluate("tl.frame()")
+    a0, b0 = page.evaluate("[segs[0].in, segs[0].out]")
+    page.keyboard.press("BracketRight")
+    a1 = page.evaluate("segs[0].in")
+    assert abs((a1 - a0) - fr) < 0.002
+    page.keyboard.press("Shift+BracketRight")        # types } on a US keyboard
+    assert abs((page.evaluate("segs[0].in") - a1) - 5 * fr) < 0.003
+    assert abs(page.evaluate("segs[0].out") - b0) < 1e-6          # the out-point did not move
+    page.keyboard.press("Alt+BracketLeft")
+    assert abs((b0 - page.evaluate("segs[0].out")) - fr) < 0.002
+
+
+def test_ctrl_g_with_the_source_focused_types_a_time_in_the_source(page):
+    """R2-05: it moved the sequence, and Enter started 'this shot only' on the Program."""
+    page.evaluate("dock.project.select('CLIP_C.MP4', false)")
+    page.wait_for_function("document.querySelector('#srcVideo').readyState >= 2")
+    page.locator("#source [data-src=fwd]").click()
+    ph = page.evaluate("tl.state.playhead")
+    page.keyboard.press("Control+g")
+    page.wait_for_selector("input.hands-tc")
+    page.keyboard.type("1:00")                      # one second
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(300)
+    assert abs(page.evaluate("document.querySelector('#srcVideo').currentTime") - 1.0) < 0.1
+    assert page.evaluate("tl.state.playhead") == ph
+    page.locator("#source [data-src=fwd]").click()
+    page.keyboard.press("Enter")                    # with the Source focused: nothing plays
+    page.wait_for_timeout(300)
+    assert page.evaluate("player.playing") is False
+
+
+def test_l_in_the_source_plays_through_the_out_mark(page):
+    page.evaluate("dock.project.select('CLIP_C.MP4', false)")
+    page.wait_for_function("document.querySelector('#srcVideo').readyState >= 2")
+    page.evaluate("(() => { const s = dock.source; s.marks['CLIP_C.MP4'] = [0.2, 0.6]; s.paint(); s.publish(); })()")
+    page.locator("#source [data-src=fwd]").click()
+    page.evaluate("document.querySelector('#srcVideo').currentTime = 0.3")
+    page.keyboard.press("l"); page.keyboard.press("l"); page.keyboard.press("l")   # 8x
+    page.wait_for_function("document.querySelector('#srcVideo').currentTime > 0.9", timeout=8000)
+    page.keyboard.press("k")
+
+
+def test_a_double_click_leaves_the_program_on_the_frame_the_source_shows(page):
+    """R2-02: the playhead jumped to the shot's first frame while the Source opened where it was clicked."""
+    bb = page.locator("#tl .blk").nth(1).bounding_box()
+    page.mouse.dblclick(bb["x"] + bb["width"] * 0.7, bb["y"] + bb["height"] / 2)
+    page.wait_for_timeout(500)
+    seg_in = page.evaluate("segs[1].in")
+    src_t = page.evaluate("document.querySelector('#srcVideo').currentTime")
+    ph = page.evaluate("tl.state.playhead - tl.filmStart(segs[1].id)")
+    assert ph > 0.8                                  # not the shot's first frame
+    assert abs((src_t - seg_in) - ph) < 0.1
+
+
+def test_ctrl_shift_v_pastes_over_and_ctrl_v_still_inserts(page):
+    click_shot(page, 0)
+    page.keyboard.press("Control+c")
+    page.evaluate("tl.seek(1.0); tl.setPlayhead(1.0)")
+    total = page.evaluate("tl.total()")
+    page.keyboard.press("Control+Shift+V")
+    assert abs(page.evaluate("tl.total()") - total) < 0.05          # overwritten, not rippled longer
+    assert page.evaluate("segs.length") == 3
+    assert "pasted over" in toast_text(page)
+    page.keyboard.press("Control+z")
+    assert page.evaluate("segs.length") == 2
+    page.keyboard.press("Control+v")
+    assert page.evaluate("tl.total()") > total + 1.5                # insert grows the film
+
+
+def test_the_zoom_stays_after_a_change_of_length_until_asked(page):
+    """R2-19: after \\, a delete re-scaled the ruler under the editor's pointer."""
+    page.keyboard.press("Backslash")
+    z0 = page.evaluate("tl.state.zoom")
+    click_shot(page, 1)
+    page.keyboard.press("Delete")
+    assert abs(page.evaluate("tl.state.zoom") - z0) < 1e-6
+    page.keyboard.press("Backslash")
+    assert page.evaluate("tl.state.zoom") != z0
+
+
+def test_a_right_click_on_a_shot_offers_the_ordinary_things_in_the_one_menu(page):
+    bb = page.locator("#tl .blk").nth(0).bounding_box()
+    page.mouse.click(bb["x"] + bb["width"] / 2, bb["y"] + bb["height"] / 2, button="right")
+    menu = page.locator("[data-testid=ai-context-menu]")
+    assert menu.is_visible() and page.locator("[data-testid=ai-context-menu]").count() == 1
+    for tid in ("ai-ctx-ask", "ctx-opensrc", "ctx-cut", "ctx-copy", "ctx-paste", "ctx-rdel", "ctx-speed"):
+        assert page.locator(f"[data-testid={tid}]").count() == 1, tid
+    page.locator("[data-testid=ctx-cut]").click()
+    assert page.evaluate("segs.length") == 1
+
+
+def test_a_cut_row_counts_a_slowed_shot_at_its_film_length(tmp_path):
+    """HANDS-19: the cut menu said 1:47 for a cut the timeline said was 1:35."""
+    import json
+    import server
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"segments": [{"clip": "A.MP4", "in": 0, "out": 10, "speed": 0.5},
+                                          {"clip": "B.MP4", "in": 0, "out": 4}]}), encoding="utf-8")
+    row = server._cut_row(p)
+    assert abs(row["duration_s"] - 24.0) < 0.01
+
+
+def test_a_rotation_is_one_step_on_the_boards_own_undo_stack(page):
+    calls = []
+    page.route("**/api/clips/*/orient", lambda route: (calls.append(route.request.post_data), route.fulfill(
+        status=200, content_type="application/json", body='{"clip": "CLIP_A.MP4", "changed": true, "previous": "sensor"}')))
+    page.evaluate("dock.project.rotateClip('CLIP_A.MP4', 'turn90')")
+    page.wait_for_function("tl.nextUndo() && /rotate/.test(tl.nextUndo().label)")
+    assert page.evaluate("tl.nextUndo().tag").startswith("rotate:")
+    page.keyboard.press("Control+z")
+    page.wait_for_function("%d" % 0 + " === 0 && true")
+    page.wait_for_timeout(500)
+    assert not page.evaluate("tl.nextUndo() && /rotate/.test(tl.nextUndo().label)")
+    assert any('"sensor"' in (c or "") for c in calls)             # the undo turned the clip back

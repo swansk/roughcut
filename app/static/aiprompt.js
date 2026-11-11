@@ -1443,6 +1443,17 @@
     const rotName = hit.target.kind === 'clip' && proj && typeof proj.rotMenu === 'function'
       && proj.canRotate(hit.target.clip) ? hit.target.clip : null;
     const at = { x: e.clientX, y: e.clientY };
+    // a timeline shot: the ordinary things too (HANDS round 3, R2-21), in this one menu. The shot is
+    // selected by the right-click, as everywhere, so the items act on it.
+    const shotMenu = hit.target.kind === 'segment' && window.tl && window.tlKeys;
+    if (shotMenu && !(tl.state.sel && tl.state.sel.has(hit.target.id))) tl.select([hit.target.id], { source: 'click' });
+    const ord = (key, label, k) => `<button type="button" role="menuitem" data-ctx="${key}" data-testid="ctx-${key}">`
+      + `<span class="aip-noico"></span><span>${label}</span>${k ? `<span class="k">${esc(k)}</span>` : ''}</button>`;
+    const mod = /Mac|iP/.test(navigator.platform) ? '⌘' : 'Ctrl+';
+    const ordinary = shotMenu
+      ? '<hr>' + ord('opensrc', 'Open in Source', 'dbl-click') + ord('cut', 'Cut', `${mod}X`) + ord('copy', 'Copy', `${mod}C`)
+        + ord('paste', 'Paste at the playhead', `${mod}V`) + ord('rdel', 'Ripple delete', 'Del')
+        + ord('speed', 'Speed / duration…', 'Effect Controls') : '';
     m.innerHTML = `<button type="button" role="menuitem" data-ctx="ask" data-testid="ai-ctx-ask">${ICON}`
       + `<span>Ask AI about this${hit.what === 'sequence' ? ' sequence' : ''}…</span><span class="k">${esc(KEY)}</span></button>`
       + (deep ? '<button type="button" role="menuitem" data-ctx="deep" data-testid="ai-ctx-deep">'
@@ -1453,7 +1464,8 @@
       // a footage clip (a Project row, the Source monitor's clip): which way up it is shown
       // (wave 23 FILM's menu, opened from this one so a clip has one right-click menu)
       + (rotName ? '<button type="button" role="menuitem" data-ctx="rotate" data-testid="ctx-rotate">'
-        + '<span class="aip-noico"></span><span>Rotate clip…</span></button>' : '');
+        + '<span class="aip-noico"></span><span>Rotate clip…</span></button>' : '')
+      + ordinary;
     m.hidden = false;
     m.style.left = `${Math.max(8, Math.min(e.clientX, window.innerWidth - m.offsetWidth - 8))}px`;
     m.style.top = `${Math.max(8, Math.min(e.clientY, window.innerHeight - m.offsetHeight - 8))}px`;
@@ -1464,6 +1476,14 @@
       if (b.dataset.ctx === 'ask') askAbout(hit.target);
       else if (b.dataset.ctx === 'transcript') { const t = document.querySelector('[data-testid="clip-transcript"]'); if (t) t.click(); }
       else if (b.dataset.ctx === 'rotate') proj.rotMenu(at.x, at.y, rotName);
+      else if (b.dataset.ctx === 'cut') tlKeys.cutKey();
+      else if (b.dataset.ctx === 'copy') tlKeys.copyKey();
+      else if (b.dataset.ctx === 'paste') tlKeys.pasteKey('insert');
+      else if (b.dataset.ctx === 'rdel') tlKeys.rippleDelete();
+      else if (b.dataset.ctx === 'opensrc') {
+        const sg = tl.byId(hit.target.id);
+        if (sg && typeof window.rcOpenShotInSource === 'function') window.rcOpenShotInSource(sg.clip, sg.in, sg.in, sg.out);
+      } else if (b.dataset.ctx === 'speed') { if (window.dock) window.dock.open('inspect'); }
       else lookDeeper(hit.target.id);
     };
   }

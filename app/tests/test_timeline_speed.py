@@ -194,6 +194,7 @@ def test_the_lanes_and_the_keys_sum_film_time_at_the_rate(page):
     page.keyboard.press("ArrowUp")
     assert page.evaluate("tl.state.playhead") == pytest.approx(0.0, abs=0.02)
     page.evaluate("tl.seek(3.0)")
+    page.evaluate("tl.select([segs[0].id])")           # Q trims the SELECTED shot (the playhead no longer selects)
     page.keyboard.press("q")
     assert page.evaluate("segs[0].in") == 2.5
     assert page.locator("#tl .tl-total").inner_text() == tc(3.0)     # 0.5 s of clip left = 1 s of film

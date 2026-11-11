@@ -237,7 +237,7 @@
 
   /* Open the field over `which`: 'timeline' (.tl-tc) or 'program' (#pos). */
   function editTimecode(which) {
-    const host = which === 'program' ? $('#pos') : $('#tl .tl-tc');
+    const host = which === 'program' ? $('#pos') : which === 'source' ? $('#srcPos') : $('#tl .tl-tc');
     if (!host || !window.tlKeys || typeof tlKeys.goToTimecode !== 'function') return false;
     closeField();
     const r = host.getBoundingClientRect();
@@ -250,7 +250,7 @@
     inp.spellcheck = false;
     inp.autocomplete = 'off';
     inp.value = host.textContent.trim();
-    inp.title = 'Type a timecode and press Enter: 40. (seconds) · 1:05 · 00:00:40:00 · +2. or -10 (frames) · Esc leaves';
+    inp.title = 'Type a time and press Enter: 40. or 0.5s (seconds) · 12 or 12f (frames) · 1:00 (one second) · 00:00:40:00 · +/- from here · Esc leaves';
     inp.style.cssText = `position:fixed;left:${Math.round(r.left - 3)}px;top:${Math.round(r.top - 2)}px;`
       + `width:${Math.max(Math.round(r.width) + 24, 104)}px;height:${Math.max(Math.round(r.height) + 4, 22)}px;`
       + `font:${cs.font};z-index:90`;
@@ -263,7 +263,9 @@
       if (e.key === 'Escape') { e.preventDefault(); closeField(); }
       else if (e.key === 'Enter') {
         e.preventDefault();
-        const res = tlKeys.goToTimecode(inp.value);
+        const res = which === 'source' && window.dock && dock.source && typeof dock.source.goTo === 'function'
+          ? (() => { const r = dock.source.goTo(inp.value); say(r.ok ? r.said : r.why); return r; })()
+          : tlKeys.goToTimecode(inp.value);
         if (res && res.ok) closeField();
         else { inp.classList.add('bad'); inp.select(); }
       }
@@ -276,13 +278,14 @@
   document.addEventListener('click', (e) => {
     const t = e.target instanceof Element ? e.target : null;
     if (!t) return;
-    if (t.closest('#tl .tl-tc')) { e.preventDefault(); editTimecode('timeline'); }
+    if (t.closest('#srcPos')) { e.preventDefault(); editTimecode('source'); }
+    else if (t.closest('#tl .tl-tc')) { e.preventDefault(); editTimecode('timeline'); }
     else if (t.closest('#pos')) { e.preventDefault(); editTimecode('program'); }
   }, true);
 
   function decorate() {
-    const a = $('#tl .tl-tc'), b = $('#pos');
-    for (const el of [a, b]) {
+    const a = $('#tl .tl-tc'), b = $('#pos'), c = $('#srcPos');
+    for (const el of [a, b, c]) {
       if (!el || el.dataset.handsTc) continue;
       el.dataset.handsTc = '1';
       el.classList.add('tc-typable');

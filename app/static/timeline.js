@@ -379,6 +379,7 @@
   let pending = null;              // { label, before } between begin() and commit()
   let tmpN = 0;
   let posterTimer = 0;
+  let fitVw = -1, fitAsked = false, wasEmpty = true;
   let autoFit = true;              // fit on every render until someone zooms
   let lastAppSel = -1;             // app.js's index the last time the two agreed
   let inCue = false;               // hooks.cue is running: app.js's sel moves are ours
@@ -533,6 +534,44 @@
     const mm = n % 60;
     const hh = (n - mm) / 60;
     return [hh, mm, ss, ff].map((x) => String(x).padStart(2, '0')).join(':');
+  }
+
+  /* The one grammar for a typed time (wave 25, HANDS round 3): the timecode fields, the transition
+   * length, and anything else that asks for a time read it here, and the key sheet says it once.
+   *   00:00:40:00      HH:MM:SS:FF, filled from the right: 1:00 is one second, 1:05:00 one minute five
+   *   40.   0.5   0.5s seconds (a point or an s)
+   *   12f              frames
+   *   5108   12   100  digits only, filled from the right as timecode: 5108 = 00:00:51:08, 12 = 12
+   *                    frames, 100 = one second (more frames than the rate carry over, 30 = 1:06 at 24)
+   *   + or - in front  relative to where you are (the caller adds it); the same grammar after it
+   * Returns {ok, frames, rel} (frames: whole frames at the sequence's nominal count, not yet in
+   * film seconds: divide by the rate) or {ok: false, why}. */
+  function parseTime(text, atRate) {
+    const raw = String(text == null ? '' : text).trim().replace(/;/g, ':');
+    if (!raw) return { ok: false, why: 'type a time' };
+    const rel = /^[+-]/.test(raw) ? (raw[0] === '-' ? -1 : 1) : 0;
+    const body = rel ? raw.slice(1).trim() : raw;
+    const rate = atRate > 0 ? atRate : fps();
+    const nominal = Math.max(1, Math.round(rate));
+    let m;
+    if ((m = /^(\d*\.?\d+|\d+\.)\s*s?$/i.exec(body)) && (/\./.test(body) || /s$/i.test(body))) {
+      return { ok: true, rel, frames: Math.round(parseFloat(m[1]) * nominal) };            // 40.  0.5  0.5s
+    }
+    if ((m = /^(\d+)\s*f(?:rames?)?$/i.exec(body))) return { ok: true, rel, frames: parseInt(m[1], 10) };
+    if (/^\d+(:\d+){1,3}$/.test(body)) {
+      const f = body.split(':').map(Number);
+      while (f.length < 4) f.unshift(0);
+      if (f[3] >= nominal) return { ok: false, why: `frames go 0–${nominal - 1} at ${nominal} fps` };
+      if (f[2] >= 60 || f[1] >= 60) return { ok: false, why: 'minutes and seconds go 0–59' };
+      return { ok: true, rel, frames: ((f[0] * 60 + f[1]) * 60 + f[2]) * nominal + f[3] };
+    }
+    if (/^\d+$/.test(body)) {
+      if (body.length > 8) return { ok: false, why: 'too many digits for HH:MM:SS:FF' };
+      const d = body.padStart(8, '0');
+      const f = [d.slice(0, 2), d.slice(2, 4), d.slice(4, 6), d.slice(6, 8)].map(Number);
+      return { ok: true, rel, frames: ((f[0] * 60 + f[1]) * 60 + f[2]) * nominal + f[3] };
+    }
+    return { ok: false, why: `"${raw}" is not a time — try 40. or 1:00 or 00:00:40:00 or 12 (frames) or +2.` };
   }
 
   /* The edit grid (wave 3, the journey's VFR export): every trim, roll, slip, razor cut,
@@ -2516,7 +2555,16 @@
     stripH = lane.clientHeight;
     // the labels' font, read here with the other reads (a style read, no layout)
     v1Font = fontOf(lane.querySelector('.blk:not(.gen) .name'), 'normal');
-    if (autoFit && vw > 0 && list.length) state.zoom = fitZoom(vw, tot);
+    // Fit when the viewport changed or fit was asked for (the \ key, the fit button, a project
+    // opening): NOT on every change of length, which slid the shots out from under the pointer
+    // (R2-19: after \, a speed change re-scaled the ruler). Any zoom the editor makes ends it.
+    if (!list.length) wasEmpty = true;
+    else if (wasEmpty) { wasEmpty = false; fitAsked = true; }                 // a cut that was empty is fitted when it fills
+    if (autoFit && vw > 0 && list.length && (fitVw !== vw || fitAsked)) {
+      state.zoom = fitZoom(vw, tot);
+      fitVw = vw;
+      fitAsked = false;
+    }
     const width = Math.max(vw, PAD + Math.max(tot, state.playhead || 0) * state.zoom + PAD_R);
     el.canvas.style.width = `${width}px`;
     canvasW = width;
@@ -2588,7 +2636,7 @@
     const changed = !sameSet(next, state.sel) || anchor !== state.anchor;
     state.sel = next;
     state.anchor = anchor;
-    if (next.size && state.edit) { state.edit = null; setTimeout(paintTransitions, 0); }   // a shot replaces the edit point
+    if (next.size && (state.edit || state.tsel)) { state.edit = null; state.tsel = null; setTimeout(paintTransitions, 0); }   // a shot replaces the edit point or transition
     if (next.size && state.osel != null) { state.osel = null; renderV2(); }
     if (anchor != null) {
       const i = indexOf(anchor);
@@ -2607,9 +2655,10 @@
     const i = hooks.sel();
     if (i === lastAppSel) return;
     lastAppSel = i;
-    if (inCue) return;
-    const id = idAt(i);
-    if (id != null) select([id], { source: 'app' });
+    // The playhead never changes what is selected (wave 25, HANDS round 3, R2-09 / R2-18): app.js's
+    // index is "the shot under the playhead", the board's own notion; the editor's selection is
+    // only what the editor selects.
+    return;
   }
 
   /* After a render: drop ids that left the cut; an anchor that was removed hands the
@@ -2627,9 +2676,7 @@
     const next = new Set(kept);
     let anchor = anchorGone ? null : state.anchor;
     if (anchor == null && next.size) {
-      const fallback = anchorGone && hooks.sel ? idAt(hooks.sel()) : null;
-      anchor = fallback != null && next.has(fallback) ? fallback
-        : list.find((s) => next.has(s.id)).id;
+      anchor = list.find((s) => next.has(s.id)).id;
     }
     state.sel = next;
     state.anchor = anchor;
@@ -2707,6 +2754,7 @@
 
   function fit() {
     autoFit = true;
+    fitAsked = true;
     render();
     el.view.scrollLeft = 0;
     state.scrollX = 0;
@@ -3030,7 +3078,11 @@
 
   function selectTransition(key) {
     state.tsel = key && state.transitions.some((t) => tkey(t) === key) ? key : null;
-    if (state.tsel) state.edit = null;
+    if (state.tsel) {
+      state.edit = null;
+      if (state.sel.size) select([], { source: 'click' });      // one kind selected at a time
+      if (state.osel != null) { state.osel = null; renderV2(); }
+    }
     paintTransitions();
     emit('select', { ids: [...state.sel], anchor: state.anchor, transition: state.tsel, source: 'click' });
   }
@@ -3269,22 +3321,36 @@
     if (inp) { inp.focus(); return inp; }
     inp = document.createElement('input');
     inp.className = 'tl-trans-dur';
-    inp.value = Number(b.dataset.dur || t.dur).toFixed(2);
-    inp.title = 'duration in seconds (or frames: 12f) — Enter sets it, Esc leaves it';
+    const r = gridRate();
+    inp.value = String(Math.round(Number(b.dataset.dur || t.dur) * r));
+    inp.title = 'a number is frames (12) · 0.5s or 0.5. is seconds · 1:00 is one second · Enter sets it, Esc leaves it';
+    // wide enough to read, drawn over the box (which may be a few pixels wide), with its unit
+    const bb = b.getBoundingClientRect();
+    inp.style.cssText = `position:fixed;left:${Math.round(bb.left + bb.width / 2 - 55)}px;top:${Math.round(bb.top - 28)}px;`
+      + 'width:84px;height:22px;z-index:95;box-sizing:border-box;font-size:12px';
+    const unit = document.createElement('span');
+    unit.className = 'tl-trans-unit';
+    unit.textContent = 'frames';
+    unit.style.cssText = `position:fixed;left:${Math.round(bb.left + bb.width / 2 - 55 + 86)}px;top:${Math.round(bb.top - 26)}px;`
+      + 'z-index:95;font-size:11px;color:#ddd;background:#101013;padding:1px 4px;border-radius:2px;white-space:nowrap';
     b.appendChild(inp);
+    b.appendChild(unit);
     inp.addEventListener('pointerdown', (ev) => ev.stopPropagation());
     let done = false;
-    const close = () => { if (done) return; done = true; if (inp.isConnected) inp.remove(); };
+    const close = () => { if (done) return; done = true; if (inp.isConnected) inp.remove(); unit.remove(); };
     inp.addEventListener('keydown', (ev) => {
       ev.stopPropagation();
       if (ev.key === 'Escape') { close(); return; }
       if (ev.key !== 'Enter') return;
       const raw = inp.value.trim();
-      const m = /^(\d+(?:\.\d+)?)\s*(f)?$/i.exec(raw);
+      const p = parseTime(raw);
       close();
-      if (!m) { toast(`not a duration: ${raw}`); return; }
-      const v = m[2] ? Number(m[1]) / gridRate() : Number(m[1]);
-      setTransitionDur(key, v);
+      if (!p.ok || p.rel) { toast(p.ok ? 'a length cannot start with + or −' : p.why); return; }
+      const asked = p.frames / r;
+      const v = setTransitionDur(key, asked);
+      if (v != null && Math.abs(v - asked) > 0.5 / r) {
+        toast(`limited to ${Math.round(v * r)} frames: ${Math.round(asked * r)} would run past the footage the shots have at this cut`);
+      }
     });
     inp.addEventListener('blur', close);
     inp.focus();
@@ -3849,7 +3915,8 @@
       const heir = kept[Math.min(first, kept.length - 1)];
       // 'heir': the board hands the selection on — nobody chose it, so ⌫ won't take it
       // (I16.0 n), whoever called remove (the X key, the inspector's remove)
-      select(heir ? [heir.id] : [], { source: 'heir' });
+      void heir;
+      select([], { source: 'heir' });              // a delete leaves nothing selected, as Premiere's
       return true;
     });
   }
@@ -4040,7 +4107,13 @@
     else if (cmd === 'adda') addTrack('audio');
     else if (cmd === 'delv') deleteTrack('video');
     else if (cmd === 'dela') deleteTrack('audio');
-    else if (cmd === 'settings') openSequenceSettings();
+    else if (cmd === 'settings') {
+      // never silent (R2-16: "did nothing visible" on a saved copy): a dialog that cannot open says why
+      try {
+        openSequenceSettings();
+        if (ssDlg && !ssDlg.open) toast('Sequence Settings could not open: reload the page and try again');
+      } catch (err) { toast(`Sequence Settings could not open: ${err && err.message ? err.message : err}`); }
+    }
   }
 
   /* ---- Sequence › Sequence Settings… (verdict 10, punch 3) */
@@ -4183,6 +4256,7 @@
     ssDlg.querySelector('#ssSeq').textContent = `Sequence · ${name}`;
     ssDlg.querySelector('form').addEventListener('submit', (e) => e.preventDefault());
     paintSsAbout();
+    if (ssDlg.open) ssDlg.close();
     ssDlg.showModal();
     ssDlg.querySelector('#ssTimebase').focus();
   }
@@ -4606,7 +4680,10 @@
     if (seg && typeof window.rcOpenShotInSource === 'function') {
       const t = clamp(eventTime(e), filmStart(id), filmStart(id) + dur(seg));
       const clipT = seg.in + (t - filmStart(id)) * speedOf(seg);
-      if (window.rcOpenShotInSource(seg.clip, clipT, seg.in, seg.out)) return;
+      if (window.rcOpenShotInSource(seg.clip, clipT, seg.in, seg.out)) {
+        seek(t);                      // the Program shows the frame the Source does (R2-02)
+        return;
+      }
     }
     if (hooks.play) hooks.play(indexOf(id));
   }
@@ -4824,7 +4901,7 @@
     // transitions at the edits (verdict 6, punch 6; roughcut/tracks.py)
     transitions: () => state.transitions.map((t) => ({ ...t })),
     transitionHalves, addTransition, removeTransition, setTransitionDur, applyTransition,
-    selectTransition, transitionInfo, editTransitionDur, transitionsForSave, editForTransition,
+    selectTransition, transitionInfo, editTransitionDur, parseTime, transitionsForSave, editForTransition,
     TRANS_NAMES, get tsel() { return state.tsel; },
     // the Effects bin (verdict 8 punch 5): kinds, one-sided ones, drops, the defaults
     VIDEO_KINDS, AUDIO_KINDS, TRANS_MIME, transitionFades, addFade, dropTransition, transTarget,

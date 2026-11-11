@@ -196,12 +196,13 @@ def test_a_click_on_a_block_selects_it_and_the_inspector_and_the_index_selects_t
     assert page.evaluate("[...tl.state.sel]") == [second]
     assert page.evaluate("sel") == 1, "app.js's index follows the timeline's id"
     assert page.locator("#inspector .clip").text_content() == "CLIP_B"
-    # the other way: app.js moving its index (playback, a kept row's link) selects the block
+    # the other way (wave 25: it no longer selects): app.js moving its index (playback, a kept row's
+    # link) is the shot under the playhead, not the selection; the selection and the inspector stay
     page.evaluate("sel = 0; paint()")
     assert page.evaluate("sel") == 0
-    assert page.locator("#tl .blk.sel").get_attribute("data-id") == ids(page)[0]
-    assert page.evaluate("tl.state.anchor") == ids(page)[0]
-    assert page.locator("#inspector .clip").text_content() == "CLIP_A"
+    assert page.locator("#tl .blk.sel").get_attribute("data-id") == second
+    assert page.evaluate("tl.state.anchor") == second
+    assert page.locator("#inspector .clip").text_content() == "CLIP_B"
 
 
 def test_a_double_click_on_a_block_opens_it_in_the_source_and_does_not_play(page):
@@ -447,7 +448,7 @@ def test_remove_and_insert_keep_the_board_and_the_bin_in_step(page):
     page.evaluate(f"tl.remove(['{a}'])")
     assert ids(page) == [b]
     assert page.locator("#tl .blk").count() == 1
-    assert page.evaluate("tl.state.anchor") == b
+    assert page.evaluate("tl.state.anchor") is None          # wave 25: a remove hands the selection to nobody
     new = page.evaluate("tl.insert({clip: 'CLIP_C.MP4', in: 1.0, out: 2.5, why: 'third'}, null)")
     assert new.startswith("tmp-")
     assert page.evaluate("segs.map(s => s.clip)") == ["CLIP_B.MP4", "CLIP_C.MP4"]
