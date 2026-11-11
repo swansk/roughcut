@@ -162,6 +162,11 @@
     return (a && a.target && a.target.ask) || null;
   }
   function heldBack(f) {
+    // "Ask for the first cut" over a cut the board holds is a lie, however briefly: the
+    // server has not yet read the cut an undo just brought back (wave 23, CLUMSY-05)
+    const n0 = f && f.next;
+    if (n0 && n0.stage === 'cut' && !(n0.target && n0.target.ask)
+        && typeof window.rcCutShots === 'function' && window.rcCutShots() > 0) f = { ...f, next: null };
     if (!held || !f) return f;
     if (proposalOf(f) !== held.ask || Date.now() > held.until) { held = null; return f; }
     const n = f.next;

@@ -2451,8 +2451,18 @@
   }
 
   function paintUndo() {
+    paintUndoButtons();
+    for (const fn of histListeners) { try { fn(); } catch (err) { /* a listener never costs a paint */ } }
+  }
+
+  function paintUndoButtons() {
     const u = document.querySelector('#undo'), r = document.querySelector('#redo');
     const top = undoStack[undoStack.length - 1], next = redoStack[redoStack.length - 1];
+    // They go only with a sequence that has nothing and never had anything to take back: an
+    // emptied sequence (Select all, Delete) is exactly when Undo is wanted (wave 23, CLUMSY-04)
+    const show = !!(top || next || segs().length);
+    if (u) u.style.display = show ? '' : 'none';
+    if (r) r.style.display = show ? '' : 'none';
     if (u) {
       u.disabled = !top;
       u.title = top ? `undo: ${top.label} (${keyLabel('⌘Z')})` : 'nothing to undo';
@@ -2465,6 +2475,7 @@
 
   function render() {
     if (!hooks || !el.root) return;
+    paintUndoButtons();
     const list = segs();
     ensureIds();
     syncSel();
@@ -3590,6 +3601,39 @@
     emit('change', { label: name, kind: 'commit', tag: e.tag });
     return true;
   }
+  /* The history, to keep it past a reload or a bin switch (wave 23 SAFE; CLUMSY-06/-17,
+   * HANDS-07, WORDS-14, FINISH-10). `head` is the snapshot of the cut the entries lead to:
+   * the page takes them back (restoreHistory) only when the cut it loaded is that one, so an
+   * entry is never put back over a change made elsewhere. A shot still under a tmp id is
+   * written under the real one the save gave it. Entries an owner keeps state for (a tag that
+   * is not a proposal's) are not kept: nothing would answer their undo. */
+  const histListeners = new Set();
+  const realIds = (str) => str.replace(/tmp-\d+/g, (m) => tmpMap.get(m) || m);
+  const keepable = (e) => !e.tag || String(e.tag).startsWith('proposal:');
+  /* The cut as it is, whatever order the server's keys came back in (a reloaded shot has its
+   * `id` last), and without the timebase a first clip may have given it since. */
+  const canon = (v) => (Array.isArray(v) ? v.map(canon) : v && typeof v === 'object'
+    ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])])) : v);
+  const noRate = (json) => {
+    try { const v = JSON.parse(json); if (v && typeof v === 'object') delete v.rate; return JSON.stringify(canon(v)); } catch (err) { return json; }
+  };
+  function history() {
+    const out = (list) => list.filter(keepable).map((e) => ({
+      label: e.label, before: realIds(e.before), after: realIds(e.after), ...(e.tag ? { tag: e.tag } : {}) }));
+    return { head: realIds(snapshot()), undo: out(undoStack), redo: out(redoStack) };
+  }
+  function restoreHistory(h) {
+    if (!h || !Array.isArray(h.undo) || !Array.isArray(h.redo) || typeof h.head !== 'string') return false;
+    if (undoStack.length || redoStack.length || pending) return false;
+    if (noRate(h.head) !== noRate(snapshot())) return false;          // not the cut these lead to
+    const ok = (e) => e && typeof e.label === 'string' && typeof e.before === 'string' && typeof e.after === 'string';
+    undoStack.push(...h.undo.filter(ok).slice(-UNDO_LIMIT));
+    redoStack.push(...h.redo.filter(ok).slice(-UNDO_LIMIT));
+    paintUndo();
+    return true;
+  }
+  const onHistory = (fn) => { histListeners.add(fn); return () => histListeners.delete(fn); };
+
   /* What Ctrl+Z would take back now: the top entry's label and tag, or null. */
   function nextUndo() {
     const e = undoStack[undoStack.length - 1];
@@ -4585,6 +4629,7 @@
     begin, commit, cancel, batch, unrecorded, undo, redo, clearHistory,
     mark: markEntry,                // an entry for a change outside the cut (fx.js's Accept)
     nextUndo,                       // {label, tag} of what Ctrl+Z takes back now, or null
+    history, restoreHistory, onHistory,   // the stacks kept past a reload (app.js, /api/undo)
     setRange, move, split, remove, insert, setSpeed, insertAt, overwrite,
     select, syncSel, seek, setPlayhead, zoomTo, fit,
     forSave, needsRekey, afterSave, applyIds, idFor, putTurn, saveHeaders, seqForFlush, seqDirty,

@@ -33,6 +33,19 @@ const clock = (s) =>
 function toast(msg, ms = 2200, opts = {}) {
   const el = $('#toast');
   el.textContent = msg;
+  // `action: {label, run}`: a button on the toast (Discard's Undo, wave 23 SAFE). The toast
+  // takes clicks only while it carries one.
+  const act = opts.action && typeof opts.action.run === 'function' ? opts.action : null;
+  el.classList.toggle('act', !!act);
+  if (act) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'toastAct';
+    b.dataset.testid = 'toast-action';
+    b.textContent = act.label;
+    b.onclick = () => { el.classList.remove('show'); act.run(); };
+    el.append(' ', b);
+  }
   // `at`: inside that element's bottom-left corner (the proxies toast, on the Program),
   // else the bottom-centre of the window, as every other toast
   const at = opts.at && opts.at.getBoundingClientRect ? opts.at.getBoundingClientRect() : null;
@@ -175,7 +188,10 @@ function paintJob(row, j) {
   // Stop means stop (verdict 4, punch 8): a job that can be stopped carries an × that
   // calls its own cancel: the index (proxies, close looks, previews) and a render. A
   // stopped job says nothing more: its row goes, and the next poll does not bring it back.
-  const CANCEL = { index: () => '/api/index/cancel', render: (x) => `/api/render/${x.id}/cancel` };
+  // (wave 23: every AI job — an Ask, a model search, a deep look — stops through one endpoint)
+  const stopUrl = (x) => `/api/jobs/${encodeURIComponent(x.id)}/stop`;
+  const CANCEL = { index: () => '/api/index/cancel', render: (x) => `/api/render/${x.id}/cancel`,
+                   ask: stopUrl, find: stopUrl, deep: stopUrl };
   if (j.state === 'cancelled') { row.style.display = 'none'; return; }
   row.style.display = '';
   let x = row.querySelector('.jx');
@@ -187,7 +203,9 @@ function paintJob(row, j) {
       x.dataset.testid = 'job-cancel';
       x.textContent = '×';
       x.title = j.kind === 'index' ? 'Stop indexing (proxies, close looks, previews): what finished is kept'
-        : 'Stop this render: nothing is written';
+        : j.kind === 'ask' ? 'Stop this AI job: the call is ended, no proposal is kept, the cut stays as it is'
+          : j.kind === 'find' || j.kind === 'deep' ? 'Stop this AI job: nothing it read is kept'
+            : 'Stop this render: nothing is written';
       x.style.cssText = 'cursor:pointer;color:var(--dim);padding:0 0 0 2px;font-size:13px;line-height:1';
       x.onclick = async (e) => {
         e.stopPropagation();
@@ -196,7 +214,9 @@ function paintJob(row, j) {
         x.textContent = '…';
         x.title = 'stopping…';
         try {
-          await fetch(CANCEL[j.kind](j), { method: 'POST' });
+          const r = await fetch(CANCEL[j.kind](j), { method: 'POST' });
+          const d = j.kind === 'ask' || j.kind === 'find' || j.kind === 'deep' ? await r.json() : null;
+          if (d && d.said) toast(d.said, 5000);
         } catch (_) { /* the next poll says how it went */ }
         const seen = strip.seen.get(j.id);
         if (seen) strip.seen.set(j.id, { ...seen, state: 'cancelled' });
@@ -3959,7 +3979,9 @@ function render() {
   $('#askAims').textContent = aimsFor();
 
   // Nothing in the header acts on an empty timeline, so nothing in the header shows.
-  ['#undo', '#redo', '#makeFilm', '#saveState'].forEach((sel) => {
+  // (Undo and redo are the timeline's: they stay while there is anything to take back, an
+  // emptied sequence included — wave 23, CLUMSY-04)
+  ['#makeFilm', '#saveState'].forEach((sel) => {
     $(sel).style.display = segs.length ? '' : 'none';
   });
 
@@ -5187,6 +5209,9 @@ function save() {
       refreshColour();
       const t = new Date();
       saveSays('saved', `saved ${t.getHours()}:${String(t.getMinutes()).padStart(2, '0')}`);
+      // The cut is on disk: Next reads it now, not 1.2 s after the last render — an undo that
+      // brings a cut back must not leave "Ask for the first cut" over it (wave 23, CLUMSY-05)
+      if (window.flowBar) window.flowBar.poll();
       // A save is where the bin learns from the timeline (which keeps became shots, and
       // which shots were placed by hand). While the tab is up, it must show that.
       if (keepsTab()) refreshBin();
@@ -5409,6 +5434,8 @@ const PROPOSAL_CSS = `
   z-index: 2; background: var(--panel); padding: 3px 0 4px; margin: 0 0 4px; }
 #proposal .pbtns button { flex: none; white-space: nowrap; padding: 2px 8px; }
 #proposal .pbtns button[hidden] { display: none; }
+#proposal .pbtns #acceptProposal { border-color: var(--accent); }
+#proposal .pbtns #rejectProposal { margin-left: auto; }
 #proposal h2 { display: inline-block; margin: 0; white-space: nowrap; line-height: 17px; }
 #askFold { display: none; width: 100%; text-align: left; background: transparent; color: var(--dim);
   border: 1px solid var(--line); border-radius: 3px; padding: 3px 8px; margin: 0 0 8px; font-size: 11.5px;
@@ -5763,7 +5790,14 @@ function playProposedShot(k) {
 }
 
 function showProposal(plan) {
+  // A second proposal while one waits: the first is kept (the server marks it replaced) and
+  // listed under Recent proposals; the editor is told, not left to notice (CLUMSY-09).
+  const was = pendingPlan && pendingPlan.job;
+  if (was && plan.job && was !== plan.job) {
+    toast('a newer proposal arrived — the one before it is kept under Recent proposals', 6000);
+  }
   pendingPlan = plan;
+  paintRecent();
   // a proposal is the pass's (or the Ask's) result: its picks may have just landed
   if (typeof window.rcPicksStale === 'function') window.rcPicksStale();
   proposalCss();
@@ -5947,6 +5981,7 @@ function pollAsk(job, verb, stateEl) {
       }
       clearInterval(iv);
       if (s.state === 'done') resolve(s.plan);
+      else if (s.state === 'cancelled') reject(Object.assign(new Error(s.detail || 'Stopped.'), { stopped: true }));
       else reject(new Error(s.detail || 'the model call failed'));
     }, 1000);
   });
@@ -5985,9 +6020,10 @@ async function reattachAsk() {
   $('#askState').textContent = 'picking up where you left off…';
   try {
     showProposal(await pollAsk(running.id, 'thinking', $('#askState')));
+    $('#askState').textContent = '';         // the last "writing its reasoning · 0:46" does not stay up
   } catch (e) {
     $('#askState').textContent = '';
-    toast(`the ask that was running failed: ${e.message}`, 6000);
+    toast(e.stopped ? e.message : `the ask that was running failed: ${e.message}`, 6000);
   }
 }
 
@@ -6040,7 +6076,7 @@ async function ask(opts = {}) {
     $('#askState').textContent = cost;
   } catch (e) {
     stateEl.textContent = '';
-    toast(`ask failed: ${e.message}`, 6000);
+    toast(e.stopped ? e.message : `ask failed: ${e.message}`, e.stopped ? 5000 : 6000);
   } finally {
     if (button) {
       button.disabled = false;
@@ -6077,6 +6113,7 @@ function mergeColour(base, patch) {
  * changed one stays as it was, a removed one stays (tlLanes.reviewed). */
 function acceptProposal(everything) {
   if (!pendingPlan) return;
+  const job = pendingPlan.job || null;
   const graded = !!(pendingPlan.colour && Object.keys(pendingPlan.colour).length);
   const cutToo = !pendingPlan.unchanged;
   const r = everything !== true && cutToo && window.tlLanes && tlLanes.reviewed
@@ -6109,11 +6146,12 @@ function acceptProposal(everything) {
                            kept: r.keptRemoved, ...(ranges ? { ranges } : {}) } : null;
   queueMicrotask(() => {
     // pending until it is sent: a flush on unload carries it with the cut (SAVESAFE)
-    const mine = pendingAnswer = took ? { answer: 'accept', partial: took } : { answer: 'accept' };
+    const mine = pendingAnswer = took ? { answer: 'accept', partial: took, ...(job ? { job } : {}) }
+      : { answer: 'accept', ...(job ? { job } : {}) };
     const answer = () => {
       if (pendingAnswer !== mine) return;          // it went with a flush
       pendingAnswer = null;
-      answerProposal('accept', took);
+      answerProposal('accept', took, job);
     };
     save().then(answer, answer);
   });
@@ -6131,14 +6169,73 @@ function playProposal() {
   if (!lanes || !lanes.ghost() || !lanes.playPlan(0)) toast('the proposal is still being drawn — try again');
 }
 
-function rejectProposal() {
+/* Discard (wave 23 SAFE, CLUMSY-01): never a loss. The proposal is set aside and kept on the
+ * server (the Assistant lists it); the discard is an entry on the undo stack, so Ctrl+Z, Edit ›
+ * Undo and the toast's own Undo bring it back as it was made. */
+function setProposalAside() {
   pendingPlan = null;
   $('#proposal').style.display = 'none';
   $('#lastAsk').style.display = 'none';      // answered: not offered again
   if (window.dock) dock.badge('ask', 0);
+  if (window.tlLanes && tlLanes.clearGhost) tlLanes.clearGhost();
   proposalAnswered('discard');
-  toast('discarded');
-  answerProposal('discard');
+}
+
+function rejectProposal() {
+  if (!pendingPlan) return;
+  const plan = pendingPlan;
+  const job = plan.job || null;
+  setProposalAside();
+  answerProposal('discard', null, job);
+  const mark = job ? tl.mark('discard proposal', `proposal:${job}`) : false;
+  const back = () => {
+    const top = tl.nextUndo();
+    if (mark && top && top.tag === `proposal:${job}`) tl.undo();      // the entry brings it back
+    else reopenProposal(job);
+  };
+  toast(`proposal set aside (${plan.segments.length} shots) — ${undoKey()} brings it back`, 10000,
+    job ? { action: { label: 'Undo', run: back } } : {});
+  paintRecent();
+}
+
+/* Open a proposal again, waiting as it was made — a discarded one (Undo), an accepted one,
+ * one a newer proposal replaced. The one waiting now is kept: the server marks it replaced. */
+async function reopenProposal(job, opts = {}) {
+  if (!job) return false;
+  let d;
+  try {
+    const r = await fetch('/api/asks/reopen', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job }) });
+    d = await r.json();
+    if (!r.ok) { toast(d.detail || 'that proposal could not be opened', 6000); return false; }
+  } catch (e) {
+    toast(`could not open the proposal: ${e.message || e}`, 6000);
+    return false;
+  }
+  const plan = d.record && d.record.plan;
+  if (!plan || !Array.isArray(plan.segments)) { toast('that proposal has no shots to open', 5000); return false; }
+  showProposal({ ...plan, job });
+  if (window.dock) dock.open('ask', { focus: false });
+  if (!opts.quiet) toast('proposal back — Accept or Discard it');
+  flowSoon();
+  return true;
+}
+window.rcReopenProposal = reopenProposal;
+
+/* Ctrl+Z / Edit › Undo / the toast's Undo on a discard bring the proposal back; Redo sets it
+ * aside again. The entry is the stack's (tl.mark, tag `proposal:<job>`); what it does is here. */
+function wireProposalUndo() {
+  tl.on('change', (ev) => {
+    const tag = ev && typeof ev.tag === 'string' ? ev.tag : '';
+    if (!tag.startsWith('proposal:')) return;
+    const job = tag.slice(9);
+    if (ev.kind === 'undo') reopenProposal(job, { quiet: true }).then((ok) => { if (ok) toast('proposal back'); });
+    else if (ev.kind === 'redo' && pendingPlan && pendingPlan.job === job) {
+      setProposalAside();
+      answerProposal('discard', null, job);
+      paintRecent();
+    }
+  });
 }
 
 /* The proposal is answered here and now: Next lets go of it at once (flow.js; verdict 14,
@@ -6153,7 +6250,7 @@ function proposalAnswered(answer) {
 /* The answer, on the proposal's record (INTAKE M14): an Accept saves the cut, which
  * answers it already; a Discard wrote nothing anywhere, so the flow bar kept calling a
  * thrown-away proposal "waiting for you". */
-function answerProposal(answer, partial) {
+function answerProposal(answer, partial, job) {
   // `partial`: which shots an Accept took ({accepted, of, rejected: [k], kept: [ids]}) —
   // on the record for the server to read; it answers the record the same either way.
   // With it go the ranges the editor rejected (verdict 4: a re-run brought one back),
@@ -6165,7 +6262,97 @@ function answerProposal(answer, partial) {
   // uncredentialed like the save, so it is never queued behind the posters (SAVESAFE)
   fetch('/api/asks/answer', { method: 'POST', headers: { 'Content-Type': 'application/json' },
     credentials: 'omit',
-    body: JSON.stringify(partial ? { answer, partial } : { answer }) }).then(flowSoon, () => {});
+    body: JSON.stringify({ answer, ...(partial ? { partial } : {}), ...(job ? { job } : {}) }) })
+    .then(() => { flowSoon(); paintRecent(); }, () => {});
+}
+
+/* Recent proposals, in the Assistant (wave 23 SAFE, CLUMSY-09 / FINDER-20): the last few the
+ * AI made for this bin, each with where it stands — waiting, accepted, discarded, replaced —
+ * and a button that opens it again, to read, play and Accept. A proposal is never only
+ * on screen: nothing the editor does with the cut (a save, a copy, an index run) drops it. */
+const RECENT_WORDS = { waiting: 'waiting for you', accepted: 'accepted', discarded: 'discarded',
+                       replaced: 'replaced by a newer one' };
+let recentRows = [];
+let recentBusy = false;
+async function paintRecent() {
+  const box = $('#askRecent');
+  if (!box || recentBusy) return;
+  recentBusy = true;
+  try {
+    const d = await (await fetch('/api/asks/recent', { cache: 'no-store' })).json();
+    recentRows = d.proposals || [];
+  } catch (e) { recentBusy = false; return; }
+  recentBusy = false;
+  const shown = pendingPlan && pendingPlan.job;
+  box.hidden = !recentRows.length;
+  if (!recentRows.length) { box.replaceChildren(); return; }
+  const now = Date.now() / 1000;
+  box.innerHTML = '<h3>Recent proposals</h3>' + recentRows.map((r) => {
+    const here = r.job === shown;
+    const status = here ? 'on screen' : (RECENT_WORDS[r.status] || r.status);
+    const what = r.note ? `“${escapeHtml(r.note.length > 70 ? `${r.note.slice(0, 70)}…` : r.note)}”` : 'first cut';
+    const other = r.this_cut ? '' : ` · for the cut “${escapeHtml(r.cut || 'another')}”`;
+    const when = r.created ? ago(now - r.created) : '';
+    const open = here ? '' : r.this_cut
+      ? `<button type="button" class="rr-open" data-job="${escapeHtml(r.job)}" data-testid="recent-open">${r.status === 'waiting' ? 'Open' : 'Open again'}</button>` : '';
+    return `<div class="rr" data-job="${escapeHtml(r.job)}" data-status="${here ? 'screen' : r.status}" data-testid="recent-proposal">`
+      + `<span class="rr-st">${escapeHtml(status)}</span><span class="rr-what">${what}</span>`
+      + `<span class="hint">${r.colour_only ? 'colour only' : `${r.shots} shots`} · ${escapeHtml(when)}${other}</span>${open}</div>`;
+  }).join('');
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest && e.target.closest('#askRecent .rr-open');
+  if (!b) return;
+  b.disabled = true;
+  reopenProposal(b.dataset.job).then(paintRecent);
+});
+
+/* Undo that survives a reload, a bin switch and a restart (wave 23 SAFE; CLUMSY-06, -17,
+ * HANDS-07, WORDS-14, FINISH-10). The stacks are snapshots of the cut, so they are kept on
+ * the server beside it (GET / PUT /api/undo, one file per cut) and taken back at boot when the
+ * cut that loaded is the one they lead to. Written a moment after every change, and once more
+ * as the page goes if the history is small enough for a keepalive request. */
+const UNDO_KEEP_BYTES = 5_000_000;
+let undoSent = '';
+let undoTimer = 0;
+function undoBody() {
+  const h = tl.history();
+  // newest entries first into the budget: an old one that does not fit is the one let go
+  const size = (e) => e.before.length + e.after.length + e.label.length + 40;
+  let used = h.head.length;
+  const fit = (list) => {
+    const kept = [];
+    for (let i = list.length - 1; i >= 0; i--) {
+      used += size(list[i]);
+      if (used > UNDO_KEEP_BYTES) break;
+      kept.unshift(list[i]);
+    }
+    return kept;
+  };
+  const redo = fit(h.redo);
+  return JSON.stringify({ cut: P && P.edl_path, head: h.head, undo: fit(h.undo), redo });
+}
+function persistUndo(now) {
+  clearTimeout(undoTimer);
+  const go = () => {
+    let body;
+    try { body = undoBody(); } catch (e) { return; }
+    if (body === undoSent) return;
+    undoSent = body;
+    try {
+      fetch('/api/undo', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        credentials: 'omit', body, keepalive: body.length < 60000 }).catch(() => { undoSent = ''; });
+    } catch (e) { undoSent = ''; }
+  };
+  if (now) go(); else undoTimer = setTimeout(go, 300);
+}
+async function restoreUndo() {
+  try {
+    const h = await (await fetch('/api/undo', { cache: 'no-store' })).json();
+    if (h && (h.undo || []).length + (h.redo || []).length && tl.restoreHistory(h)) undoSent = '';
+  } catch (e) { /* no history to take back */ }
+  tl.onHistory(() => persistUndo(false));
+  window.addEventListener('pagehide', () => persistUndo(true));
 }
 
 /* Find a moment. Two layers, two prices: the word-level match over the transcripts
@@ -6902,6 +7089,7 @@ async function boot() {
   $('#acceptProposal').onclick = () => acceptProposal();
   $('#acceptAll').onclick = () => acceptProposal(true);
   $('#rejectProposal').onclick = rejectProposal;
+  wireProposalUndo();
   $('#findDeep').onclick = () => doFind(true);
   $('#findQ').addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); doFind(); }
@@ -6922,7 +7110,9 @@ async function boot() {
   // checked (INTAKE M16 I16.5). Read again now that the cut is.
   if (window.fx && typeof fx.refresh === 'function') fx.refresh();
   await refreshVersions();
+  await restoreUndo();
   await offerLastProposal();
+  paintRecent();
   // The job registry is server-side, so a reload lands on whatever is still going —
   // a render and an Ask at once, routinely. Paint them before the first tick so the
   // strip is right on the first frame rather than a second later.
@@ -6988,6 +7178,7 @@ async function boot() {
  * copy, or in the next bin's cut. The board has no in-place reload; the switcher
  * reloads the page and boot() reads the new cut. */
 window.roughcutFlush = flushSave;
+window.rcCutShots = () => segs.length;          // flow.js: Next never offers a first cut over one
 
 /* Re-read the cut from disk and repaint it in place (INTAKE M16, C5) — the timeline, the
  * inspector, the bin, the film tool — keeping the selection and the playhead. For a

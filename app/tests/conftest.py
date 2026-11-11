@@ -107,6 +107,21 @@ def no_cli_problem_carried_over():
     yield
 
 
+@pytest.fixture(autouse=True)
+def no_undo_history_carried_over():
+    """Every test starts with nothing to undo. The board keeps the undo history with the cut
+    (wave 23 SAFE) and takes it back when the same cut loads again; the suite seeds the same
+    cut for every test, so one test's history would be the next one's."""
+    server = sys.modules.get("server")
+    state = getattr(server, "STATE", None) if server is not None else None
+    if state and state.get("edl") and state.get("work"):
+        try:
+            server.undo_path().unlink(missing_ok=True)
+        except (OSError, KeyError):
+            pass
+    yield
+
+
 # The walk-through's switch (wave 12, lane TEACH; REDESIGN-GOAL dimension 16). The board opens
 # its first-run walk-through (app/static/tour.js) on a browser's first visit, over what a test
 # would click. Every browser context and page the suite opens gets the flag the walk-through
@@ -242,8 +257,15 @@ def client(project):
                      project["work"], proxies=False,
                      visual=project["work"] / "no-visual", assets=project["assets"])
     server.ensure_proxies([f"{s}.MP4" for s in project["stems"]])
+    # A proposal now waits until it is answered (wave 23 SAFE), where it used to lapse when the
+    # cut was next written: the proposals a test left in the shared work dir must not wait
+    # for the next one.
+    for left in server.STATE["asks"].glob("*.json"):
+        left.unlink()
     with TestClient(server.app) as c:
         yield c
+    for left in server.STATE["asks"].glob("*.json"):
+        left.unlink()
     project["edl"].write_text(original, encoding="utf-8")
 
 

@@ -610,6 +610,7 @@
     ghostGen: 0,
     planTimer: 0,
     planWhat: '',
+    planStopped: false,     // Stop was pressed on the re-cut card
     exportInfo: null,      // GET /api/export, when an export op is under review
     el: null,
   };
@@ -765,8 +766,9 @@
     }
     if (res.kind === 'plan') {
       el.innerHTML = `${head}<div class="air-sum">${esc(named(res.summary || 'Re-cutting the sequence'))}</div>
-        <div class="air-plan" data-testid="ai-plan"><span class="air-spin" aria-hidden="true"></span><span class="air-plan-what">${esc(R.planWhat || 'the proposal opens here when it is ready')}</span></div>
-        <div class="air-foot">${cost}<span class="air-grow"></span><button type="button" class="air-btn" data-act="close" data-testid="ai-review-close">Close</button></div>`;
+        <div class="air-plan" data-testid="ai-plan">${R.planStopped ? '' : '<span class="air-spin" aria-hidden="true"></span>'}<span class="air-plan-what">${esc(R.planWhat || 'the proposal opens here when it is ready')}</span></div>
+        <div class="air-foot">${cost}<span class="air-grow"></span>${R.planTimer && !R.planStopped
+    ? '<button type="button" class="air-btn" data-act="stopplan" data-testid="ai-plan-stop" title="Stop the re-cut: the call is ended, no proposal is made, the cut stays as it is">Stop</button>' : ''}<button type="button" class="air-btn" data-act="close" data-testid="ai-review-close" title="${R.planTimer && !R.planStopped ? 'Hide this card — the re-cut keeps running and its proposal still arrives' : 'Close'}">${R.planTimer && !R.planStopped ? 'Hide' : 'Close'}</button></div>`;
       return;
     }
     const looks = R.ops.some((op, i) => livePreview(op) && R.verdict[i] && !R.blocked.has(i));
@@ -845,6 +847,7 @@
     else if (b.dataset.act === 'accept') accept();
     else if (b.dataset.act === 'reject') reject();
     else if (b.dataset.act === 'close') closeQuiet();
+    else if (b.dataset.act === 'stopplan') stopPlan();
     else if (b.dataset.act === 'ab') { R.after = !R.after; refreshLook(); paint(); }
   }
 
@@ -1056,6 +1059,7 @@
 
   function followPlan(res) {
     clearInterval(R.planTimer);
+    R.planStopped = false;
     if (!res.plan_ask) { R.planWhat = 'the re-cut did not start'; paint(); return; }
     R.planWhat = 'reading the footage for the new cut…';
     paint();
@@ -1071,7 +1075,9 @@
       }
       if (s.state === 'failed' || s.state === 'cancelled') {
         clearInterval(R.planTimer);
-        R.planWhat = `the re-cut failed: ${s.detail || 'no detail'}`;
+        R.planWhat = s.state === 'cancelled' ? (s.detail || 'Stopped — no proposal was kept.')
+          : `the re-cut failed: ${s.detail || 'no detail'}`;
+        R.planStopped = s.state === 'cancelled';
         paint();
         return;
       }
@@ -1079,6 +1085,7 @@
       const w = R.el && R.el.querySelector('.air-plan-what');
       if (w) w.textContent = R.planWhat;
     }, 1000);
+    paint();                           // now that it is running: the card has its Stop
   }
 
   /* The review on the record, and said to the page: the AI prompt's line (aiprompt.js)
@@ -1143,7 +1150,29 @@
     if (was === 'ops') app.toast('discarded — nothing changed');
   }
 
+  /* Stop on the whole-film re-cut (wave 23 SAFE, CLUMSY-13): ends the call on the server,
+   * keeps no proposal, and says in a line what it did. */
+  async function stopPlan() {
+    const res = R.res;
+    if (!res || !res.plan_ask) return;
+    clearInterval(R.planTimer);
+    R.planTimer = 0;
+    R.planStopped = true;
+    R.planWhat = 'stopping…';
+    paint();
+    let said = 'Stopped — the cut stays as it was, and no proposal was kept.';
+    try {
+      const r = await (await fetch(`/api/jobs/${encodeURIComponent(res.plan_ask)}/stop`, { method: 'POST' })).json();
+      if (r && r.said) said = r.said;
+    } catch (e) { /* the job list says how it went */ }
+    if (R.res !== res) return;
+    R.planWhat = said;
+    paint();
+    window.dispatchEvent(new CustomEvent('rc:plan-stopped', { detail: { job: res.job, ask: res.plan_ask, said } }));
+  }
+
   function closeQuiet() {
+    R.planStopped = false;
     lookOff();
     clearInterval(R.planTimer);
     clearTimeout(recheckT);
