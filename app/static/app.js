@@ -6657,6 +6657,7 @@ function undoBody() {
 }
 function persistUndo(now) {
   clearTimeout(undoTimer);
+  let sent = null;
   const go = () => {
     let body;
     try {
@@ -6668,17 +6669,20 @@ function persistUndo(now) {
     if (body === undoSent) return;
     undoSent = body;
     try {
-      fetch('/api/undo', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      sent = fetch('/api/undo', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
         credentials: 'omit', body, keepalive: body.length < 60000 }).catch(() => { undoSent = ''; });
     } catch (e) { undoSent = ''; }
   };
   if (now) go(); else undoTimer = setTimeout(go, 300);
+  return sent;
 }
+let undoReady = false;                       // the history is restored (or there was none): the page may write it
 async function restoreUndo() {
   try {
     const h = await (await fetch('/api/undo', { cache: 'no-store' })).json();
     if (h && (h.undo || []).length + (h.redo || []).length && tl.restoreHistory(h)) undoSent = '';
   } catch (e) { /* no history to take back */ }
+  undoReady = true;
   tl.onHistory(() => persistUndo(false));
   window.addEventListener('pagehide', () => persistUndo(true));
 }
@@ -7576,7 +7580,12 @@ async function boot() {
  * file it belongs to — otherwise a trim made in the last 700 ms would land in the
  * copy, or in the next bin's cut. The board has no in-place reload; the switcher
  * reloads the page and boot() reads the new cut. */
-window.roughcutFlush = flushSave;
+// The switcher flushes before it re-points the server: the history goes with the cut, written now (the
+// page's last write, on its way out, names a cut the server has left and is refused: wave 23 SAFE)
+window.roughcutFlush = async () => {
+  await flushSave();
+  if (typeof tl !== 'undefined' && tl.history && undoReady) await persistUndo(true);
+};
 /* (wave 23 FILM) clips whose rotation decision moved: dock.js has given their entries the new
  * proxy / poster URLs. The Program re-cues the shot it is parked on (a different URL: the buffer
  * opens the rebuilt file at the same clip second), and the timeline repaints its strips. */
