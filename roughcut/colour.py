@@ -601,7 +601,8 @@ def lut_vf(cube: Path | None, src_range: str = "full", balance: dict | None = No
         else f"lut3d=file={cube}:interp=tetrahedral"
     return (f"scale=in_range={src_range}:out_range=full:flags=bilinear+accurate_rnd,"
             f"format=gbrp16le,{grade},"
-            f"scale=in_range=full:out_range=limited:flags=accurate_rnd,format=yuv420p")
+            f"scale=in_range=full:out_range=limited:out_color_matrix=bt709:flags=accurate_rnd,"
+            f"format=yuv420p")
 
 
 # --------------------------------------------------------------------- resolve

@@ -1451,13 +1451,21 @@
     const m = floating('aip-ctx tl-ctx', 'ai-context-menu');
     m.setAttribute('role', 'menu');
     const deep = hit.deep && hit.target.kind === 'segment' && !!window.deep;
+    const proj = window.dock && window.dock.project;
+    const rotName = hit.target.kind === 'clip' && proj && typeof proj.rotMenu === 'function'
+      && proj.canRotate(hit.target.clip) ? hit.target.clip : null;
+    const at = { x: e.clientX, y: e.clientY };
     m.innerHTML = `<button type="button" role="menuitem" data-ctx="ask" data-testid="ai-ctx-ask">${ICON}`
       + `<span>Ask AI about this${hit.what === 'sequence' ? ' sequence' : ''}…</span><span class="k">${esc(KEY)}</span></button>`
       + (deep ? '<button type="button" role="menuitem" data-ctx="deep" data-testid="ai-ctx-deep">'
         + '<span class="aip-noico"></span><span>Look deeper…</span></button>' : '')
       // the Source monitor's clip record (wave 23 DESCRIBE), in the same menu
       + (hit.transcript ? '<button type="button" role="menuitem" data-ctx="transcript" data-testid="src-transcript">'
-        + '<span class="aip-noico"></span><span>Transcript…</span></button>' : '');
+        + '<span class="aip-noico"></span><span>Transcript…</span></button>' : '')
+      // a footage clip (a Project row, the Source monitor's clip): which way up it is shown
+      // (wave 23 FILM's menu, opened from this one so a clip has one right-click menu)
+      + (rotName ? '<button type="button" role="menuitem" data-ctx="rotate" data-testid="ctx-rotate">'
+        + '<span class="aip-noico"></span><span>Rotate clip…</span></button>' : '');
     m.hidden = false;
     m.style.left = `${Math.max(8, Math.min(e.clientX, window.innerWidth - m.offsetWidth - 8))}px`;
     m.style.top = `${Math.max(8, Math.min(e.clientY, window.innerHeight - m.offsetHeight - 8))}px`;
@@ -1467,6 +1475,7 @@
       closeFloating();
       if (b.dataset.ctx === 'ask') askAbout(hit.target);
       else if (b.dataset.ctx === 'transcript') { const t = document.querySelector('[data-testid="clip-transcript"]'); if (t) t.click(); }
+      else if (b.dataset.ctx === 'rotate') proj.rotMenu(at.x, at.y, rotName);
       else lookDeeper(hit.target.id);
     };
   }

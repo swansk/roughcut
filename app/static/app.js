@@ -191,21 +191,22 @@ function paintJob(row, j) {
   // (wave 23: every AI job — an Ask, a model search, a deep look — stops through one endpoint)
   const stopUrl = (x) => `/api/jobs/${encodeURIComponent(x.id)}/stop`;
   const CANCEL = { index: () => '/api/index/cancel', render: (x) => `/api/render/${x.id}/cancel`,
-                   ask: stopUrl, find: stopUrl, deep: stopUrl,
-                   fx: (x) => (x.fx_kind === 'design' || x.fx_kind === 'revise' ? stopUrl(x) : null) };
+                   ask: stopUrl, find: stopUrl, deep: stopUrl };
   if (j.state === 'cancelled') { row.style.display = 'none'; return; }
   row.style.display = '';
   let x = row.querySelector('.jx');
-  if (CANCEL[j.kind] && CANCEL[j.kind](j) && j.state === 'running') {
+  // a title's design or revision (fx jobs that call the model) stops like any AI job; a check does not
+  const stoppable = CANCEL[j.kind] || (j.kind === 'fx' && (j.fx_kind === 'design' || j.fx_kind === 'revise') ? stopUrl : null);
+  if (stoppable && j.state === 'running') {
     if (!x) {
       x = document.createElement('span');
       x.className = 'jx';
       x.setAttribute('role', 'button');
       x.dataset.testid = 'job-cancel';
       x.textContent = '×';
-      x.title = j.kind === 'index' ? 'Stop indexing (proxies, close looks, previews): what finished is kept'
-        : j.kind === 'fx' ? 'Stop this design: the call is ended and nothing of it is kept'
-          : j.kind === 'ask' ? 'Stop this AI job: the call is ended, no proposal is kept, the cut stays as it is'
+      x.title = j.kind === 'fx' ? 'Stop this design: the call is ended and nothing half-made is kept'
+        : j.kind === 'index' ? 'Stop indexing (proxies, close looks, previews): what finished is kept'
+        : j.kind === 'ask' ? 'Stop this AI job: the call is ended, no proposal is kept, the cut stays as it is'
           : j.kind === 'find' || j.kind === 'deep' ? 'Stop this AI job: nothing it read is kept'
             : 'Stop this render: nothing is written';
       x.style.cssText = 'cursor:pointer;color:var(--dim);padding:0 0 0 2px;font-size:13px;line-height:1';
@@ -216,8 +217,8 @@ function paintJob(row, j) {
         x.textContent = '…';
         x.title = 'stopping…';
         try {
-          const r = await fetch(CANCEL[j.kind](j), { method: 'POST' });
-          const d = j.kind === 'ask' || j.kind === 'find' || j.kind === 'deep' || j.kind === 'fx' ? await r.json() : null;
+          const r = await fetch(stoppable(j), { method: 'POST' });
+          const d = ['ask', 'find', 'deep', 'fx'].includes(j.kind) ? await r.json() : null;
           if (d && d.said) toast(d.said, 5000);
         } catch (_) { /* the next poll says how it went */ }
         const seen = strip.seen.get(j.id);
@@ -5217,6 +5218,32 @@ async function musicAddPath() {
     musicSay(`could not add that file: ${e.message}`, true);
   }
 }
+/* The prompt box's music op (wave 25 MUSIC, roughcut/actions.py `music`): the same bed the
+ * Audio tab sets, changed from words. It runs inside the AI's one undo entry (the bed rides
+ * the undo hook), and the Audio tab and the Program follow at once. */
+window.bedAI = {
+  apply(op) {
+    if (op.remove) {
+      music = null;
+    } else {
+      const b = music ? { ...music } : { asset: op.track, duck: true, duck_db: 12, bed_lufs: -24, fade_in: 1.5, fade_out: 4 };
+      if (op.track) b.asset = op.track;
+      if (!b.asset) return false;
+      if (op.level != null) b.bed_lufs = Number(op.level) - 16;
+      if (op.duck != null) b.duck = !!op.duck;
+      if (op.duck_db != null) { b.duck_db = Number(op.duck_db); if (b.duck_db <= 0) b.duck = false; }
+      if (op.fade_in != null) b.fade_in = Number(op.fade_in);
+      if (op.fade_out != null) b.fade_out = Number(op.fade_out);
+      music = b;
+    }
+    if (!music || !tracks.some((t) => t.asset === music.asset)) loadAssets();
+    paintMusic();
+    cueBed();
+    touch();
+    return true;
+  },
+};
+
 function bindMusicAdd() {
   $('#musicAdd').onclick = () => { $('#musicFile').value = ''; $('#musicFile').click(); };
   $('#musicFile').onchange = (e) => { const f = e.target.files && e.target.files[0]; $('#musicAdd').blur(); musicAddFile(f); };
@@ -5251,6 +5278,7 @@ function paintMusic() {
       duck.insertAdjacentHTML('beforeend', `<option value="${db}">${db} dB</option>`);
     }
     duck.value = String(db);
+    $('#bedLevel').value = String(Math.round((music.bed_lufs ?? -24) + 16));
     $('#fadeIn').value = music.fade_in ?? 1.5;
     $('#fadeOut').value = music.fade_out ?? 4;
   }
@@ -5271,11 +5299,15 @@ function paintMusic() {
 
 function musicChanged() {
   const asset = $('#musicTrack').value;
+  pushUndo('music');            // one undo per change (wave 25 MUSIC); the bed rides each entry
   if (!asset) {
     music = null;
   } else {
     const duck = parseFloat($('#duck').value);
+    const lvl = parseFloat($('#bedLevel').value);
     music = { asset, duck: duck > 0, duck_db: duck > 0 ? duck : 12,
+              // the level against the film (which sits at -16 LUFS): 0 dB is as loud as the talking
+              bed_lufs: Number.isFinite(lvl) ? Math.max(-34, Math.min(6, lvl)) - 16 : -24,
               fade_in: parseFloat($('#fadeIn').value) || 0,
               fade_out: parseFloat($('#fadeOut').value) || 0 };
   }
@@ -5310,7 +5342,7 @@ function bedGainAt(filmT, clipT, seg) {
   if (!music || !t || !seg) return 0;
   const clipLufs = ((P.clips[seg.clip] || {}).summary || {}).integrated_lufs ?? -16;
   const trackLufs = t.lufs ?? -14;
-  let db = (-24 - trackLufs) - (-16 - clipLufs);
+  let db = ((music.bed_lufs ?? -24) - trackLufs) - (-16 - clipLufs);
   if (music.duck && speechRegions(seg.clip).some(([lo, hi]) => clipT >= lo && clipT <= hi)) {
     db -= music.duck_db;
   }
@@ -7383,8 +7415,13 @@ async function boot() {
     render,
     toast,
     // the colour block rides each undo entry, so a nudge is one ⌘Z (INTAKE M16 I16.4)
-    extra: () => colour,
-    setExtra: (c) => { colour = c && typeof c === 'object' ? c : {}; },
+    // the colour block and the music bed ride each undo entry (wave 25 MUSIC: one undo per bed change)
+    extra: () => ({ ...colour, _bed: music }),
+    setExtra: (c) => {
+      const { _bed, ...rest } = c && typeof c === 'object' ? c : {};
+      colour = rest;
+      if (c && typeof c === 'object' && '_bed' in c) { music = _bed || null; paintMusic(); cueBed(); }
+    },
   });
   noteSaved(JSON.stringify(saveBody()));      // the cut as the disk has it: the unsaved watch's start
   tl.on('select', (ev) => {
@@ -7463,6 +7500,7 @@ async function boot() {
   $('#duck').onchange = musicChanged;
   $('#fadeIn').onchange = musicChanged;
   $('#fadeOut').onchange = musicChanged;
+  $('#bedLevel').onchange = musicChanged;
   render();
   paintBinLine();
   junkSoon.then(junkLanded);                  // the junk marks, whenever they land

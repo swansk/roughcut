@@ -2208,6 +2208,10 @@
     m.style.top = `${Math.min(y, innerHeight - 150)}px`;
   }
   document.addEventListener('contextmenu', (e) => {
+    // with the AI prompt loaded there is ONE right-click menu on a clip (aiprompt.js onContext):
+    // it carries "Rotate clip…" and opens this menu from there. A second menu here covered
+    // "Ask AI about this…" on every Project row (found at the merge: test_actions_ui's chip test).
+    if (window.rcAI) return;
     const row = e.target.closest && e.target.closest('#projList [data-clip]');
     if (!row || !clipByName(row.dataset.clip)) return;
     e.preventDefault();
@@ -2673,6 +2677,8 @@
     layout: () => ({ ...px, frac: { ...frac } }),
     resetLayout,
     project: { reload: loadClips, select: selectClip, clips: () => project.clips.slice(),
+               // a clip's turn by hand (wave 23 FILM): the AI's right-click menu opens this one
+               rotMenu, rotateClip, canRotate: (name) => !!clipByName(name),
                view: (v) => { if (v) { project.view = v; store.set(VIEW_KEY, v); paintProject(); } return project.view; },
                // the sorted column and its direction ({col, dir: 1 | -1}); the items as painted
                sort: () => ({ ...project.sort }),

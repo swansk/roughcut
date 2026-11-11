@@ -883,3 +883,42 @@ def test_a_look_written_before_the_decision_changed_is_marked_out_of_date_not_re
     assert server.orient_row("SENS90.MP4")["look_stale"] is False
     # a clip with no look is never marked
     assert server.orient_row("SENS180.MP4")["look_stale"] is False
+
+
+def test_a_clip_has_one_right_click_menu_that_asks_the_ai_and_rotates(served):
+    """Found at the merge of waves 23-25: lane FILM's "Rotate clip" menu on a Project row opened
+    over the AI prompt's own menu, so "Ask AI about this…" could not be reached there (the same
+    had happened to the Source monitor with "Transcript…"). A clip has ONE right-click menu: the
+    AI's, carrying "Rotate clip…", which opens the four turns; a turn is posted and can be undone
+    from its toast."""
+    pytest.importorskip("playwright.sync_api")
+    from playwright.sync_api import sync_playwright
+    server = served["server"]
+    server.ensure_proxies(server.footage_clips())
+    with sync_playwright() as pw:
+        b = pw.chromium.launch()
+        pg = b.new_page(viewport={"width": 1440, "height": 900})
+        errors: list[str] = []
+        pg.on("pageerror", lambda e: errors.append(str(e)))
+        pg.goto(served["url"] + "/")
+        pg.wait_for_function("window.rcAI && window.dock && window.tl", timeout=30000)
+        row = pg.locator('#projList [data-clip="SENS90.MP4"]').first
+        row.wait_for(timeout=15000)
+        row.click(button="right")
+        ask = pg.locator('[data-testid="ai-ctx-ask"]')
+        ask.wait_for(timeout=5000)                                  # the AI's item is reachable again
+        rot = pg.locator('[data-testid="ctx-rotate"]')
+        assert rot.is_visible(), "the clip's one menu carries Rotate clip…"
+        assert pg.locator("#rotMenu:not([hidden])").count() == 0, "no second menu over the first"
+        rot.click()
+        pg.wait_for_selector("#rotMenu:not([hidden])", timeout=5000)
+        assert pg.locator("#rotMenu button[data-rot]").count() == 4
+        with pg.expect_response(lambda r: "/orient" in r.url and r.request.method == "POST") as resp:
+            pg.locator('[data-testid="rot-turn180"]').click()
+        assert resp.value.ok
+        pg.wait_for_function("(document.querySelector('#toast') || {}).innerText && /180/.test(document.querySelector('#toast').innerText)", timeout=5000)
+        with pg.expect_response(lambda r: "/orient" in r.url and r.request.method == "POST") as back:
+            pg.locator("#toast .toastAct").click()                  # Undo on the toast puts it back
+        assert back.value.ok
+        assert errors == [], errors
+        b.close()

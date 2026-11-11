@@ -114,9 +114,11 @@
     curve: 'lumetri', wheel: 'lumetri', vignette: 'lumetri', look: 'lumetri', match: 'lumetri',
     transition: 'transitions', fade: 'transitions', design_effect: 'designed_effects', export: 'export',
     take_back: 'history',
+    music: 'music',
   };
   const FAMILY_NAME = { timeline: 'Timeline', effect_controls: 'Effect Controls', lumetri: 'Lumetri Color',
-                        transitions: 'Transitions', designed_effects: 'Designed Effects', export: 'Export', history: 'Undo history' };
+                        transitions: 'Transitions', designed_effects: 'Designed Effects', export: 'Export', history: 'Undo history',
+                        music: 'Music' };
   // one glyph per family (14 px, currentColor), in the panels' own icon style
   const ICON = {
     timeline: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="4" width="6" height="3.5" rx=".6"/><rect x="8.5" y="4" width="6" height="3.5" rx=".6"/><rect x="1.5" y="9.5" width="13" height="3" rx=".6"/></svg>',
@@ -124,6 +126,7 @@
     lumetri: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6"/><path d="M8 2v12M2 8h12" opacity=".45"/><circle cx="10" cy="6" r="1.4" fill="currentColor"/></svg>',
     transitions: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="4" width="7" height="8" rx=".8"/><rect x="7.5" y="4" width="7" height="8" rx=".8" opacity=".55"/><path d="M7.5 4l1 8"/></svg>',
     designed_effects: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M8 1.8l1.5 3.6 3.7 1.1-3.7 1.2L8 11.3 6.5 7.7 2.8 6.5l3.7-1.1z"/><path d="M12.5 11.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z"/></svg>',
+    music: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M6 11.5V3l7-1.5v8.5"/><circle cx="4.5" cy="11.5" r="1.6"/><circle cx="11.5" cy="10" r="1.6"/></svg>',
     export: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 2v8M5 7l3 3 3-3"/><path d="M2.5 11v2.5h11V11"/></svg>',
     history: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a5 5 0 1 0 1.6-3.7"/><path d="M3 2.5v3h3"/></svg>',
   };
@@ -384,6 +387,9 @@
       c.designs.push({ shot: s.id, note: op.note });
       c.later.push(() => c.asked.press(k));
     },
+    music(op) {
+      if (!window.bedAI || !window.bedAI.apply(op)) refuse('the Audio tab refused it');
+    },
     export(op, c) {
       if (!app.segs().length) refuse('the sequence is empty');
       c.later.push(() => runExport(op));
@@ -478,7 +484,7 @@
     curve: ['colour change', 'colour changes'], wheel: ['colour change', 'colour changes'],
     look: ['colour change', 'colour changes'], match: ['colour change', 'colour changes'],
     transition: ['transition', 'transitions'], fade: ['fade', 'fades'],
-    design_effect: ['effect', 'effects'], export: ['export', 'exports'],
+    design_effect: ['effect', 'effects'], export: ['export', 'exports'], music: ['music', 'music changes'],
     take_back: ['change taken back', 'changes taken back'],
     effect: ['video effect', 'video effects'],
     vignette: ['vignette', 'vignettes'],
@@ -613,6 +619,8 @@
       case 'transition': return `${kind(op.kind)} between ${shot(op.a)} and ${shot(op.b)}`;
       case 'fade': return `${kind(op.kind)} at the ${op.edge} of ${shot(op.id)}`;
       case 'design_effect': return `Designed effect on ${shot(op.id)}: “${op.note}”`;
+      case 'music': return op.remove ? 'Remove the music bed'
+        : `Music bed${op.track ? `: ${String(op.track).replace(/^(project|music)\//, '')}` : ''}${op.level != null ? `, ${op.level > 0 ? '+' : ''}${op.level} dB against the film` : ''}${op.duck === false ? ', no dip under talking' : op.duck_db != null ? `, ${op.duck_db} dB dip` : ''}`;
       case 'export': {
         const v = exportVideo(op, R.exportInfo, R.exportInfo && (R.exportInfo.presets || []).find((p) => p.key === op.preset));
         const own = [op.size != null && op.size !== '' ? v.frame : '', op.fps != null && op.fps !== '' ? v.fps : '', v.bitrate]
@@ -626,6 +634,7 @@
 
   /* ------------------------------------------------------------ the review */
   const R = {
+    keep: new Set(),            // which of the review's keep-the-title offers are ticked (default: all)
     res: null,             // the /api/assist result under review
     ops: [],               // its ops
     lines: [],
@@ -665,6 +674,12 @@
     el.hidden = true;
     host.insertBefore(el, host.firstChild);
     el.addEventListener('click', onClick);
+    el.addEventListener('change', (e) => {      // a keep-the-title offer ticked or cleared
+      const c = e.target.closest('input[data-keep]');
+      if (!c) return;
+      const k = Number(c.dataset.keep);
+      if (c.checked) R.keep.add(k); else R.keep.delete(k);
+    });
     R.el = el;
     return el;
   }
@@ -812,6 +827,7 @@
       ${res.summary ? `<div class="air-sum">${esc(named(res.summary))}</div>` : ''}
       <ol class="air-ops">${R.ops.map(rowHtml).join('')}${refused.map((x) => `<li class="air-op refused" data-testid="ai-op-refused" data-op="${esc(x.op || '')}"><span class="air-fam" aria-hidden="true">⊘</span><span class="air-line">${esc(String(x.op || 'an op').replace('_', ' '))} not applied: ${esc(named(x.why))}</span></li>`).join('')}</ol>
       ${(res.notes || []).map((n) => `<div class="air-note" data-testid="ai-title-note">${esc(named(n))}</div>`).join('')}
+      ${(res.note_actions || []).map((a, k) => `<label class="air-note air-keep" data-testid="ai-keep-title"><input type="checkbox" data-keep="${k}"${R.keep.has(k) ? ' checked' : ''}> keep the title “${esc(a.words)}” at the start of the film (it moves to the new first shot)</label>`).join('')}
       ${preview ? `<div class="air-preview">${preview}</div>` : ''}
       <div class="air-foot">
         <button type="button" class="air-btn" data-act="reject" data-testid="ai-reject-all" title="put everything back as it was — nothing is written (Esc)">Reject all</button>
@@ -1057,6 +1073,7 @@
     }
     if (R.res) closeQuiet();
     R.res = res;
+    R.keep = new Set((res.note_actions || []).map((_, k) => k));
     R.after = true;
     R.blocked = new Map();
     R.planWhat = '';
@@ -1146,7 +1163,13 @@
     if (R.ops[idx[0]] && R.ops[idx[0]].op === 'new_cut') return acceptIntoCopy(idx);
     // the entry is named for what the ops are, never the model's summary cut to fit (the
     // summary stays the review's own line)
+    const keeps = (R.res.note_actions || []).filter((_, k) => R.keep.has(k));
     const out = applyOps(idx.map((i) => R.ops[i]), { label: labelFor(idx.map((i) => R.ops[i])) });
+    // the titles the editor chose to keep at the start of the film go to the shot that is first now
+    // (a name super stays with its shot); no model, one undo step each (fx.js moveTitle)
+    if (keeps.length && window.fx && typeof fx.moveTitle === 'function') {
+      setTimeout(() => keeps.forEach((a) => { fx.moveTitle(a.fx, a.shot).catch(() => {}); }), 400);
+    }
     return landed(idx, idx, out);
   }
 
