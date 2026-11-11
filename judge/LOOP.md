@@ -49,6 +49,16 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-11 ~15:30: **The full gate on `a49e979` is RED** (`~/roughcut-loop/gate-a49e979-20261111T1353/summary.md`):
+  suite 2531 passed, 23 broken, 3 flaky (pass alone); journey stops at step 4 (the first-pass panel lists no steps);
+  browser, perf, screens, boot, understanding (at baseline) and hygiene green. The 23 by cause: the trim nudge is now
+  one frame where four tests pin 0.25 s; HANDS round 3's "nothing selected until the editor selects" against five
+  older tests; START's new empty timeline and first-pass panel against three tests, the journey tool and its five
+  self-tests; the price wording against two; insert past the end (two, stale by the logged change); a title card's
+  hand fields jumping 83 px; and one real bug whatever the rest turns out to be: an export of a silent film answers
+  500 (`-inf` in a JSON reply). **Wave 26 = two Sonnet lanes, GATEFIX-A (`w26/gatefix-a`) and GATEFIX-B
+  (`w26/gatefix-b`), each deciding stale test or regression per item; then merge, full gate again, and 8766 only on
+  green. 8766 is still down, so `judge/FOR-KARL.md`'s "the preview has all of it" is not yet true.**
 - 2026-11-11 ~14:00: **Round two of the Copper editors is done and its findings are built: tip `a49e979`
   (pushed). Record: `judge/COPPER-EDITORS-2.md`.** The same six Opus editors went back in on a from-scratch Copper
   project on the merged build: of 131 old pain points 71 fixed, 39 better, 19 same, 0 worse; 102 new findings, sent
