@@ -3030,7 +3030,7 @@
    * said in the usual line. Returns what it made, or null when this is not that case. */
   function fadeEnd(which) {
     const list = segs();
-    if (!list.length || (state.tsel && selectedEdit() >= 0)) return null;
+    if (!list.length || selectedEdit() >= 0) return null;     // an edit chosen (clicked, or its transition) is the one Ctrl+D acts on
     const half = 0.5 / fps();
     const ph = state.playhead || 0;
     const head = ph <= half, tail = ph >= total() - half;

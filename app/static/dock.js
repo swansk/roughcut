@@ -2434,7 +2434,7 @@
       });
       $('#srcScreen').addEventListener('click', () => this.play());
       $('#srcScreen').addEventListener('contextmenu', (e) => {
-        if (!this.clip) return;
+        if (!this.clip || window.rcAI) return;     // with the AI prompt loaded its one menu carries Transcript… too (aiprompt.js onContext)
         e.preventDefault();
         let m = $('#srcMenu');
         if (!m) {
