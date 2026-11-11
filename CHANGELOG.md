@@ -8,6 +8,7 @@ Every commit that changes behavior or documentation adds an entry under [Unrelea
 same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
+- Wave 24 GATEFIX, twelve tests the merged lanes broke: the Program's catch-up after an edit no longer collapses the editor's selection to the shot under the playhead (a split's two halves stay selected, an inserted shot stays the selection; `tl.cueQuiet`); a click on a ghost shot keeps the monitor's "proposal · …" line; Next's "Refine" chip is shown again over a cut (the first-cut hide is for the "Cut" offer only); a quiet board writes no undo history (nothing to take back, nothing sent). Tests: the Index panel keeps >= 8 rows at 1440x900 with the clip's found block (10 at 1080), the chip walk holds no cut, two reads made race-free.
 
 ### Fixed
 - The typable timecodes are not announced as buttons: they are the same readouts, so the screens budget holds.

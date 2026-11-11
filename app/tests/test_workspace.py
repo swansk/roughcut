@@ -1410,7 +1410,10 @@ def test_the_index_panel_opens_at_a_working_size(live_server, project, browser, 
     print(f"\nindex panel {size}: {json.dumps({k: v for k, v in m.items() if k != 'sum_text'})}"
           f"\n  summary: {m['sum_text']}")
     assert m["panel"] >= 560, m
-    assert m["detail_open"] and m["seen"] >= 10, m
+    # >= 10 rows in view with the detail open. Wave 23 DESCRIBE put the clip's "found" block (its
+    # description line, the Describe button, then Found / Said) under the detail's four lines: 24 px
+    # that a 900 px window pays for with two rows (10 -> 8); a taller window still shows 10.
+    assert m["detail_open"] and m["seen"] >= (10 if size[1] >= 1000 else 8), m
     assert m["foot_rows"] == 1 and m["foot_scroll"] <= 0, m
     assert m["sum_lines"] == 1 and "looked 12 (10 at 4 s, 2 at 2 s)" in m["sum_text"], m
     assert m["wrapped"] == [] and m["cut"] == [], m

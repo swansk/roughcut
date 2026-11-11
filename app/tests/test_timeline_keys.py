@@ -257,6 +257,9 @@ def test_ctrl_k_splits_at_the_playhead_and_both_halves_survive_the_save(page, pr
                             ["CLIP_B.MP4", 0.0, 2.0]]
     halves = page.evaluate("segs.slice(0, 2).map(s => s.out - s.in)")
     assert sum(halves) == pytest.approx(2.0)
+    # the Program catches up with the edit a tick later (wave 23 TRUTH, monitorCatchUp): it cues
+    # the shot under the playhead, and must not collapse the two selected halves to that one
+    page.wait_for_timeout(400)
     assert page.evaluate("tl.state.sel.size") == 2, "both halves selected"
     assert page.evaluate("tl.state.anchor") == a
     assert page.locator("#tl .blk.sel").count() == 2

@@ -89,6 +89,7 @@
   let raf = 0;                         // one redraw per frame, however many triggers
   let rangeGen = 0;                    // proposal playback token
   let rangeOn = 0;                     // the token of the range that is playing now (0: none)
+  let rangeSrc = '';                   // the proposal's clip the monitor was last put on (a ghost click, Play it)
   let rangeSet = false;                // the range's own playhead write (onHead ignores it)
   let headT = 0;
   let mode = 'cut';                    // the ghost lane's toggle
@@ -1052,7 +1053,7 @@
   /* What the monitor plays — the proposal or the cut (`tlLanes.mode()`): the cut again
    * the moment the monitor's own play takes over. */
   function paintMode(a) {
-    if (a && a.player && a.player.playing) mode = 'cut';
+    if (a && a.player && a.player.playing) { mode = 'cut'; rangeSrc = ''; }
   }
 
   /* Play one range — a proposal's shot, not necessarily in the cut — in the monitor,
@@ -1072,6 +1073,7 @@
     v.muted = false;
     const token = ++rangeGen;
     const src = v.dataset.src;
+    rangeSrc = v.dataset.src || '';
     const what = q('#playingWhat');
     const s = spd(seg);
     if (what) what.textContent = `proposal · ${nameOf(seg.clip)} ${tl.fmt(seg.in)}–${tl.fmt(seg.out)}${s === 1 ? '' : ` · ${round2(s)}×`}`;
@@ -1113,6 +1115,7 @@
     arm(v, seg);
     if (showLive) showLive();
     const src = v.dataset.src;
+    rangeSrc = v.dataset.src || '';
     const what = q('#playingWhat');
     if (what) what.textContent = `proposal · ${nameOf(seg.clip)} ${tl.fmt(seg.in)}–${tl.fmt(seg.out)}`;
     setHead(filmFrom || 0);
@@ -1140,6 +1143,14 @@
 
   /* Whether the Program follows the proposal: on an empty sequence it is the film that is reviewed;
    * on a cut, once the editor has played the proposal (Play it) and not the cut since. */
+  /* The monitor is still on a proposal's shot the editor put it on (a click on a ghost): its line
+   * ("proposal · …") stays, though the Program does not follow the playhead through the proposal. */
+  function showsRange() {
+    if (!ghost || !rangeSrc) return false;
+    const a = app(), lv = fn('liveVideo'), v = lv ? lv() : null;
+    return !!(a && a.player && !a.player.playing && v && v.dataset.src === rangeSrc);
+  }
+
   function following() {
     const a = app();
     return !!(ghost && a && a.player && !a.player.playing && (!tl.state.segs.length || mode === 'proposal'));
@@ -1150,7 +1161,7 @@
    * follows the cut. The cut's own seek cues the cut's shot first, so this runs a task later. */
   function onHead(ev) {
     if (!ghost || rangeSet || !ev || ev.quiet) return;
-    if (!following()) return;
+    if (!following()) { rangeSrc = ''; return; }        // the editor moved the playhead on the cut
     const t = ev.t;
     // the editor moved the playhead under a running range: its loop stops now (it would write the
     // playhead back from the video's time before the cue below runs)
@@ -1182,6 +1193,7 @@
     if (showLive) showLive();
     v.pause();
     const src = v.dataset.src;
+    rangeSrc = v.dataset.src || '';
     const what = q('#playingWhat');
     if (what) what.textContent = `proposal · ${nameOf(seg.clip)} ${tl.fmt(seg.in)}–${tl.fmt(seg.out)}`;
     const kick = () => { if (v.dataset.src === src && v.readyState < 2) v.currentTime = clipT; };
@@ -1672,6 +1684,7 @@
       return !!v && !v.paused && !v.ended;
     },
     following,
+    showsRange,
     ghostAt,
     cueAt: (t) => { const g = ghostAt(t); return g ? cueRangeAt(g.seg, g.start, t) : false; },
     stop: stopRange,

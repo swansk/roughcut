@@ -2662,6 +2662,14 @@
     return at;
   }
 
+  /* Cue the monitor to a shot without the selection following it (the Program catching up
+   * with an edit, app.js monitorCatchUp: a split's two selected halves stay selected). */
+  function cueQuiet(index, clipT) {
+    if (!hooks.cue) return;
+    inCue = true;
+    try { hooks.cue(index, clipT); } finally { inCue = false; }
+  }
+
   function zoomTo(z, opts = {}) {
     z = clamp(Number(z) || state.zoom, MIN_ZOOM, MAX_ZOOM);
     autoFit = false;
@@ -4681,7 +4689,7 @@
     nextUndo,                       // {label, tag} of what Ctrl+Z takes back now, or null
     history, restoreHistory, onHistory,   // the stacks kept past a reload (app.js, /api/undo)
     setRange, move, split, remove, insert, setSpeed, insertAt, overwrite,
-    select, syncSel, seek, setPlayhead, zoomTo, fit,
+    select, syncSel, seek, cueQuiet, setPlayhead, zoomTo, fit,
     forSave, needsRekey, afterSave, applyIds, idFor, putTurn, saveHeaders, seqForFlush, seqDirty,
     fmt, hueOf, blockName, blockSays, fitLabel, textWidth, fontOf,
     // the tracks (roughcut/tracks.py)
