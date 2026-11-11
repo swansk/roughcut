@@ -139,14 +139,17 @@ def check(spec: dict, on_progress: Progress = _quiet) -> dict:
     """The proof and the measured checklist for `spec` = `{effect, seg, src, dir, w, h,
     fps, onset, hz, impact}`. Returns `{verify, stats}`."""
     e, seg = spec["effect"], spec["seg"]
+    # a 16:9 cut calls both exactly as before (a stubbed renderer takes no shape); only a
+    # 9:16 / 1:1 cut adds what it needs (wave 25 VERTICAL)
+    shaped = bool(spec.get("shape")) and not framemod.is_wide(spec["shape"])
     out, base, stats = proof(e, seg, Path(spec["src"]), Path(spec["dir"]), w=int(spec["w"]),
                              h=int(spec["h"]), fps=spec["fps"], on_progress=on_progress,
-                             shape=spec.get("shape"))
+                             **({"shape": spec["shape"]} if shaped else {}))
     on_progress("measure", 0.0, False)
     t0 = time.perf_counter()
     v = fx.verify(e, seg, onset=spec.get("onset"), hz=float(spec.get("hz") or fx.ONSET_HZ),
                   part=out, base=base, impact=bool(spec.get("impact")),
-                  aspect=int(spec["w"]) / int(spec["h"]))
+                  **({"aspect": int(spec["w"]) / int(spec["h"])} if shaped else {}))
     row = fx.bounds_check(e, int(spec["w"]), int(spec["h"]))
     if row is not None:                    # wave 23: measured on the renderer's pixels
         at = next((i + 1 for i, c in enumerate(v["checks"]) if c.get("key") == "in_frame"), 0)

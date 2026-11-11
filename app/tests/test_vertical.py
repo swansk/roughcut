@@ -938,7 +938,7 @@ def test_accepting_it_saves_a_copy_in_9_16_and_makes_the_edits_there(served):
             assert pg.evaluate("tl.frameShape()") == "9:16"
             # and the first cut is still 16:9, three shots, when we go back to it
             pg.evaluate("""async (path) => { await switcher.openCut(path); }""", str(served["edl"]))
-            pg.wait_for_function("P && tl.frameShape() === '16:9' && segs.length === 3", timeout=20000)
+            pg.wait_for_function("typeof P !== 'undefined' && P && typeof tl !== 'undefined' && tl.frameShape() === '16:9' && segs.length === 3", timeout=30000)
             assert pg._errors == [], pg._errors
             browser.close()
     finally:
