@@ -529,7 +529,9 @@ def test_dropping_an_available_outline_on_v1_inserts_that_range_at_the_drop_line
                            ["CLIP_B.MP4", 0.0, 2.0]]
     assert page.evaluate("segs[1].why") == "the whole take"
     assert page.locator("#undo").get_attribute("title").startswith("undo: insert")
-    assert page.evaluate("[...tl.state.sel]") == [page.evaluate("segs[1].id")]
+    # the inserted shot is the selection (by place: its tmp id becomes the real one when the
+    # save lands, and a read of the two ids on either side of that is not the same string)
+    assert page.evaluate("[...tl.state.sel].map(i => tl.indexOf(i))") == [1]
     assert page.locator("#tl .blk").count() == 3
     page.wait_for_function(f"document.querySelectorAll('{avail}').length === 0", timeout=5000)
     assert page.evaluate("document.querySelector('#tl .tl-dropline').style.display") == "none"

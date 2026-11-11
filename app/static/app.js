@@ -3631,7 +3631,7 @@ function monitorCatchUp(force) {
     const v = liveVideo();
     const fine = v && player.idx === at.index && v.dataset.src === proxyOf(seg)
       && (v.seeking || v.readyState < 1 || Math.abs(v.currentTime - at.clipT) < 0.35);
-    if (!fine) cueAt(at.index, at.clipT);
+    if (!fine) tl.cueQuiet(at.index, at.clipT);      // the selection stays the editor's
     else {
       // the picture is right; the label and the timecode follow the playhead
       paintTransport();
@@ -3758,7 +3758,8 @@ function paintTransport() {
   // (written only when it changes: a cut calls this, and a new text node is a child-list
   // change the board's `:has()` rules re-match on, in the cut's own frame)
   // (wave 23 TRUTH) the proposal's own line ("proposal · GX0104 …", the lanes') stays while the monitor is on it
-  const onProposal = window.tlLanes && typeof tlLanes.following === 'function' && tlLanes.following();
+  const onProposal = window.tlLanes && typeof tlLanes.following === 'function'
+    && (tlLanes.following() || (typeof tlLanes.showsRange === 'function' && tlLanes.showsRange()));
   if (!onProposal && pw.textContent !== what) pw.textContent = what;
   // While the Program plays, the board's own fades (the trim handles' grips, which follow
   // the selection the playback moves at every cut) are instant (timeline.css
@@ -6466,7 +6467,12 @@ function persistUndo(now) {
   clearTimeout(undoTimer);
   const go = () => {
     let body;
-    try { body = undoBody(); } catch (e) { return; }
+    try {
+      // nothing to take back and nothing sent before: a quiet board writes nothing, not even an empty history
+      const h = tl.history();
+      if (!undoSent && !h.undo.length && !h.redo.length) return;
+      body = undoBody();
+    } catch (e) { return; }
     if (body === undoSent) return;
     undoSent = body;
     try {

@@ -851,6 +851,9 @@ def test_no_menu_item_chip_place_tour_step_or_link_leaves_the_editor(browser, li
                    flow.action("footage", "Import footage (Ctrl+I)", "Import", screen="/", do="import"),
                    flow.action("brief", "Say what the film is about", "Brief"),
                    flow.action("cut", "Ask for the first cut", "Cut")]
+        # (wave 23 SAFE: Next never offers a first cut over a cut the board holds, so the board is
+        # made to hold none while the chip's targets are walked; the cut chip is one of them)
+        pg.evaluate("window.__cutShots = window.rcCutShots; window.rcCutShots = () => 0")
         for a in targets:
             assert a["screen"] == "/" and (a["href"] == "/" or a["href"].startswith("/#")), a
             pg.route("**/api/flow", _answer({"stages": [], "next": a, "blockers": [], "running": False}))
@@ -867,7 +870,7 @@ def test_no_menu_item_chip_place_tour_step_or_link_leaves_the_editor(browser, li
             assert pg.evaluate(NAV_JS)["path"] == "/", a
             _reset(pg)
             pg.unroute("**/api/flow")
-        pg.evaluate("flowBar.poll()")
+        pg.evaluate("window.rcCutShots = window.__cutShots; flowBar.poll()")
         assert server  # the module is the one serving this page
 
         # the switcher's place rows: panels, not pages
