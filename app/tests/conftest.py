@@ -108,6 +108,28 @@ def no_cli_problem_carried_over():
 
 
 @pytest.fixture(autouse=True)
+def no_job_carried_over():
+    """Every test starts with no job in flight. A background job outlives the test that
+    started it (an effect's proof check, queued by an Accept or a hand edit: wave 23 TITLE),
+    and the board refuses to switch or copy a cut while one runs (`_refuse_while_running`),
+    so the next test's first call answered 409. Found by run order: test_fx_api, then
+    test_proposals_kept's saved copy. Waits for what is running to end; starts nothing."""
+    server = sys.modules.get("server")
+    if server is not None and hasattr(server, "all_jobs"):
+        import time
+        terminal = getattr(getattr(server, "progress", None), "TERMINAL", ())
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            try:
+                if all(j.get("state") in terminal for j in server.all_jobs()):
+                    break
+            except Exception:  # noqa: BLE001 - a registry mid-change is not this fixture's to judge
+                break
+            time.sleep(0.05)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def no_undo_history_carried_over():
     """Every test starts with nothing to undo. The board keeps the undo history with the cut
     (wave 23 SAFE) and takes it back when the same cut loads again; the suite seeds the same

@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- Tests: every test starts with no background job in flight (an effect's proof check from one test made the next test's saved copy answer 409).
 - Wave 24 adds lanes HANDS (focus rule, copy and paste, typed timecode, steady transport rows) and DELIVER (music import, export in the background).
 - Wave 24 adds lane START (New film from a folder, the length asked before a first pass, plain words first).
 
