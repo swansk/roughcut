@@ -49,6 +49,14 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-11 ~18:30: **Karl asked for the Copper project on a board he can open.** The Premiere editor's (`hands`)
+  round-two project was copied into the preview's work folder as `copper-02-2026` (14 shots, 81.9 s, two titles, a
+  grade on four shots; index, proxies, asks, renders with it) and 8766 now opens on it; Killington there is
+  untouched (File › Open a film). The empty Copper shell the preview had is kept at
+  `/mnt/roughcut/space/roughcut-loop/preview-copper-shell-20261111T1819`. Not copied: the editor's three scratch cuts.
+  The editor's 26 undo steps do not come back: the stored history predates MUSIC's `_bed` key in the snapshot, so
+  the page's "is this the cut the history leads to" comparison fails across builds (a history written by today's
+  build is not affected).
 - 2026-11-11 ~17:30: **Full gate GREEN on `e0c0501`** (`~/roughcut-loop/gate-e0c0501-20261111T1611/summary.md`: suite
   2564 passed, 0 broken, 4 flaky that pass alone; journey 24 steps; screens, perf, boot, hygiene green; understanding
   at baseline). **8766 started on it (`roughcut-redesign`, localhost only, plan backend, Killington's own copy; opened
