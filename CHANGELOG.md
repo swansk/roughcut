@@ -15,6 +15,7 @@ same commit. Releases move entries into a dated version section.
 - Wave 24 GATEFIX, twelve tests the merged lanes broke: the Program's catch-up after an edit no longer collapses the editor's selection to the shot under the playhead (a split's two halves stay selected, an inserted shot stays the selection; `tl.cueQuiet`); a click on a ghost shot keeps the monitor's "proposal · …" line; Next's "Refine" chip is shown again over a cut (the first-cut hide is for the "Cut" offer only); a quiet board writes no undo history (nothing to take back, nothing sent). Tests: the Index panel keeps >= 8 rows at 1440x900 with the clip's found block (10 at 1080), the chip walk holds no cut, two reads made race-free, and the AI scope chip test hands the chip back to the selection ("Follow my selection again") after asking about a clip, as wave 23 DIRECT made a chosen scope stay.
 
 ### Fixed
+Fixed: the journey's first-pass step reads the panel as a person now does — the plain words first (what it will run, that nothing changes until accepted), then Details for the steps — and checks both
 Tests: the assist's price tests pin the plan's one wording (hover is 'free on your plan', the API estimate is api_note) and an API backend test keeps proving it says API
 Fixed: a silent film's export no longer answers 500 — its true peak measures -inf dBFS, which JSON cannot carry, so the figure is now 'not measured' and the export finishes
 - Karl's try-list rewritten for the build after round two (seven asks, six trades to decide).
