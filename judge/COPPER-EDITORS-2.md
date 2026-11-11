@@ -72,7 +72,7 @@ opening shot, Find missing the jump, the Index squeezing the timeline). Each edi
 | The file 2-5 levels darker than the monitor, both rounds | `finish` | mostly the way the frames were grabbed; really: graded shots and coloured titles went RGB → YUV in BT.601 in a file tagged BT.709 | MATCH: fixed on the export side; within 0.4 of a level on Copper's graded shots |
 | No level for the music bed; the AI "can't find a music bed" | `finish`, `words` | the level was a constant nobody could set | MUSIC: a level, ducking and fades in the Audio tab; one AI operation; measured in real exports |
 | "Make a 20 second vertical version" offered to overwrite the main film | `words`, `finish` | no frame shape; no way to make a second cut by words | VERTICAL: 9:16 and 1:1 end to end; the AI's vertical version is a new cut |
-| Delete removed a shot the editor never clicked (the selection follows the playhead) | `hands`, `clumsy` | the board selects on the editor's behalf | HANDS round 3, in flight when this was written |
+| Delete removed a shot the editor never clicked (the selection follows the playhead) | `hands`, `clumsy` | the board selects on the editor's behalf | HANDS round 3: the selection is only what the editor selects, Delete and `x` act on it and say what went (pinned with the playhead over another shot) |
 
 Three things the lanes found themselves while fixing the above, worth knowing: the export's parts were 16-bit and
 could clip before the limiter saw them (FILM: float now); Find's ranking had been tuned to Copper's absent queries
@@ -80,6 +80,12 @@ and lost Killington's hits until the gate's offline check caught it (DESCRIBE: r
 sentence); and twelve older tests failing after the merges hid five real regressions (GATEFIX: a split's selection
 collapsing, the "Refine" chip hidden, Ctrl+D making a fade instead of a dissolve, the Accept button turned blue, the
 Source monitor's AI menu covered).
+
+After this was written the full gate on the merged build was red (23 tests and the journey). Wave 26 found three
+real bugs under it (a silent film's export ended in an error; a title's "Fit to frame" button was cut off at the
+inspector's real width; a rotation undone in the page's first 300 ms was not turned back) and nineteen older tests
+that still pinned the behaviour the day had changed on purpose. The gate is green on `e0c0501` and the preview on
+8766 runs that build.
 
 ## Their verdicts, round one against round two
 

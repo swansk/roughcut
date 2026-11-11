@@ -8,7 +8,9 @@ is `judge/COPPER-EDITORS-2.md`; what is below is only what needs you.
 ## Open it
 
 - **The preview has all of it:** `Roughcut redesign.cmd` in `Karl OS/tools/Launch` → `localhost:18766` (on foxtrot:
-  `localhost:8766`). Its own copy of Killington; nothing you do there touches your real project.
+  `localhost:8766`). Its own copy of Killington; nothing you do there touches your real project. It opens on a
+  first-pass proposal that is waiting for an answer (Accept or Discard, either can be undone). Every gate is green
+  on this build (`e0c0501`, 2026-11-11 17:30).
 - **Your real board does not, yet:** `Roughcut.cmd` → `localhost:18765` is still the build of 2026-11-10 08:25. When
   you want the new one there (your Killington cut is kept; it is backed up at
   `/mnt/roughcut/work/app.backup-pre-redesign-20261110`), on foxtrot:
@@ -37,7 +39,7 @@ is `judge/COPPER-EDITORS-2.md`; what is below is only what needs you.
    **Tell me:** did Find land on the moment? Does the Index tell you what ran and what it found? Is Hybrid the right default?
 5. **Cut by hand for five minutes (K2).** The keys you know. New since you last looked: copy / cut / paste, a typed
    timecode (click it or Ctrl+G), a selection that never follows the playhead (Delete acts on what you clicked and
-   says what went), transitions you can select and trim, double-click a shot to open it in the Source monitor.
+   says what went), `[` and `]` trim the in-point one frame (Shift five, Alt the out-point), transitions you can select and trim, double-click a shot to open it in the Source monitor.
    **Tell me:** would you choose to cut in this? What looked like a toy first?
 6. **Finish one (K2).** Ask for a title, move it by hand on its card; Audio › Add music… and set its level; Sequence ›
    Sequence Settings… › Frame › Vertical 9:16 on a copy of the cut; Export, put the dialog away, keep working.
@@ -59,6 +61,9 @@ is `judge/COPPER-EDITORS-2.md`; what is below is only what needs you.
   grade, fonts and colours for titles, the camera's .WAV as the sound, a loudness target on export.
 - The Program monitor going black in the first trial was the test browser, not the board; the board now also falls
   back to the ungraded picture if a browser ever loses its graphics, and says so.
+- A third round of the six editors and the next build wave (the "not built yet" list above) were not started: the
+  weekly plan limit was at 68 % with four days to its reset and Screek's loop draws on the same limit. Say the word
+  and either runs.
 - Everything was built and checked on two bins, Killington and Copper, and the second round ran on the bin the
   fixes were made on. A third folder that nobody has tuned on is the honest test: yours in step 2 would be it.
 

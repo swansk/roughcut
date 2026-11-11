@@ -49,6 +49,22 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-11 ~17:30: **Full gate GREEN on `e0c0501`** (`~/roughcut-loop/gate-e0c0501-20261111T1611/summary.md`: suite
+  2564 passed, 0 broken, 4 flaky that pass alone; journey 24 steps; screens, perf, boot, hygiene green; understanding
+  at baseline). **8766 started on it (`roughcut-redesign`, localhost only, plan backend, Killington's own copy; opened
+  in a real browser: 19 shots, no console errors).** Wave 26 was the fix for the red gate below: GATEFIX-A (three real
+  bugs: a silent film's export answered 500 because a `-inf` loudness went into JSON; a title's check line clipped
+  its "Fit to frame" button out of reach at the inspector's real width; the journey and the price tests followed
+  START's panel and wording), GATEFIX-B (19 older tests rewritten to pin the one-frame trim keys, "nothing selected
+  until the editor selects", the new empty timeline and insert-at-the-end; three tests whose trim step had become
+  vacuous now check the trim; `x`, Delete, `q`, `w`, `[`, `]`, Enter pinned to the selection with the playhead
+  elsewhere), lead (a rotation's undo was hooked up to 300 ms after load, the cause of a "flaky" test; a run of `]`
+  and `[` is not typing). Known and left: three `test_proposals_ui` tests and `test_box_causes`'s memory test fail
+  only inside the full run (Recent-list rows and timing carried between test files; they pass alone); dead `x` / `j` /
+  `k` branches in `app.js` (timeline-keys.js handles them first). **Not started, on purpose: a third editor round and
+  the next build wave (J / L cuts, lift, slide, typed speed, paste attributes, title fonts, LUFS, .WAV). The weekly
+  plan limit was at 68 % at 15:25 with the reset on Sunday 2026-11-15 and Screek's loop on the same limit; that
+  spend is Karl's call.** Judge 17 still held; main, 8765 and pushing main stay Karl's.
 - 2026-11-11 ~15:30: **The full gate on `a49e979` is RED** (`~/roughcut-loop/gate-a49e979-20261111T1353/summary.md`):
   suite 2531 passed, 23 broken, 3 flaky (pass alone); journey stops at step 4 (the first-pass panel lists no steps);
   browser, perf, screens, boot, understanding (at baseline) and hygiene green. The 23 by cause: the trim nudge is now
