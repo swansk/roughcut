@@ -509,7 +509,6 @@ table.plist .st.ok { color: var(--good); }
                                    padding: 0 4px; border-radius: 2px; background: rgba(0,0,0,.72); color: #e0e0e6;
                                    font-size: 10px; line-height: 15px; font-variant-numeric: tabular-nums; }
 #projList .rot { flex: none; margin-left: 4px; font-style: normal; color: var(--dim); }
-#projList b.rot.ign { color: var(--dim); background: transparent; border: 1px solid currentColor; font-weight: 400; }
 #projList .ptile .thumb .pbadge { position: absolute; right: 3px; top: 3px; }
 /* the hover scrub's frame: the clip's filmstrip sprite cell, drawn over the poster */
 #projList .ptile .thumb canvas.spr { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }

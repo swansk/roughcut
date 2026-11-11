@@ -525,7 +525,7 @@ def orient_of(video: Path, orient: str, decisions: Path | None) -> str:
     except (OSError, ValueError, AttributeError):
         return orient
     mode = rec.get("mode") if isinstance(rec, dict) else rec
-    return mode if mode in ("auto", "none") else orient
+    return mode if mode in ("auto", "none", "turn90", "turn180", "turn270") else orient
 
 
 def main() -> int:
@@ -536,7 +536,7 @@ def main() -> int:
     ap.add_argument("--cols", type=int, default=6)
     ap.add_argument("--rows", type=int, default=5)
     ap.add_argument("--width", type=int, default=320, help="thumbnail width in px")
-    ap.add_argument("--orient", choices=("auto", "none"), default="auto")
+    ap.add_argument("--orient", choices=("auto", "none", "turn90", "turn180", "turn270"), default="auto")
     ap.add_argument("--orient-clips", type=Path, default=None,
                     help="the app's per-clip rotation decisions (orient/<bin>.json): a clip "
                          "marked `none` is read with its rotation flag ignored; --orient none "

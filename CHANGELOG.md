@@ -12,6 +12,7 @@ same commit. Releases move entries into a dated version section.
 
 ### Fixed
 - Wave 25 opened (judge/WAVE25.md) with lane VERTICAL: a 9:16 and 1:1 sequence end to end.
+- Wave 23 FILM, the cold start's first clip: a picture is made under the clip's rotation decision as its encode starts and kept only if that still holds when it ends (a proxy begun before the telemetry stage decided no longer lands turned over the cleared one); at open and when the telemetry lands the disk is compared with the decision (a proxy / preview of the wrong shape is deleted and made again, which repairs projects already hit: the Copper cold-start copy's GX010474 proxy went 1280x2276 to 1280x720, nothing else rebuilt); a flagged clip's sensor is read before its first picture so nobody sees the sideways phase; Rotate clip (as decided / 90° left / 90° right / 180°) on the Project panel's and the Source monitor's right-click, one Undo on its toast, the Index panel's select shows it; the Project list's flag note is a glyph after the whole name; media responses are `no-cache` and a tab empties the videos of a clip whose rotation moved.
 - Editor-trial kit: the browser's slow first load is spent on a JSON endpoint before the editor's first visit.
 - Rubric log: the Index panel's working-size bar is 8 rows at 900 px (was 10) for the found block; GATEFIX's regressions and stale tests named.
 - Loop State for waves 23 and 24 (ten lanes merged), and the editors' round-two brief.

@@ -344,12 +344,20 @@ def audio_lead(lead: float) -> str:
 # the EDL may carry the same as `orient_clips` (`{stem: "auto"|"none"}`); the EDL's own
 # `orient: none` still ignores every flag. A clip in neither is turned by its flag, as ever.
 ORIENT_CLIPS: dict[str, str] = {}
+ORIENT_MODES = ("auto", "none", "turn90", "turn180", "turn270")   # turnN: ignore the flag, turn N° ccw
+
+
+def orient_override(mode: str) -> int | None:
+    """None for auto (the file's flag), 0 for none, N for turnN."""
+    if mode == "auto":
+        return None
+    return int(mode[4:]) % 360 if mode.startswith("turn") else 0
 
 
 def load_orient_clips(path: Path | None, edl: dict | None = None) -> dict[str, str]:
     out: dict[str, str] = {}
     for stem, v in ((edl or {}).get("orient_clips") or {}).items():
-        if v in ("auto", "none"):
+        if v in ORIENT_MODES:
             out[str(stem)] = v
     if path is not None:
         try:
@@ -358,7 +366,7 @@ def load_orient_clips(path: Path | None, edl: dict | None = None) -> dict[str, s
             data = {}
         for stem, rec in ((data or {}).get("clips") or {}).items():
             mode = rec.get("mode") if isinstance(rec, dict) else rec
-            if mode in ("auto", "none"):
+            if mode in ORIENT_MODES:
                 out[str(stem)] = mode
     return out
 
@@ -378,7 +386,8 @@ def gpu_input(src: Path, orient: str, normalise: str | None, video: dict) -> dic
     f = decode_facts(src)
     if f["codec"] not in GPU_CODECS or f["pix_fmt"] not in GPU_PIX:
         return None
-    rot = 0 if src_orient(src, orient) == "none" else f["rotation"] % 360
+    ov = orient_override(src_orient(src, orient))
+    rot = f["rotation"] % 360 if ov is None else ov
     if rot not in (0, 180):
         return None
     return {"flip": rot == 180, "full": f["full"]}
@@ -390,8 +399,11 @@ def input_args(src: Path, orient: str, gpu: dict | None) -> list[str]:
     out = []
     if gpu:
         out += ["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"]
-    if src_orient(src, orient) == "none" or gpu:
-        out += ["-display_rotation", "0"]           # must precede -i; see module docstring
+    ov = orient_override(src_orient(src, orient))
+    if ov is not None or gpu:
+        # on the GPU path the rotation is applied by hand (gpu_input), so the matrix is zeroed;
+        # on the CPU path the matrix is set to the rule and ffmpeg's autorotate turns the frames
+        out += ["-display_rotation", "0" if gpu else str(ov)]           # must precede -i; see module docstring
     return out
 
 

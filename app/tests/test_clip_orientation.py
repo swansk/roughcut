@@ -582,8 +582,12 @@ def test_the_project_and_index_panels_say_which_way_up_and_take_the_editors_word
         # is a quiet glyph, an unflagged clip says nothing
         pg.wait_for_selector('#projList [data-clip="SENS90.MP4"] .rot', timeout=15000)
         ign = pg.locator('#projList [data-clip="SENS90.MP4"] .rot')
-        assert ign.first.inner_text().strip() == "flag ignored"
         assert "shot upright" in ign.first.get_attribute("title")
+        # the clip's name is never replaced: a glyph after it, the sentence in its hover
+        name = pg.locator('#projList [data-clip="SENS90.MP4"] .nm').first
+        assert name.inner_text().strip() == "SENS90.MP4"
+        assert ign.first.inner_text().strip() in ("⟲", "↻") and "flag ignored" not in pg.locator(
+            '#projList [data-clip="SENS90.MP4"]').first.inner_text()
         assert "upside down" in pg.locator('#projList [data-clip="INV180.MP4"] .rot').first.get_attribute("title")
         assert pg.locator('#projList [data-clip="FLAT.MP4"] .rot').count() == 0
 
@@ -609,3 +613,134 @@ def test_the_project_and_index_panels_say_which_way_up_and_take_the_editors_word
         assert api["SENS90"]["orient"]["mode"] == "none"        # nothing else moved
         assert errors == [], errors
         b.close()
+
+
+# ----------------------------------------------------------------- the cold start's first clip
+
+def test_a_decision_that_moves_while_a_proxy_is_encoding_never_leaves_a_turned_proxy(rbin, tmp_path, monkeypatch):
+    """The ordering the first cold start hit: the proxy build began under the flag (no sensor
+    yet), the telemetry stage decided 'ignore the flag' while ffmpeg ran, and the build
+    finished AFTER the decision and wrote a turned proxy over the cleared one. The result of a
+    build that finished under another rule than holds now is thrown away and made again."""
+    import server
+    work = tmp_path / "work"
+    _open(server, rbin, work, telemetry={})
+    src = rbin["footage"] / "SENS90.MP4"
+    real = server.build_proxy
+    seen = []
+
+    def racing(s_, dest, mode):
+        seen.append(mode)
+        if len(seen) == 1:                       # the telemetry stage lands while ffmpeg runs
+            _telemetry(server.telemetry_dir(), "SENS90", CASES["SENS90"][1])
+            assert server.refresh_orient(["SENS90.MP4"], rebuild=False) == ["SENS90.MP4"]
+        return real(s_, dest, mode)
+
+    monkeypatch.setattr(server, "build_proxy", racing)
+    server.ensure_proxies(["SENS90.MP4"])
+    assert seen == ["auto", "none"], seen        # built under the flag, found stale, built again
+    _same(_quads(_proxy(server, "SENS90")), _stored(src), "the proxy after the race")
+    assert server.orient_record("SENS90")["built"] == "none"
+
+
+def test_a_wrong_picture_on_disk_is_found_and_rebuilt_at_open_and_when_the_telemetry_lands(rbin, tmp_path):
+    """A project already hit: the record says its pictures were made under 'none', but the
+    proxy on disk is the turned one. Opening (or the telemetry stage) compares the disk with
+    the decision and makes it again, with nobody asking."""
+    import server
+    work = tmp_path / "work"
+    _open(server, rbin, work, telemetry={})
+    server.ensure_proxies(["SENS90.MP4", "INV180.MP4"])           # made under the flag
+    src = rbin["footage"] / "SENS90.MP4"
+    _same(_quads(_proxy(server, "SENS90")), _upright(src), "hit: turned")
+    _telemetry(server.telemetry_dir(), "SENS90", CASES["SENS90"][1])
+    _telemetry(server.telemetry_dir(), "INV180", CASES["INV180"][1])
+    # the record as the cold start left it: decided 'none', built 'none', proxy turned
+    server.STATE.pop("orient_map", None)
+    (work / "orient").mkdir(exist_ok=True)
+    (work / "orient" / f"{rbin['footage'].name}.json").write_text(json.dumps({"v": 1, "clips": {
+        "SENS90": {"mode": "none", "why": "sensor", "flag": 90, "expect": 0, "sensor": "upright",
+                   "hand": None, "built": "none", "rev": 1}}}))
+    keep = _proxy(server, "INV180").stat().st_mtime_ns
+    changed = server.refresh_orient(["SENS90.MP4", "INV180.MP4"], rebuild=False)
+    assert changed == ["SENS90.MP4"], changed
+    assert not _proxy(server, "SENS90").exists()
+    assert _proxy(server, "INV180").stat().st_mtime_ns == keep
+    assert server.poster_url("SENS90") == "/media/poster/SENS90.v2r2.jpg"    # a new immutable URL
+    server.ensure_proxies(["SENS90.MP4"])
+    _same(_quads(_proxy(server, "SENS90")), _stored(src), "repaired")
+    assert server.refresh_orient(rebuild=False) == [], "and then it is left alone"
+
+
+def test_a_flagged_clips_sensor_is_read_before_its_first_picture_is_made(rbin, tmp_path, monkeypatch):
+    import server
+    work = tmp_path / "work"
+    _open(server, rbin, work, telemetry={})
+    calls = []
+
+    def fake_tool(cmd):                                       # the telemetry tool, for one clip
+        stem = next(x for x in CASES if x in " ".join(cmd))
+        calls.append(stem)
+        if CASES[stem][1] is not None:
+            _telemetry(server.telemetry_dir(), stem, CASES[stem][1])
+        return ""
+
+    monkeypatch.setattr(server, "_run_tool", fake_tool)
+    monkeypatch.setattr(server, "has_telemetry", lambda clip: True)
+    # a clip list asked first decides nothing and stores nothing: "pending", the flag honoured
+    assert "SENS90" not in server._orient_map() and calls == []
+    # the first picture's rule is asked: the sensor is read first, so the very first proxy is right
+    assert server.clip_orient("SENS90.MP4") == "none"
+    assert calls == ["SENS90"]
+    server.ensure_proxies(["SENS90.MP4", "FLAT.MP4"])
+    _same(_quads(_proxy(server, "SENS90")), _stored(rbin["footage"] / "SENS90.MP4"), "first proxy")
+    assert calls == ["SENS90"], "an unflagged clip is not read early, and a clip is read once"
+    # a flagged clip whose read gives nothing keeps its flag
+    assert server.clip_orient("NOTEL90.MP4") == "auto" and calls == ["SENS90", "NOTEL90"]
+
+
+def test_rotate_clip_by_hand_follows_every_picture_and_the_export(board, tmp_path):
+    server, client = board["server"], board["client"]
+    src = board["footage"] / "FLAT.MP4"
+    server.ensure_proxies(["FLAT.MP4", "INV180.MP4"])
+    other = _proxy(server, "INV180").stat().st_mtime_ns
+    for word, deg in (("left", 90), ("right", 270), ("turn180", 180)):
+        r = client.post("/api/clips/FLAT.MP4/orient", json={"mode": word}).json()
+        assert r["changed"] and r["orient"]["mode"] == f"turn{deg}" and r["orient"]["hand"] == f"turn{deg}"
+        assert r["orient"]["text"].startswith("Turned") and "by you" in r["orient"]["text"]
+        server.ensure_proxies(["FLAT.MP4"])
+        ref = _quads(src, pre=("-display_rotation", str(deg)))
+        _same(_quads(_proxy(server, "FLAT")), ref, f"proxy turned {deg}")
+        dest = tmp_path / f"flat{deg}.jpg"
+        server.build_poster(src, dest, 0.5, original=True)
+        _same(_quads(dest), ref, f"poster turned {deg}")
+        prev = tmp_path / f"p{deg}.mp4"
+        server.build_preview(src, prev, server.clip_orient("FLAT.MP4"))
+        _same(_quads(prev), ref, f"preview turned {deg}")
+        assert not server.browser_playable(src)
+    assert _proxy(server, "INV180").stat().st_mtime_ns == other, "no other clip is touched"
+    # the export: the decisions file carries the turn and assemble applies it (180 keeps the aspect)
+    sys.path.insert(0, str(ROOT / "research" / "tools"))
+    import assemble
+    args = server.orient_args()
+    assert assemble.load_orient_clips(Path(args[1]))["FLAT"] == "turn180"
+    (tmp_path / "edl.json").write_text(json.dumps({
+        "variant": "T", "title": "t", "orient": "auto", "story": "", "target_s": [1, 9],
+        "segments": [{"clip": "FLAT.MP4", "in": 0.2, "out": 1.6}]}))
+    out = tmp_path / "turned.mp4"
+    r = subprocess.run(["uv", "run", "--quiet", str(ROOT / "research" / "tools" / "assemble.py"),
+                        str(tmp_path / "edl.json"), "--footage", str(board["footage"]), "--profile", "preview",
+                        "--size", "320x192", "--jobs", "1", "-o", str(out), *args],
+                       capture_output=True, text=True, env={**os.environ, "ROUGHCUT_GPU": "0"})
+    assert r.returncode == 0, r.stdout[-800:] + r.stderr[-800:]
+    _same(_quads(out, t=0.7), _quads(src, pre=("-display_rotation", "180")), "export, turned 180 by hand")
+    # as decided again: the clip is back to what its flag and sensor say, one step
+    back = client.post("/api/clips/FLAT.MP4/orient", json={"mode": "sensor"}).json()
+    assert back["previous"] == "turn180" and back["orient"]["mode"] == "auto"
+
+
+def test_media_is_revalidated_so_a_tab_takes_a_rebuilt_file(board):
+    server, client = board["server"], board["client"]
+    server.ensure_proxies(["FLAT.MP4"])
+    assert client.get("/media/proxy/FLAT.mp4").headers["cache-control"] == "no-cache"
+    assert client.get("/media/proxy/FLAT.mp4", headers={"range": "bytes=0-99"}).headers["cache-control"] == "no-cache"

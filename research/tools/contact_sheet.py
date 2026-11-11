@@ -47,6 +47,16 @@ def probe_duration(video: Path) -> float:
     return float(r.stdout.strip())
 
 
+def rotation_args(orient: str) -> list[str]:
+    """Before `-i`: nothing for auto (ffmpeg turns by the file's flag), `-noautorotate` for
+    none, `-display_rotation N` for turnN (wave 23: the editor's own turn of a clip)."""
+    if orient == "none":
+        return ["-noautorotate"]
+    if orient.startswith("turn") and orient[4:].isdigit():
+        return ["-display_rotation", orient[4:]]
+    return []
+
+
 def probe_rotation(video: Path) -> float:
     """Rotation side-data in degrees, or 0.0 if absent.
 
@@ -123,8 +133,7 @@ def extract_keyframes(video: Path, workdir: Path, interval: float, width: int,
     if pick is None:
         return None
     cmd = ["ffmpeg", "-v", "error", "-y", "-skip_frame", "nokey"]
-    if orient == "none":
-        cmd.append("-noautorotate")
+    cmd += rotation_args(orient)
     cmd += ["-i", str(video), "-map", "0:v:0", "-vf", f"scale={width}:-2",
             "-fps_mode", "passthrough", "-q:v", "3", str(workdir / "k_%05d.jpg")]
     r = run(cmd)
@@ -147,8 +156,7 @@ def extract_frames(video: Path, workdir: Path, interval: float, width: int,
                    window: tuple[float, float] | None = None) -> list[Path]:
     pattern = str(workdir / "f_%05d.jpg")
     cmd = ["ffmpeg", "-v", "error", "-y"]
-    if orient == "none":
-        cmd.append("-noautorotate")     # must precede -i to affect decoding
+    cmd += rotation_args(orient)        # must precede -i to affect decoding
     if window is not None:
         # Input seeking: a nine-second window costs a seek, not a decode of everything
         # before it. Output timestamps restart at zero as a result, which is why the
@@ -280,7 +288,7 @@ def main() -> int:
     ap.add_argument("--end", type=float, default=None,
                     help="stop sampling at this second. With --start this makes a "
                          "window sheet: same tool, same labels, a slice of one clip")
-    ap.add_argument("--orient", choices=("auto", "none"), default="auto",
+    ap.add_argument("--orient", choices=("auto", "none", "turn90", "turn180", "turn270"), default="auto",
                     help="'auto' honours container rotation metadata; 'none' ignores it "
                          "(-noautorotate). GoPro bins here need 'none' — their rotation "
                          "side-data yields sideways frames. Always eyeball the first sheet.")
