@@ -49,6 +49,26 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- 2026-11-11 ~14:00: **Round two of the Copper editors is done and its findings are built: tip `a49e979`
+  (pushed). Record: `judge/COPPER-EDITORS-2.md`.** The same six Opus editors went back in on a from-scratch Copper
+  project on the merged build: of 131 old pain points 71 fixed, 39 better, 19 same, 0 worse; 102 new findings, sent
+  back to the lanes the same day. Merged since the 09:30 entry: GATEFIX (two rounds: five real regressions from the
+  morning's merges, the suite's proposal leak closed in `conftest.py`), FILM (the rotation race on a cold start,
+  `?r=<rev>` on media URLs so open tabs take a rebuilt file, Rotate clip, Fill the frame), TITLE (frame-space titles,
+  the shape-reset bug, measured place, hand edits as undo steps, Stop), DESCRIBE → FIND2 (Find reads picks and shot
+  notes, the model judges candidates, a bounded frame scan, the description written last by `roughcut/reconcile.py`),
+  DIRECT2 (a change ledger, `take_back`, looks when the words name something seen, word timings, the editor's
+  description first), VERTICAL (`frame` on the cut: 9:16 and 1:1 end to end, `new_cut` for a second deliverable),
+  MATCH (graded shots and coloured titles converted in BT.709 on export), MUSIC (a bed level, ducking, one `music`
+  op), START and HANDS (three rounds: one selection that never follows the playhead, the playhead parks on the end,
+  one grammar for typed times), SAFE (stale proposals say so, Reject all undoable, the prompt's Stop, undo across a
+  film switch). Lead fixes at the merges: one right-click menu on a clip (the Rotate menu had covered the AI's), the
+  combined titles / vertical canvas sizing, three unions of AI operations in `roughcut/actions.py`. **Full gate
+  running on `a49e979`; 8766 still down (it starts on green).** Six trades are left for Karl in
+  COPPER-EDITORS-2.md "Still open". Not built: J / L cuts, lift and gaps, slide, typed speed / reverse / freeze,
+  paste attributes, title fonts, the .WAV as sound, a LUFS target. Trial scratch: `/mnt/roughcut/space/roughcut-loop/copper2`
+  (`base-work` = the from-scratch project just after its first pass; `snap`..`snap5` = the code each editor ran).
+  Judge 17 still held; main, 8765 and pushing main stay Karl's.
 - 2026-11-11 ~09:30: **Closed loop resumed on Karl's word (2026-11-10 evening: "I will be gone for the rest of the day
   so continue working on this closedloop"). Waves 23 and 24 are merged on this branch (`2e5e0a2`, pushed): ten Sonnet
   lanes from `judge/COPPER-EDITORS.md`'s ranked areas**, plans in `judge/WAVE23.md` and `judge/WAVE24.md`:

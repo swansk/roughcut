@@ -718,3 +718,15 @@ next judge runs, and the next judge rules it honest or lenient.
   selection collapsed by the Program's catch-up; the "Refine" Next chip hidden over any cut; the proposal line
   blanked after a ghost click; an empty undo-history write on a board nobody touched) and tests brought to behaviour
   the lanes changed on purpose (the scope chip stays as chosen; Next does not offer a first cut over a cut).
+- 2026-11-11 (waves 24-25, the lead at the merges; behaviour an earlier verdict asked for has CHANGED in three places,
+  said plainly so a judge can rule): (1) **an insert or overwrite past the end of the film goes to the end; it no
+  longer leaves a gap** (verdict 5, punch 8 asked for the gap; the Copper finder's first insert into an emptied cut
+  landed behind 34 s of black). Lane HANDS removed the gap-leaving branch; a real lift is not built. (2) **The
+  selection never follows the playhead** (lane HANDS round 3, the Premiere editor's "one change that would most move
+  me": Delete had removed a 23.9 s shot he never clicked). Eight tests that relied on the board selecting for the
+  editor were rewritten to the new rule; they are listed in the lane's hand-back and in `git show b513db2`. With
+  nothing selected, Delete says "nothing selected"; Effect Controls shows the film, not the shot under the playhead.
+  (3) **The prompt-box AI looks at frames whenever the words name something to be seen**, not only when asked to
+  (lane DIRECT2): 25-45 s and one more call on those asks; plain asks are unchanged (5-10 s, checked on three).
+  Also at these merges: the board's Find gained a model step by default (lane FIND2); the gate's offline Find
+  numbers are measured on the lexical path, which was left exactly as it was (0.632 / 0.421, at baseline).
