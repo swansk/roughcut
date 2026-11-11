@@ -229,18 +229,43 @@ function paintJob(row, j) {
   }
   row.querySelector('.jname').textContent = j.label;
   row.querySelector('.caret').textContent = strip.open.has(j.id) ? '▾' : '▸';
-  row.querySelector('.jbar i').style.width = `${j.pct}%`;
+  // an export's share is the work written (the dialog says the same whole number), never
+  // the clock's creep: the dialog and this bar read 1% and 2% for the same moment (FINISH-21)
+  const shown = j.kind === 'render' && j.progress_pct != null
+    ? Math.floor(Number(j.progress_pct)) : Math.round(j.pct);
+  row.querySelector('.jbar i').style.width = `${shown}%`;
+  // An export put away from its dialog can be brought back from its own row
+  let show = row.querySelector('.jshow');
+  if (j.kind === 'render' && j.export && j.state === 'running') {
+    if (!show) {
+      show = document.createElement('span');
+      show.className = 'jshow';
+      show.dataset.testid = 'job-show';
+      show.setAttribute('role', 'button');
+      show.textContent = 'open';
+      show.title = 'Open the export dialog';
+      show.style.cssText = 'cursor:pointer;color:var(--dim);padding:0 0 0 6px;font-size:11px;text-decoration:underline';
+      show.onclick = (e) => { e.stopPropagation(); if (window.exportDialog) exportDialog.open(); };
+      row.appendChild(show);
+    }
+  } else if (show) {
+    show.remove();
+  }
   // the row is one compact line in the header: how far and how long ("~10s left"); the
   // time it has taken so far is the hover's
   row.querySelector('.jnums').textContent =
-    [`${Math.round(j.pct)}%`, etaShort(j)].filter(Boolean).join(' · ');
+    [`${shown}%`, etaShort(j)].filter(Boolean).join(' · ');
   // The milestone is what the operation is *on*; the detail is what it is doing inside
   // it. Both, because "choosing the shots" without "12 of ~18" is a spinner with words.
   // In the header's row they are the line's hover and the first line under ▸; a failed
   // job says them on the line itself.
   const now = [j.milestone, j.detail].filter(Boolean).join(' — ');
   row.querySelector('.jdetail').textContent = now;
-  row.title = [j.label, now, `${clock(j.elapsed_s)} so far`].filter(Boolean).join(' — ');
+  // An export is of the cut as it was when it started; an edit made since is not in it
+  const snap = j.kind === 'render' && j.export && j.state === 'running' && j.started
+    ? `of the cut${j.cut_name && j.cut_name !== 'main' ? ` “${j.cut_name}”` : ''} as it was at ${new Date(j.started * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}: edits made now are not in this file`
+    : '';
+  row.title = [j.label, snap, now, `${clock(j.elapsed_s)} so far`].filter(Boolean).join(' — ');
 
   let more = row.querySelector('.jmore');
   if (!strip.open.has(j.id)) {
@@ -257,11 +282,13 @@ function paintJob(row, j) {
       ? 'at' : '');
     return `<li class="${cls}">${escapeHtml(m.label)}${m.done_at ? ' ✓' : ''}</li>`;
   }).join('');
-  const src = j.eta_source === 'measured' ? 'recalibrated from this run'
+  const src = j.eta_source === 'progress' ? 'time left from how much has been written so far'
+    : j.eta_source === 'measured' ? 'recalibrated from this run'
     : j.eta_source === 'model' ? 'estimated by the model before it started'
       : j.eta_source === 'fallback' ? 'estimate call failed — measured fallback' : '';
   const tail = (j.log || '').split('\n').filter(Boolean).slice(-6).join('\n');
   more.innerHTML = (now ? `<div class="jnow">${escapeHtml(now)}</div>` : '')
+    + (snap ? `<div class="hint">${escapeHtml(snap)}</div>` : '')
     + (steps ? `<ol>${steps}</ol>` : '')
     + (src ? `<div class="hint" style="margin-top:6px">${src}</div>` : '')
     + (tail ? `<pre>${escapeHtml(tail)}</pre>` : '');
@@ -5027,8 +5054,82 @@ async function loadAssets() {
     tracks = [];
   }
   $('#musicTrack').innerHTML = '<option value="">no music</option>' + tracks.map((t) =>
-    `<option value="${escapeHtml(t.asset)}">${escapeHtml(t.name)} · ${fmt(t.duration_s || 0)}</option>`).join('');
+    `<option value="${escapeHtml(t.asset)}">${escapeHtml(t.name)} · ${fmt(t.duration_s || 0)}${t.project ? ' · yours' : ''}</option>`).join('');
   paintMusic();
+}
+
+/* Add music… (wave 24 DELIVER; FINISH-02, WORDS-16): a file from this computer through the
+ * browser's picker, or one already on the board's machine by path. It lands in the
+ * project's own music folder and is in the list at once; with no bed chosen yet it
+ * becomes the bed. The server decides what is acceptable and says why in words. */
+const MUSIC_EXT = ['.mp3', '.wav', '.m4a', '.flac'];
+const MUSIC_MAX = 200 * 1024 * 1024;
+let musicNote = '';
+function musicSay(text, bad) {
+  musicNote = text || '';
+  const h = $('#musicHint');
+  h.textContent = musicNote;
+  h.hidden = !musicNote;
+  h.style.color = bad ? 'var(--bad, #e5484d)' : '';
+}
+async function musicLanded(track) {
+  await loadAssets();
+  if (!track) return;
+  if (!music) {
+    $('#musicTrack').value = track.asset;
+    musicChanged();
+    musicSay(`added ${track.name}; it is the music bed now`);
+  } else {
+    musicSay(`added ${track.name}; pick it from the list to use it`);
+  }
+}
+async function musicAddFile(file) {
+  if (!file) return;
+  const ext = (/\.[^.]+$/.exec(file.name) || [''])[0].toLowerCase();
+  if (!MUSIC_EXT.includes(ext)) {
+    musicSay(`${file.name} is not a music file the board takes (${ext || 'no extension'}); use mp3, wav, m4a or flac`, true);
+    return;
+  }
+  if (file.size > MUSIC_MAX) {
+    musicSay(`${file.name} is ${Math.round(file.size / 1048576)} MB; the limit is 200 MB`, true);
+    return;
+  }
+  musicSay(`adding ${file.name}…`);
+  try {
+    const r = await fetch(`/api/music/upload?name=${encodeURIComponent(file.name)}`, { method: 'PUT', body: file });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { musicSay(d.detail || `the board refused ${file.name} (${r.status})`, true); return; }
+    await musicLanded(d.track);
+  } catch (e) {
+    musicSay(`could not add ${file.name}: ${e.message}`, true);
+  }
+}
+async function musicAddPath() {
+  const path = $('#musicPath').value.trim();
+  if (!path) { musicSay('type the path of a music file on the board\'s computer', true); return; }
+  musicSay('adding…');
+  try {
+    const r = await fetch('/api/music/link', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ path }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { musicSay(d.detail || `the board refused that path (${r.status})`, true); return; }
+    $('#musicPath').value = '';
+    $('#musicPathRow').style.display = 'none';
+    await musicLanded(d.track);
+  } catch (e) {
+    musicSay(`could not add that file: ${e.message}`, true);
+  }
+}
+function bindMusicAdd() {
+  $('#musicAdd').onclick = () => { $('#musicFile').value = ''; $('#musicFile').click(); };
+  $('#musicFile').onchange = (e) => { const f = e.target.files && e.target.files[0]; $('#musicAdd').blur(); musicAddFile(f); };
+  $('#musicPathBtn').onclick = () => {
+    const row = $('#musicPathRow');
+    row.style.display = row.style.display === 'none' ? 'flex' : 'none';
+    if (row.style.display === 'flex') $('#musicPath').focus();
+  };
+  $('#musicPathGo').onclick = musicAddPath;
+  $('#musicPath').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); musicAddPath(); } };
 }
 
 function trackInfo() {
@@ -5040,7 +5141,7 @@ function paintMusic() {
   sel.value = music ? music.asset : '';
   if (music && sel.value !== music.asset) {   // the EDL names a track the library lacks
     sel.insertAdjacentHTML('beforeend',
-      `<option value="${escapeHtml(music.asset)}">${escapeHtml(music.asset)} (not in assets/)</option>`);
+      `<option value="${escapeHtml(music.asset)}">${escapeHtml(music.asset)} (that file is not here any more)</option>`);
     sel.value = music.asset;
   }
   $('#musicOpts').style.display = music ? 'block' : 'none';
@@ -5061,7 +5162,8 @@ function paintMusic() {
   const t = trackInfo();
   const len = total();
   let line = '';
-  if (!tracks.length && !music) line = 'No tracks yet — drop an mp3 or wav into assets/music/ and reload.';
+  if (musicNote) line = musicNote;
+  else if (!tracks.length && !music) line = 'No music yet. Add a track with Add music… (mp3, wav, m4a or flac, up to 200 MB); it is kept with this project.';
   else if (music && t && t.duration_s && t.duration_s < len) {
     const n = Math.ceil(len / t.duration_s) - 1;
     line = `loops ${n === 1 ? 'once' : `${n} times`} at ${clock(t.duration_s)} under a ${clock(len)} cut`;
@@ -6650,8 +6752,14 @@ function paintMakeFilm() {
   const key = /Mac|iPhone|iPad/.test(navigator.platform || '') ? '⌘M' : 'Ctrl+M';
   b.textContent = 'Export';
   delete b.dataset.download;
-  if (v) {
-    b.title = `Export… (${key}) · this cut was last exported as ${v.download_name} · ${human(v.size)}`;
+  // The file's real name (FINISH-26): the one on disk, not the name a download would suggest;
+  // an export made in this session to another folder is the newer, so it is named first
+  const le = window.lastExport;
+  if (le && (!v || le.at / 1000 > (v.created || 0))) {
+    b.title = `Export… (${key}) · last exported as ${le.name} (${le.path})`;
+  } else if (v) {
+    b.title = `Export… (${key}) · this cut was last ${v.export ? 'exported' : 'rendered'} as ${v.name}`
+      + `${v.path ? ` (${v.path})` : ''} · ${human(v.size)}`;
   } else {
     b.title = renderList.length ? `Export… (${key}) · the cut changed since its last film`
       : `Export… (${key})`;
@@ -7098,7 +7206,8 @@ async function boot() {
   // The music controls too: bound at the end of boot, a track picked in the first second
   // showed in the menu but changed nothing (no bed on A2, nothing saved for the render);
   // the gate's music-lane test caught it 2 runs in 3. `music` is read before the mount.
-  $('#musicTrack').onchange = musicChanged;
+  $('#musicTrack').onchange = () => { musicNote = ''; musicChanged(); };
+  bindMusicAdd();
   $('#duck').onchange = musicChanged;
   $('#fadeIn').onchange = musicChanged;
   $('#fadeOut').onchange = musicChanged;

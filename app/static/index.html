@@ -270,6 +270,18 @@
         <div class="panel flat" id="musicPanel">
           <label class="ask-q" for="musicTrack">Music bed</label>
           <select id="musicTrack" style="width:100%"><option value="">no music</option></select>
+          <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+            <button type="button" id="musicAdd" data-testid="music-add"
+              title="Bring in a music file (mp3, wav, m4a or flac, up to 200 MB) from this computer. It is kept with this project.">Add music…</button>
+            <button type="button" id="musicPathBtn" class="linkish" data-testid="music-path-btn"
+              title="Use a music file that is already on the computer this board runs on, by its path">a file on this machine…</button>
+            <input type="file" id="musicFile" data-testid="music-file" accept=".mp3,.wav,.m4a,.flac,audio/mpeg,audio/wav,audio/mp4,audio/flac" hidden>
+          </div>
+          <div id="musicPathRow" style="display:none;gap:6px;margin-top:6px">
+            <input type="text" id="musicPath" data-testid="music-path" spellcheck="false" style="flex:1;min-width:0"
+              placeholder="/path/to/track.mp3 on the board's computer" aria-label="path of a music file on the board's computer">
+            <button type="button" id="musicPathGo" data-testid="music-path-go">Add</button>
+          </div>
           <div class="hint" id="musicHint" style="margin-top:6px"></div>
           <div id="musicOpts" style="display:none">
             <label class="hint" style="display:flex;gap:8px;align-items:center;margin-top:8px">dip under talk

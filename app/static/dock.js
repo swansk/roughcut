@@ -851,8 +851,10 @@
   const fpsText = (r) => (r ? `${Number(r).toFixed(Number(r) % 1 ? 2 : 0)} fps` : '');
   // Premiere's Audio Info: "48000 Hz · Stereo" (GET /api/clips' `audio`, the facts probe's)
   const CHANNELS = { 1: 'Mono', 2: 'Stereo', 6: '5.1', 8: '7.1' };
-  const audioText = (a) => (a && (a.rate || a.channels)
-    ? [a.rate ? `${a.rate} Hz` : '', a.channels ? CHANNELS[a.channels] || `${a.channels} ch` : '']
+  // and the camera's separate .WAV, said as not used (wave 24 DELIVER, FINDER-17)
+  const audioText = (a) => (a && (a.rate || a.channels || a.wav)
+    ? [a.rate ? `${a.rate} Hz` : '', a.channels ? CHANNELS[a.channels] || `${a.channels} ch` : '',
+      a.wav ? '+ .WAV (not used)' : '']
       .filter(Boolean).join(' · ') : '');
   /* The camera's source timecode (GET /api/clips' `tc_start`, HH:MM:SS:FF at the clip's
    * rate, `;` when it counts drop-frame): Media Start is it, Media End the clip's last
@@ -1005,7 +1007,7 @@
              dur, w: c.width || 0, h: c.height || 0, audio, state, stCls, stTitle,
              note, shot: c.captured, subs, forced,
              title: [c.clip, [dur ? tcOf(dur, rate) : '', fpsText(rate), c.width ? `${c.width} × ${c.height}` : '', audio]
-               .filter(Boolean).join(' · '), mt ? `Media Start ${mt.s} · Media End ${mt.e}` : '',
+               .filter(Boolean).join(' · '), (c.audio && c.audio.wav_note) || '', mt ? `Media Start ${mt.s} · Media End ${mt.e}` : '',
                stTitle + (subs.length ? ` · ${nOf(subs.length, 'subclip')}` : ''), note]
                .filter(Boolean).join('\n') };
   }

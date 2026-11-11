@@ -86,6 +86,8 @@ from roughcut import fxcheck  # noqa: E402
 from roughcut import dirwatch  # noqa: E402
 from roughcut import tracks as tracksmod  # noqa: E402
 from roughcut import media as mediamod  # noqa: E402
+from roughcut import limiter  # noqa: E402     # wave 23 FILM
+from roughcut import music as musicmod  # noqa: E402     # wave 24 DELIVER: the project's own music
 from roughcut import verify as verifymod  # noqa: E402
 from roughcut import gpulock, localvlm  # noqa: E402     # wave 20 LOCALGPU: the 3080 as a stage
 from roughcut import speakers as speakersmod  # noqa: E402     # wave 20 DIARIZE: who said what
@@ -2474,7 +2476,8 @@ async def api_save(request: Request) -> JSONResponse:
         if music:
             try:
                 spec = effects.music_spec(music)
-                effects.resolve_asset(spec["asset"], STATE["assets"])
+                musicmod.resolve(spec["asset"], STATE["work"], STATE["footage"].name,
+                                 STATE["assets"])
             except (ValueError, FileNotFoundError) as exc:
                 raise HTTPException(400, f"music: {exc}")
             # gain_db stays unset unless given: the render measures the track and
@@ -8817,7 +8820,7 @@ def clips_payload() -> dict:
             "codec": f.get("codec"),
             # Media Start's source timecode (the camera's, HH:MM:SS:FF at the clip's rate;
             # null without one) and Audio Info's channels + sample rate (null: no sound)
-            "tc_start": f.get("tc_start"), "audio": f.get("audio"),
+            "tc_start": f.get("tc_start"), "audio": camera_wav_note(clip, f.get("audio")),
             "released": clip in released,
             "junk": junk_of.get(clip, "clean"),
             # where it lives (wave 12 IMPORT): the bin's folder, imported in place, or
@@ -9946,6 +9949,43 @@ def failure_detail(shot: dict | None, log: str) -> str:
     return f"the render failed: {last[-1][-200:]}" if last else "the render failed"
 
 
+RENDER_ETA_MIN_PCT = 2.0          # below this share written, nobody can say how long it takes
+RENDER_ETA_MIN_S = 12.0           # ...nor in the first seconds, whatever the share
+RENDER_ETA_WINDOW_S = 90.0        # the recent rate: a render speeds up and slows down by shot
+
+
+def eta_from_samples(samples: list[tuple[float, float]], now: float, pct: float,
+                     elapsed: float) -> float | None:
+    """Seconds left from the share of the work written so far, or None until there is a
+    measurement. The recent rate (the last `RENDER_ETA_WINDOW_S`, needing 30 s of it) when
+    the work is moving; the whole run's average when it is not (a join, which writes
+    nothing for a while, lengthens the figure instead of freezing it)."""
+    if pct < RENDER_ETA_MIN_PCT or elapsed < RENDER_ETA_MIN_S or pct >= 100.0:
+        return None
+    recent = [(t, p) for t, p in samples if t >= now - RENDER_ETA_WINDOW_S]
+    if recent:
+        t0, p0 = recent[0]
+        if now - t0 >= 30.0 and pct - p0 > 0.05:
+            return (100.0 - pct) * (now - t0) / (pct - p0)
+    return elapsed * (100.0 - pct) / pct
+
+
+def render_eta_fn() -> Callable:
+    samples: list[tuple[float, float]] = []
+
+    def eta(j) -> float | None:
+        now = time.time()
+        pct = float(j.get("progress_pct") or 0.0)
+        if not samples or now - samples[-1][0] >= 2.0:
+            samples.append((now, pct))
+            del samples[:-120]
+        left = eta_from_samples(samples, now, pct, j.elapsed())
+        if left is not None:
+            j["eta_source"] = "progress"
+        return left
+    return eta
+
+
 def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
     entry = RENDERS[job]
     parts_dir = STATE["work"] / f"parts_{job}"
@@ -11010,7 +11050,26 @@ def api_export() -> JSONResponse:
         "sizes": export_sizes(native), "rates": export_rates(seq_fps, timebase is not None),
         "native": list(native) if native else None,
         "bitrate": {"min": actionsmod.EXPORT_BITRATE_MIN, "max": actionsmod.EXPORT_BITRATE_MAX},
+        # what the sound of every file is (wave 24 DELIVER, FINISH-15): the one AAC encode
+        # at the preset's bitrate, 48 kHz stereo, ending in the true-peak limiter (wave 23)
+        "sound": {"codec": "AAC", "rate_hz": 48000, "channels": 2,
+                  "limiter_dbtp": limiter.CEILING_DBTP},
     })
+
+
+@app.get("/api/export/name")
+def api_export_name(folder: str = "", name: str = "") -> JSONResponse:
+    """Where a file of this name and folder would be written, and whether that name is
+    taken (wave 24 DELIVER, FINISH-25): the dialog says "will be saved as …-2" before the
+    export starts, with the same rules `/api/render` uses."""
+    edl = read_edl()
+    root = export_root()
+    fold = root / export_component(folder, STATE["footage"].name)
+    want = export_component(name, export_default_name(edl))
+    taken = (fold / f"{want}.mp4").exists() or (fold / f"{want}.json").exists()
+    final = free_export_path(fold, want)
+    return JSONResponse({"path": str(fold / f"{want}.mp4"), "exists": taken,
+                         "writes": str(final), "writes_name": final.name})
 
 
 def range_start(whole: list[dict], sent: list[dict]) -> float | None:
@@ -11242,7 +11301,20 @@ async def api_render(request: Request) -> JSONResponse:
             folder, export_component(body.get("name"), export_default_name(edl)))
     else:
         out_path = STATE["renders"] / f"cut_{job}.mp4"
-    edl_path.write_text(json.dumps(edl, indent=1), encoding="utf-8")
+    # The EDL a render reads is written now, once, and it holds everything the film is
+    # made from that the editor can change on the board: the shots, the bed (as the path
+    # of the file chosen, so a track swapped or removed later does not change it), the
+    # titles and the colour block. An edit made while it renders goes to the cut, not to
+    # this file (wave 24 DELIVER, FINISH-21).
+    render_edl = edl
+    if edl.get("effects_music"):
+        try:
+            bed = musicmod.resolve(edl["effects_music"]["asset"], STATE["work"],
+                                   STATE["footage"].name, STATE["assets"])
+        except FileNotFoundError as exc:
+            raise HTTPException(400, f"music: {exc}")
+        render_edl = {**edl, "effects_music": {**edl["effects_music"], "asset": str(bed)}}
+    edl_path.write_text(json.dumps(render_edl, indent=1), encoding="utf-8")
     meta = {
         "job": job, "created": time.time(), "title": edl.get("title", ""),
         "segments": len(edl["segments"]),
@@ -11300,6 +11372,10 @@ async def api_render(request: Request) -> JSONResponse:
         stages.append(progress.milestone("review", "making the review copy", review_s))
     RENDERS[job].set_estimate(max(5.0, planned * (per_s + review_s)), stages,
                               source="measured")
+    # The time left comes from what has been written, not from the first guess counted
+    # down by the clock (wave 24 DELIVER, FINISH-24: "~1 min left" at 54%).
+    RENDERS[job].eta_fn = render_eta_fn()
+    RENDERS[job]["cut_name"] = meta.get("cut")
     threading.Thread(target=_render_job, args=(job, edl_path, out_path, meta),
                      daemon=True).start()
     if not export:
@@ -11365,6 +11441,8 @@ def api_renders() -> JSONResponse:
             "duration_s": meta.get("duration_s"), "segments": meta.get("segments"),
             "planned_s": meta.get("planned_s"), "note": meta.get("note", ""),
             "music": meta.get("music"), "shots": meta.get("shots"),
+            "export": bool(meta.get("export")), "preset_label": meta.get("preset_label"),
+            "path": str(mp4),
             # The cut it was made from (a bin has several); None on renders made
             # before a bin could, which the row then simply does not name
             "cut": meta.get("cut"),
@@ -13920,7 +13998,118 @@ def list_assets() -> dict:
                     info["lufs"] = round(lufs, 1) if lufs is not None else None
                 cache[key] = info
             out[kind].append(cache[key])
+    # the project's own tracks (wave 24 DELIVER): brought in from the board, kept with the
+    # project, listed with the repo's and named `project/<file>` in the cut
+    mine = musicmod.folder(STATE["work"], STATE["footage"].name)
+    if mine.is_dir():
+        own = []
+        for p in sorted(mine.iterdir()):
+            if p.name.startswith(".") or p.suffix.lower() not in musicmod.ALLOWED or not p.is_file():
+                continue
+            key = (str(p), p.stat().st_mtime)
+            if key not in cache:
+                lufs = effects.integrated_lufs(p)
+                cache[key] = {"name": p.name, "asset": musicmod.PREFIX + p.name, "kind": "music",
+                              "url": f"/media/asset/project/{p.name}", "size": p.stat().st_size,
+                              "project": True, "duration_s": probe_duration(p),
+                              "lufs": round(lufs, 1) if lufs is not None else None}
+            own.append(cache[key])
+        out["music"] = own + out["music"]
     return out
+
+
+def camera_wav(clip: str) -> str | None:
+    """The `.WAV` a camera wrote beside a clip (a GoPro's `GX010474.WAV` next to
+    `GX010474.MP4`), or None. Nothing reads it (wave 24 DELIVER, FINDER-17): every sound
+    on the board is the video file's own."""
+    try:
+        p = clip_path(clip)
+        for ext in (".WAV", ".wav", ".Wav"):
+            w = p.with_suffix(ext)
+            if w.is_file():
+                return w.name
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+def camera_wav_note(clip: str, audio: dict | None) -> dict | None:
+    """The clip's Audio Info with the separate camera sound said, in words, as not used."""
+    wav = camera_wav(clip)
+    if not wav:
+        return audio
+    return {**(audio or {}), "wav": wav, "wav_used": False,
+            "wav_note": f"camera sound: a .WAV with the same name ({wav}) is beside it, "
+                        f"not used — the board plays and cuts the sound in the video file"}
+
+
+@app.post("/api/music/link")
+async def api_music_link(request: Request) -> JSONResponse:
+    """Music from a file already on this computer, by path (the board's machine): copied
+    into the project's music folder. Wave 24 DELIVER; the folder browser lane START builds
+    should be the way to choose the path once it is merged."""
+    body = await request.json()
+    path = str(body.get("path") or "").strip()
+    if not path:
+        raise HTTPException(400, "give the path of a music file on this computer")
+    try:
+        out = await asyncio.to_thread(musicmod.take_file, Path(path), STATE["work"],
+                                      STATE["footage"].name)
+    except musicmod.MusicError as exc:
+        raise HTTPException(400, str(exc))
+    return JSONResponse(await _music_added(out))
+
+
+@app.put("/api/music/upload")
+async def api_music_upload(request: Request, name: str = "") -> JSONResponse:
+    """A music file from the viewer's computer (the browser's file picker), streamed
+    into the project's music folder. It writes only there, under a name cut to one safe
+    component; a suffix other than mp3 / wav / m4a / flac, a body over the limit, or a
+    file that is not what its suffix says is refused and nothing is left behind."""
+    try:
+        safe = musicmod.clean_name(name)
+    except musicmod.MusicError as exc:
+        raise HTTPException(400, str(exc))
+    declared = int(request.headers.get("content-length") or 0)
+    if declared > musicmod.MAX_BYTES:
+        raise HTTPException(413, f"that file is {declared / 2**20:.0f} MB; the limit is "
+                                 f"{musicmod.MAX_LABEL}")
+    dest = musicmod.folder(STATE["work"], STATE["footage"].name)
+    dest.mkdir(parents=True, exist_ok=True)
+    part = dest / f".upload-{uuid.uuid4().hex[:8]}.part"
+    got = 0
+    try:
+        with open(part, "wb") as f:
+            async for chunk in request.stream():
+                got += len(chunk)
+                if got > musicmod.MAX_BYTES:
+                    raise HTTPException(413, f"that file is over the {musicmod.MAX_LABEL} limit")
+                f.write(chunk)
+        if got == 0:
+            raise HTTPException(400, "the file was empty")
+        check = part.with_name(part.name + Path(safe).suffix)
+        part.rename(check)
+        part = check
+        if not musicmod.sniff_audio(part):
+            raise HTTPException(400, "that does not look like a music file (its contents "
+                                     "do not match its extension)")
+        out = dest / musicmod.free_name(dest, safe)
+        part.replace(out)
+    finally:
+        part.unlink(missing_ok=True)
+    return JSONResponse(await _music_added(out))
+
+
+async def _music_added(out: Path) -> dict:
+    """The reply for a track that landed: its entry in the music list, measured. A file
+    ffmpeg cannot read is taken back out rather than left to fail a render."""
+    dur = await asyncio.to_thread(probe_duration, out)
+    if not dur:
+        out.unlink(missing_ok=True)
+        raise HTTPException(400, "that file could not be read as audio")
+    track = next((t for t in await asyncio.to_thread(lambda: list_assets()["music"])
+                  if t["asset"] == musicmod.PREFIX + out.name), None)
+    return {"track": track, "limit": musicmod.MAX_LABEL}
 
 
 @app.get("/api/assets")
@@ -13930,6 +14119,11 @@ def api_assets() -> JSONResponse:
 
 @app.get("/media/asset/{kind}/{name}")
 def media_asset(kind: str, name: str, request: Request) -> Response:
+    if kind == "project":            # a track brought in from the board (wave 24 DELIVER)
+        p = musicmod.folder(STATE["work"], STATE["footage"].name) / Path(name).name
+        if not p.is_file() or p.name.startswith("."):
+            raise HTTPException(404, f"not found: {Path(name).name}")
+        return ranged_file(p, request)
     if kind not in ASSET_KINDS:
         raise HTTPException(404, f"no such asset kind: {kind}")
     return ranged_file(STATE["assets"] / kind / Path(name).name, request)
