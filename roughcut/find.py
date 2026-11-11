@@ -326,16 +326,21 @@ def lexical(query: str, clips: dict[str, dict], *, floor: float = 0.0) -> list[d
         if not got:
             continue
         mine = [r for r in merged if r["clip"] == clip]
-        if mine:
+        by_editor = vis.get("description_by") == "editor"
+        if mine and not by_editor:
             for r in mine:
                 r["score"] += 0.15 * len(got) / len(q)
             continue
+        if mine:                      # the editor's own words also lift the moments they sit among
+            for r in mine:
+                r["score"] += 0.15 * len(got) / len(q)
         duration = float(c.get("duration") or 0.0)
         first = text.split(". ")[0].strip()
         merged.append({"clip": clip, "start": 0.0, "end": duration, "what": first,
                        "why": "the clip's description" + (" (yours)" if vis.get("description_by") == "editor" else ""),
-                       "source": "described", "score": 0.5 * len(got) / len(q), "base": 0.5 * cover(got),
-                       "tokens": got})
+                       "source": "described",
+                       "score": 0.5 * len(got) / len(q) + (0.3 if by_editor else 0.0),
+                       "base": (1.0 if by_editor else 0.5) * cover(got), "tokens": got})
     merged = [r for r in merged if r["base"] >= floor]
     for row in merged:
         row["nmatch"] = len([t for t in row.pop("tokens", ()) if t not in FILLER])
@@ -554,11 +559,12 @@ def union(lexical_rows: list[dict], local: list[dict], *, k: int = FUSE_K, n_lex
                     and row["start"] <= o["end"] + gap and row["end"] >= o["start"] - gap), None)
         if tgt is None:
             out.append({**{x: row[x] for x in ("clip", "start", "end", "what", "why") if x in row},
-                        "score": w, "evidence": [ev],
+                        "score": w, "evidence": [ev], "base": float(row.get("base") or 0.0),
                         **{x: row[x] for x in ("kind", "notable") if x in row}})
             continue
         tgt["start"], tgt["end"] = min(tgt["start"], row["start"]), max(tgt["end"], row["end"])
         tgt["score"] += w
+        tgt["base"] = max(tgt.get("base", 0.0), float(row.get("base") or 0.0))
         tgt["evidence"].append(ev)
         if row.get("what") and row["what"] not in tgt["what"] and source != "local":
             tgt["what"] = f"{tgt['what']} \u00b7 {row['what']}" if tgt["what"] else row["what"]

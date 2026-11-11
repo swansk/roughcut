@@ -819,3 +819,16 @@ input.hands-tc.bad { border-color: var(--bad, #e46a6a); }
 
 /* an emptied cut draws over the old frame the monitor still holds */
 #progEmpty:not([hidden]) { background: #0b0b0d; z-index: 3; }
+
+/* Find rows (wave 25): one tidy row, the strength in words, the rest on demand */
+.cand .t { display: block; }
+.cand .w { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.cand .full { margin-top: 2px; white-space: pre-wrap; font-size: 11px; color: var(--dim); max-height: 140px; overflow: auto; }
+.cand .more { font-size: 10px; color: var(--dim); margin-right: 6px; }
+.cand .str { font-weight: 600; }
+.cand .str.strong { color: #8be0a8; }
+.cand .str.possible { color: #e8c25a; }
+.cand .str.weak { color: var(--dim); font-weight: 400; }
+.findthink, .findscan { display: flex; align-items: center; gap: 6px; padding: 4px 0; flex-wrap: wrap; }
+.findthink .spin { width: 10px; height: 10px; border: 2px solid var(--dim); border-top-color: var(--text); border-radius: 50%; animation: findspin .8s linear infinite; flex: none; }
+.findthink .findstop { padding: 0 8px; font-size: 11px; line-height: 16px; }

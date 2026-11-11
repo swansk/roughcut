@@ -395,3 +395,64 @@ def test_find_reads_the_cuts_shot_reasons_through_the_endpoint(described):
     r = c.post("/api/find", json={"query": "second", "local": False}).json()
     row = next(m for m in r["matches"] if m["clip"] == "CLIP_B.MP4")
     assert "noted" in row["source"] and row["why"] == "the cut's own note"
+
+
+# ------------------------------------------------------------------ wave 25: sensors in words, speakers
+
+def test_a_sensor_row_says_what_happened_not_its_search_keywords(monkeypatch):
+    import server
+    monkeypatch.setattr(server.telemetry_events, "felt_words", lambda clip, directory=None: [
+        {"start": 2.0, "end": 60.0, "kind": "stopped", "notable": False, "what": "stopped 2-60 stopped stop standing"},
+        {"start": 0.3, "end": 0.9, "kind": "impact", "notable": False, "what": "impact 6.2 g at 0.3 (check) impact crash hit fall bump"}])
+    rows = server.found_payload("CLIP_A.MP4")["moments"]
+    felt = [m for m in rows if m["source"] == "felt"]
+    assert [m["kind"] for m in felt] == ["felt: knock", "felt: stopped"]
+    by = {m["kind"]: m["what"] for m in felt}
+    assert by["felt: stopped"] == "the camera stood still for about 58 s"
+    assert by["felt: knock"].startswith("a hard knock of 6.2 g")
+    assert all("crash hit fall bump" not in m["what"] and "stopped stop standing" not in m["what"] for m in felt)
+
+
+def test_speakers_are_labelled_only_when_the_index_separated_them(described_found):
+    c, side = described_found
+    d = c.get("/api/found/CLIP_A.MP4").json()
+    assert d["speakers"]["separated"] is False and all(u["speaker"] is None for u in d["transcript"])
+    sc = json.loads(side.read_text())
+    for i, u in enumerate(sc["transcript"]):
+        u["speaker"] = "S1" if i % 2 == 0 else "S2"
+    side.write_text(json.dumps(sc))
+    d = c.get("/api/found/CLIP_A.MP4").json()
+    assert d["speakers"]["separated"] is True and {u["speaker"] for u in d["transcript"]} == {"S1", "S2"}
+
+
+@pytest.fixture
+def described_found(project):
+    import server
+    from fastapi.testclient import TestClient
+    original = project["edl"].read_text(encoding="utf-8")
+    side = project["sidecars"] / "CLIP_A.audio.json"
+    before = side.read_text(encoding="utf-8")
+    sc = json.loads(before)
+    for u in sc["transcript"]:
+        u["speaker"] = "S1"                       # a one-speaker "separation": the S1 on every line
+    side.write_text(json.dumps(sc))
+    server.configure(project["edl"], project["footage"], project["sidecars"], project["work"],
+                     proxies=False, visual=project["work"] / "no-visual", assets=project["assets"])
+    with TestClient(server.app) as c:
+        yield c, side
+    side.write_text(before)
+    project["edl"].write_text(original, encoding="utf-8")
+
+
+def test_the_editors_description_changes_find_and_is_read_whole(described):
+    c, vis = described
+    text = "A skier is airborne off the kicker at 19.9 seconds. " + "More words. " * 80 + "The very last sentence about milk."
+    r = c.put("/api/found/CLIP_C.MP4/description", json={"text": text}).json()
+    assert r["description"] == text                                  # whole: no cap short of the 1500 limit
+    rows = find.lexical("skier airborne kicker", {"CLIP_C.MP4": {
+        "clip": "CLIP_C.MP4", "duration": 6.0, "transcript": [],
+        "visual": {"moments": [], "description": text, "description_by": "editor"}}})
+    assert rows and rows[0]["source"] == "described" and "yours" in rows[0]["why"]
+    assert rows[0]["score"] >= 0.8
+    big = c.post("/api/find", json={"query": "skier airborne kicker", "local": False}).json()
+    assert any(m["clip"] == "CLIP_C.MP4" and "yours" in m["why"] for m in big["matches"])

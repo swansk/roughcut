@@ -70,7 +70,7 @@
     rep: null, sig: '', sel: new Set(), anchor: null, focus: null, what: 'look', interval: null,
     quote: null, quoteKey: '', busy: false, err: '', timer: 0, qtimer: 0, mounted: false, job: null,
     lastJob: null, mode: null, modeErr: '', modeBusy: false,
-    found: new Map(), foundBusy: new Set(), editing: null, draft: '',
+    found: new Map(), foundBusy: new Set(), editing: null, draft: '', wide: false,
   };
 
   const $ = (s, r) => (r || document).querySelector(s);
@@ -308,11 +308,12 @@
       const box = e.target.closest('.ix-found');
       if (!box) return;
       const clip = box.dataset.clip;
-      const btn = e.target.closest('button[data-act]');
+      const btn = e.target.closest('button[data-act], a[data-act]');
       if (btn) {
         const act = btn.dataset.act;
         const f = (IX.found.get(clip) || {}).data || {};
         if (act === 'edit') { IX.editing = clip; IX.draft = f.description || ''; paint(); const ta = $('.ixf-ta', sec); if (ta) ta.focus(); }
+        else if (act === 'wide') { e.preventDefault(); IX.wide = !IX.wide; sec.classList.toggle('ix-wide', IX.wide); paint(); }
         else if (act === 'cancel') { IX.editing = null; paint(); }
         else if (act === 'save') { const ta = $('.ixf-ta', sec); saveDescription(clip, ta ? ta.value : IX.draft); }
         else if (act === 'revert') saveDescription(clip, '');
@@ -553,7 +554,8 @@
          <button type="button" data-act="cancel">Cancel</button>
          ${mine ? '<button type="button" data-act="revert" title="forget what you wrote; the look\'s own description comes back">Use the look\'s</button>' : ''}</div>`
       : `<div class="ixf-desc" data-testid="index-found-desc">${f.description
-          ? `${mine ? '<span class="ixf-by" title="written by you: a re-look does not replace it">yours</span> ' : ''}${esc(f.description)}`
+          ? `${mine ? '<span class="ixf-by" title="written by you: a re-look does not replace it">yours</span> '
+              : f.description_by === 'index' ? '<span class="ixf-by idx" data-testid="index-found-rewritten" title="written again from the close looks and the words, after the first look">from the whole index</span> ' : ''}${esc(f.description)}`
           : `<span class="hint">${f.looked ? 'the look wrote no description' : 'not looked at yet'}</span>`}
          <button type="button" class="ixf-edit" data-act="edit" data-testid="index-found-edit" title="say what this clip is in your own words: it sticks, and Find and the AI read it">${f.description ? 'Edit' : 'Describe'}</button></div>`;
     const b = f.basis;
@@ -571,7 +573,10 @@
       : `<div class="hint">${f.heard ? 'nobody says anything in this clip' : 'not heard yet'}</div>`;
     return `${desc}${basis}
       <div class="ixf-h">Found${moments.length ? ` · ${plural(moments.length, 'moment')}` : ''}</div><div class="ixf-list" data-testid="index-found-moments">${mHtml}</div>
-      <div class="ixf-h">Said${lines.length ? ` · ${plural(f.n_words || 0, 'word')}` : ''}</div><div class="ixf-list" data-testid="index-transcript">${tHtml}</div>`;
+      <div class="ixf-h">Said${lines.length ? ` · ${plural(f.n_words || 0, 'word')}` : ''}
+        <a href="#" class="ixf-size" data-act="wide" data-testid="index-transcript-size" title="give the transcript the whole panel">${IX.wide ? 'smaller' : 'larger'}</a></div>
+      ${lines.length && f.speakers && !f.speakers.separated ? '<div class="hint ixf-sp" data-testid="index-speakers">Speakers are not separated in this index: the lines are not labelled by who said them.</div>' : ''}
+      <div class="ixf-list said" data-testid="index-transcript">${tHtml}</div>`;
   }
 
   function paintFound(el, r) {
@@ -608,6 +613,13 @@
       const r = rows().find((x) => x.clip === clip);
       IX.found.set(clip, { key: r ? foundKey(r) : '', data });
       IX.editing = null;
+      // everywhere the description is read, at once (FINDER-08: the Project list showed the old words
+      // until a reload): the board's own copy of the clip, then the list repaints
+      try {
+        const pc = typeof P !== 'undefined' && P && P.clips ? P.clips[clip] : null;
+        if (pc) pc.visual = { ...(pc.visual || {}), summary: data.description, description: data.description,
+          description_by: data.description_by, description_look: data.description_look };
+      } catch (e) { /* no board yet */ }
       if (window.dock && dock.project && typeof dock.project.reload === 'function') dock.project.reload();
       say(text ? 'Saved: your words are kept, and Find and the AI read them' : 'Back to the look\'s own description');
     } catch (e) {
@@ -754,7 +766,7 @@
     paintHead(sec);
     paintMode(sec);
     const fd = (IX.found.get(IX.focus) || {}).data || {};
-    const sig = JSON.stringify([rep && rep.rows, [...IX.sel], IX.focus, rep && rep.local, IX.editing,
+    const sig = JSON.stringify([rep && rep.rows, [...IX.sel], IX.focus, rep && rep.local, IX.editing, IX.wide,
       fd.description_by || '', fd.description || '', (fd.transcript || []).length]);
     if (sig !== IX.sig) {
       IX.sig = sig;
@@ -940,10 +952,11 @@
 
   /* ------------------------------------------------------------ the contract */
 
-  function open(clips) {
+  function open(clips, opts) {
     if (Array.isArray(clips)) select(clips);
     else if (typeof clips === 'string') select([clips]);
     const sec = mount();
+    if (opts && typeof opts.wide === 'boolean') { IX.wide = opts.wide; if (sec) sec.classList.toggle('ix-wide', IX.wide); }
     const shown = !!sec && !sec.hidden;
     if (window.dock && typeof dock.open === 'function') dock.open('index');
     paint();
