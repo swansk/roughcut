@@ -745,3 +745,13 @@ a.floorbtn:hover { color: var(--text); background: var(--card-hi); border-color:
   z-index: 50; max-width: 70vw;
 }
 #toast.show { opacity: 1; }
+
+/* Find results (wave 23): the clip's name on every hit, the chosen hit marked with its add button */
+.cand .fclip { color: var(--text); font-weight: 600; }
+.cand.sel { background: var(--card-hi); }
+.cand .findadd { display: block; margin-top: 3px; padding: 1px 8px; font-size: 11px; line-height: 16px; }
+.findrunning { display: flex; align-items: center; gap: 6px; padding: 6px 0; }
+.findrunning .spin { width: 10px; height: 10px; border: 2px solid var(--dim); border-top-color: var(--text);
+                     border-radius: 50%; animation: findspin .8s linear infinite; flex: none; }
+@keyframes findspin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .findrunning .spin { animation-duration: 2.4s; } }
