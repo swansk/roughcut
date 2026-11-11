@@ -1,9 +1,10 @@
 """merge.py [--min-sev N] [--editor NAME] [--full]: every editor's findings in one list, worst first."""
 import json
+import os
 import sys
 from pathlib import Path
 
-R = Path("/mnt/roughcut/space/roughcut-loop/copper/editors")
+R = Path(os.environ.get("RC_ROOT", "/mnt/roughcut/space/roughcut-loop/copper")) / "editors"
 args = sys.argv[1:]
 min_sev = int(args[args.index("--min-sev") + 1]) if "--min-sev" in args else 1
 only = args[args.index("--editor") + 1] if "--editor" in args else None

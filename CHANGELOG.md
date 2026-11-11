@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- The editor-trial kit takes its trial folder (RC_ROOT) and the code under test (RC_SNAP) from the environment and launches a software-WebGL browser by default; screenshot numbering no longer counts temporary looks.
 - Wave 23 planned from the Copper editor trial (judge/WAVE23.md): five lanes on the top areas, with the editors sent back in as the check.
 - Copper editor trial recorded: six simulated editors started a project from scratch and logged 131 pain points; the lead's checks and ranked areas are in judge/COPPER-EDITORS.md, the findings in judge/copper-editors/, the kit in research/editor-trial/. Docs and research tooling only; no product change. The rubric log gains a caveat on the GPU playback measurement (the GPU test browser leaks and dies after about two minutes).
 - Wave 22 closed out in the notes: the playback-timing tests measured on the RTX 3080 against the gate's software drawing (rubric log; no bar or product change), the loop State, and Karl's try-list now six asks with a rendered first cut to watch for K7.

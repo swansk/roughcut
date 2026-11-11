@@ -27,14 +27,14 @@ the tool got in your way, at the moment it happens, and you also say what worked
 
 ## The kit
 
-Everything lives under `/mnt/roughcut/space/roughcut-loop/copper/`. You are one editor with a name
-(given in your task). Your board and your browser tab are already running; **do not start, stop or
+Everything lives under the trial folder given in your task (`RC_ROOT`; the first trial's was
+`/mnt/roughcut/space/roughcut-loop/copper/`). You are one editor with a name (given in your task). Your board and your browser tab are already running; **do not start, stop or
 restart servers or browsers.** If the tab or the board dies, say so in your final report and stop.
 
 Run a step as a short Python script (the tab keeps its state between scripts, like a person's tab):
 
 ```bash
-/mnt/roughcut/space/roughcut-loop/copper/kit/rc <your-name> - <<'PY'
+RC_ROOT=<trial folder> <kit>/rc <your-name> - <<'PY'
 from rc import *
 with board() as page:
     page.mouse.click(52, 18)                 # a real click at a point (x, y) in page pixels

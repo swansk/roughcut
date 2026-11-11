@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # serve.sh <editor> <port> <footage-dir>   one board for one simulated editor, on its own work dir
 set -u
-R=/mnt/roughcut/space/roughcut-loop/copper
+R="${RC_ROOT:-/mnt/roughcut/space/roughcut-loop/copper}"
+SNAP="${RC_SNAP:-$R/snap}"      # the code the board runs: a frozen snapshot, or a worktree
 E="$R/editors/$1"; mkdir -p "$E/work" "$E/out/shots"
-cd "$R/snap" || exit 9
+cd "$SNAP" || exit 9
 env -u ANTHROPIC_API_KEY ROUGHCUT_LEDGER="$R/ledger.jsonl" setsid nohup uv run app/server.py \
   --footage "$3" --work "$E/work" --port "$2" > "$E/server.log" 2>&1 &
 echo $! > "$E/server.pid"

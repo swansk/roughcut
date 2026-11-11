@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# rc <editor> <script.py | ->     run one step script as that editor (kit/rc.py on the path)
+# rc <editor> <script.py | ->     run one step script as that editor (rc.py on the path)
 #   rc cold - <<'PY' ... PY
-R=/mnt/roughcut/space/roughcut-loop/copper
+# RC_ROOT is the trial's folder (boards' work dirs, editors' output); default: the first Copper trial.
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+export RC_ROOT="${RC_ROOT:-/mnt/roughcut/space/roughcut-loop/copper}"
 E="$1"; shift
-cd "$R/editors/$E/out" || exit 9
-RC_EDITOR="$E" PYTHONPATH="$R/kit" exec uv run -q --with playwright --with pillow python "$@"
+cd "$RC_ROOT/editors/$E/out" || exit 9
+RC_EDITOR="$E" PYTHONPATH="$HERE" exec uv run -q --with playwright --with pillow python "$@"

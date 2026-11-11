@@ -17,7 +17,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-ROOT = Path("/mnt/roughcut/space/roughcut-loop/copper")
+ROOT = Path(os.environ.get("RC_ROOT", "/mnt/roughcut/space/roughcut-loop/copper"))
 NAME = os.environ["RC_EDITOR"]
 ED = ROOT / "editors" / NAME
 OUT = ED / "out"
@@ -59,7 +59,7 @@ def board():
 
 
 def _next(label: str) -> Path:
-    n = len(list(SHOTS.glob("*.png"))) + 1
+    n = len(list(SHOTS.glob("[0-9][0-9][0-9]-*.png"))) + 1      # not watch()'s temporary looks
     safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in label)[:60]
     return SHOTS / f"{n:03d}-{safe}.png"
 
