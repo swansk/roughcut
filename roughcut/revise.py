@@ -646,6 +646,44 @@ def validate_new_clips(raw: Any, new_clips: list[str]) -> list[dict]:
     return out
 
 
+# A note that came from the prompt box's planner is two things: the editor's own words and
+# the brief the planning step wrote from them (COLD-17: the cut-writer read the plan as
+# "your note", found it cut off and told the editor so). The pair travels as one string
+# through the Ask's plumbing and is told apart here, in the prompt, where each is labelled.
+PLAN_MARK = "\n\n\u27e6the plan\u27e7\n"
+
+
+def compose_note(words: str, plan: str) -> str:
+    """The editor's `words` and the planner's `plan`, as one note the Ask can carry."""
+    return f"{words.strip()}{PLAN_MARK}{plan.strip()}"
+
+
+def split_note(note: str) -> tuple[str, str]:
+    """`(the editor's words, the planner's plan or "")` of a note."""
+    words, _, plan = (note or "").partition(PLAN_MARK)
+    return words.strip(), plan.strip()
+
+
+PLAN_GUIDANCE = (
+    "The editor's words are above. Below them is a plan written from those words by a planning "
+    "step before you; it is not the editor's own text, and the editor has not read it. Follow it "
+    "where it agrees with the editor's words, and the words where they differ. In `notes`, speak "
+    "to the editor about what they asked for and what you did; never say \"you asked\", "
+    "\"you named\" or \"your note\" about anything that is only in the plan, never say the plan or "
+    "the note is cut off, and call the target length the project's target, not something the "
+    "editor set.")
+
+
+def note_section(note: str, heading: str = "The editor's note") -> str:
+    """The prompt's section for the note: the editor's words, then the plan under its own
+    label when there is one."""
+    words, plan = split_note(note)
+    if not plan:
+        return f"## {heading}\n{words}"
+    return (f"## {heading}\n{words or '(the editor said nothing beyond the plan below)'}\n\n"
+            f"## The plan written from those words (not the editor's text)\n{plan}\n\n{PLAN_GUIDANCE}")
+
+
 def build_prompt(segments: list[dict], clips: dict[str, dict], story: str,
                  note: str, target: tuple[float, float],
                  events: list[dict] | None = None,
@@ -693,8 +731,7 @@ def build_prompt(segments: list[dict], clips: dict[str, dict], story: str,
 ## The current edit, in order
 {current}
 
-## The editor's note
-{note.strip()}
+{note_section(note)}
 
 {fresh}{graded}{kept}{ranked}## Every clip available, with its transcript
 {inventory}
@@ -742,8 +779,7 @@ edit yet; you are making the first one.
 ## What this film is about
 {brief}
 
-## The editor's direction
-{ask}
+{note_section(note, "The editor's direction") if note.strip() else "## The editor's direction\n" + ask}
 
 ## Target length
 {target[0]:.0f}-{target[1]:.0f} seconds, drawn from {len(clips)} clips totalling \
