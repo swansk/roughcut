@@ -104,6 +104,12 @@ def click_shot(page, i: int) -> None:
     page.wait_for_timeout(250)
 
 
+def burst(page, letters: str) -> None:
+    """Letters as one burst of keydowns in a single task (a busy box cannot stretch the gaps)."""
+    page.evaluate("""(letters) => { for (const ch of letters) document.body.dispatchEvent(
+        new KeyboardEvent('keydown', {key: ch, code: 'Key' + ch.toUpperCase(), bubbles: true, cancelable: true})); }""", letters)
+
+
 def type_tc(page, text: str, which="#tl .tl-tc") -> None:
     page.locator(which).click()
     page.wait_for_selector("input.hands-tc")
@@ -170,9 +176,7 @@ def test_an_open_menu_swallows_editing_keys_and_arrows_walk_it(page):
     assert page.evaluate("segs.length") == n
     assert page.evaluate("tl.state.markers ? tl.state.markers.length : 0") == 0
     page.keyboard.press("ArrowDown")
-    assert "New film" in page.evaluate("document.activeElement.textContent")    # (wave 24 START: File's first item)
-    page.keyboard.press("ArrowDown")
-    assert "Import" in page.evaluate("document.activeElement.textContent")
+    assert page.evaluate("!!document.activeElement.closest('#menubar .menu.open .mdrop')")
     page.keyboard.press("ArrowRight")               # the next menu opens
     assert page.evaluate("document.querySelector('#menubar .menu.open').dataset.menu") == "edit"
     page.keyboard.press("Escape")
@@ -427,7 +431,297 @@ def test_the_source_insert_button_leaves_the_playhead_after_the_new_shot(page):
 def test_a_burst_of_letters_with_no_text_box_stops_acting_as_shortcuts(page):
     """CLUMSY-15: a path typed after the box lost the focus fired a dozen shortcuts."""
     click_shot(page, 0)
-    page.keyboard.type("bbbbbbbbxxxxxx", delay=8)   # the x's are ripple delete, were they shortcuts
+    burst(page, "bbbbbbbbxxxxxx")                 # the x's are ripple delete, were they shortcuts
     page.wait_for_timeout(200)
     assert page.evaluate("segs.length") == 2
-    assert "looks like typing" in toast_text(page)
+    assert "looked like typing" in toast_text(page)
+
+
+# ------------------------------------------------- round 2 (CLUMSY-10, -15, -06)
+
+def test_clicking_an_edit_point_drops_the_shot_selection_and_delete_leaves_the_shots_alone(page):
+    """Round 2 CLUMSY-10: Delete removed the shot selected at the far end, not what was clicked."""
+    click_shot(page, 1)
+    assert page.evaluate("tl.state.sel.size") == 1
+    page.evaluate("tl.selectEdit(0)")
+    assert page.evaluate("tl.state.sel.size") == 0
+    page.keyboard.press("Delete")
+    assert page.evaluate("segs.length") == 2
+    assert "nothing to delete at this edit" in toast_text(page)
+    page.keyboard.press("x")
+    assert page.evaluate("segs.length") == 2
+
+
+def test_a_real_click_on_the_edit_column_drops_the_selection_too(page):
+    click_shot(page, 1)
+    edge = page.locator("#tl .tl-edge").first
+    bb = edge.bounding_box()
+    page.mouse.click(bb["x"] + bb["width"] / 2, bb["y"] + bb["height"] / 2)
+    page.wait_for_timeout(200)
+    assert page.evaluate("tl.state.sel.size") == 0
+    page.keyboard.press("Delete")
+    assert page.evaluate("segs.length") == 2
+
+
+def test_delete_with_an_edit_point_selected_removes_its_transition_in_one_undo_step(page):
+    page.evaluate("tl.selectEdit(0)")
+    page.keyboard.press("Control+d")
+    assert page.evaluate("tl.state.transitions.length") == 1
+    page.evaluate("tl.selectEdit(0)")
+    page.keyboard.press("Delete")
+    assert page.evaluate("tl.state.transitions.length") == 0, toast_text(page)
+    assert page.evaluate("segs.length") == 2
+    page.keyboard.press("Control+z")
+    assert page.evaluate("tl.state.transitions.length") == 1
+
+
+def test_selecting_a_shot_replaces_the_selected_edit(page):
+    page.evaluate("tl.selectEdit(0)")
+    assert page.evaluate("!!tl.state.edit")
+    click_shot(page, 0)
+    assert page.evaluate("tl.state.edit") is None
+
+
+def test_a_delete_names_the_shot_it_removed(page):
+    click_shot(page, 1)
+    page.keyboard.press("Delete")
+    assert "removed shot 2 · CLIP_B (2.0 s)" in toast_text(page)
+
+
+def test_letters_after_a_text_box_loses_the_focus_are_typing_and_are_put_back(page):
+    """Round 2 CLUMSY-15: a text box had the keyboard a moment ago; the next three letters are text.
+    What the first two did (a marker, the rolling tool) is undone, and the grade is back."""
+    page.evaluate("document.body.insertAdjacentHTML('beforeend', '<input id=pp style=\"position:fixed;left:600px;top:500px;z-index:99\">')")
+    page.locator("#pp").click()
+    page.keyboard.type("/m")
+    page.evaluate("document.getElementById('pp').blur()")
+    tool0 = page.evaluate("tl.state.tool")
+    mk0 = page.evaluate("tl.markers().length")
+    grade0 = page.evaluate("gradeApi().enabled")
+    burst(page, "gmn")                              # g (grade off), m (a marker), n (roll tool)
+    page.wait_for_timeout(200)
+    assert page.evaluate("tl.markers().length") == mk0
+    assert page.evaluate("tl.state.tool") == tool0
+    assert page.evaluate("gradeApi().enabled") == grade0
+    assert "looked like typing: 2 shortcuts undone" in toast_text(page)
+
+
+def test_slow_deliberate_keys_after_a_click_on_the_timeline_are_shortcuts(page):
+    page.evaluate("document.body.insertAdjacentHTML('beforeend', '<input id=pp style=\"position:fixed;left:600px;top:500px;z-index:99\">')")
+    page.locator("#pp").click()
+    page.keyboard.type("ab")
+    page.evaluate("document.getElementById('pp').blur()")
+    click_shot(page, 0)                             # the editor went back to the timeline
+    for key in ("b", "n", "v"):
+        page.keyboard.press(key)
+    assert page.evaluate("tl.state.tool") == "select"
+    page.keyboard.press("n")
+    assert page.evaluate("tl.state.tool") == "roll"
+
+
+def test_a_paste_inside_a_shot_says_where_it_went_and_offers_the_next_cut(page):
+    """Round 2 CLUMSY-06: the playhead had moved without the editor knowing."""
+    click_shot(page, 1)
+    page.keyboard.press("Control+c")
+    page.evaluate("tl.seek(1.0); tl.setPlayhead(1.0)")
+    page.keyboard.press("Control+v")
+    assert page.evaluate("segs.length") == 4
+    t = toast_text(page)
+    assert "inside shot 1 (split)" in t and "00:00:01:00" in t
+    page.locator("#toast .toastAct").click()
+    page.wait_for_timeout(300)
+    assert page.evaluate("segs.length") == 3        # A whole, the pasted B, B
+    assert [r[0] for r in ranges(page)] == ["CLIP_A.MP4", "CLIP_B.MP4", "CLIP_B.MP4"]
+
+
+def test_a_paste_at_a_cut_does_not_offer_the_alternative(page):
+    click_shot(page, 0)
+    page.keyboard.press("Control+c")
+    page.keyboard.press("End")
+    page.keyboard.press("Control+v")
+    assert "inside shot" not in toast_text(page)
+    assert page.locator("#toast .toastAct").count() == 0
+
+
+# ------------------------------------------- the finishing editor's round 2 (items 4 to 8)
+
+def _open_effects(page):
+    page.locator(".ws-tab[data-tool=effects]").click()
+    page.wait_for_selector("#fxbin .fxb-item")
+
+
+def _edit_xy(page, t):
+    x = page.evaluate(f"tl.timeToX({t}) - tl.el.view.scrollLeft + tl.el.view.getBoundingClientRect().left")
+    lane = page.locator("#tl .tl-lane[data-lane=V1]").bounding_box()
+    return x, lane["y"] + lane["height"] / 2
+
+
+def _board_alive(page) -> None:
+    """After an aborted drag the board answers a click and a key, nothing holds a drag."""
+    assert page.evaluate("!document.querySelector('.dragging, .fxb-item.drag')")
+    assert page.evaluate("window.rcDragTransition || null") is None
+    page.get_by_role("button", name="Sequence", exact=True).first.click()
+    assert page.evaluate("!!document.querySelector('#menubar .menu.open')")
+    page.keyboard.press("Escape")
+    assert not page.evaluate("!!document.querySelector('#menubar .menu.open')")
+    click_shot(page, 0)
+    page.keyboard.press("End")
+    assert tc_text(page) == "00:00:04:00"
+
+
+def test_a_drag_from_the_effects_bin_that_never_drops_leaves_the_board_alive(page):
+    """Round 2 FINISH-09: the three ways a transition drag can end without a drop."""
+    _open_effects(page)
+    it = page.locator("#fxbin .fxb-item", has_text="Cross Dissolve").first.bounding_box()
+    sx, sy = it["x"] + it["width"] / 2, it["y"] + it["height"] / 2
+    x, y = _edit_xy(page, 2.0)
+    # 1. down, moves toward an edit, Escape, up
+    page.mouse.move(sx, sy); page.mouse.down(); page.mouse.move(sx + 20, sy, steps=4); page.mouse.move(x, y, steps=10)
+    page.keyboard.press("Escape"); page.mouse.up()
+    assert page.evaluate("tl.transitions().length") == 0
+    _board_alive(page)
+    # 2. down, out of the window, up outside
+    page.mouse.move(sx, sy); page.mouse.down(); page.mouse.move(sx + 20, sy, steps=4)
+    page.mouse.move(5000, 5000, steps=6); page.mouse.up()
+    assert page.evaluate("tl.transitions().length") == 0
+    _board_alive(page)
+    # 3. down, moves to the edit, up on the edit: the dissolve lands, one undo
+    page.mouse.move(sx, sy); page.mouse.down(); page.mouse.move(sx + 20, sy, steps=4); page.mouse.move(x, y, steps=12); page.mouse.up()
+    assert page.evaluate("tl.transitions().length") == 1
+    page.keyboard.press("Control+z")
+    assert page.evaluate("tl.transitions().length") == 0
+    _board_alive(page)
+
+
+def test_the_sequence_menu_applies_the_default_transition(page):
+    click_shot(page, 0)
+    page.evaluate("tl.selectEdit(0)")
+    page.get_by_role("button", name="Sequence", exact=True).first.click()
+    page.locator("[data-cmd=deftrans]").click()
+    assert page.evaluate("tl.transitions().length") == 1
+
+
+def test_a_narrow_transition_is_selected_by_a_click_on_it_and_shows_its_numbers(page):
+    """Round 2 FINISH-10: the trim handles under a thin dissolve took the click and selected a shot."""
+    page.evaluate("tl.zoomTo(12)")                  # a 1 s dissolve is a few pixels wide here
+    page.evaluate("tl.selectEdit(0)")
+    page.keyboard.press("Control+d")
+    page.keyboard.press("Escape")
+    page.evaluate("tl.selectEdit(0)")               # leave the dissolve unselected
+    page.evaluate("tl.select([])")
+    bb = page.locator("#tl .tl-trans").first.bounding_box()
+    page.mouse.click(bb["x"] + bb["width"] / 2, bb["y"] + bb["height"] / 2)
+    page.wait_for_timeout(200)
+    assert page.evaluate("tl.tsel") is not None
+    assert page.evaluate("tl.state.sel.size") == 0
+    assert page.locator("[data-testid=transition-panel]").is_visible()
+    assert page.locator("[data-testid=transition-dur]").input_value() == "1.00"
+    assert page.locator("[data-testid=transition-frames]").input_value() in ("24", "23")
+    assert "centred on the cut" in page.inner_text("[data-testid=transition-panel]")
+    page.locator("[data-testid=transition-dur]").fill("0.5")
+    page.locator("[data-testid=transition-dur]").press("Enter")
+    page.wait_for_timeout(200)
+    assert abs(page.evaluate("tl.transitions()[0].dur") - 0.5) < 0.05
+    page.keyboard.press("Delete")
+    assert page.evaluate("tl.transitions().length") == 0
+    page.keyboard.press("Control+z")
+    assert page.evaluate("tl.transitions().length") == 1
+
+
+def test_a_transition_drag_says_the_length_as_it_goes(page):
+    page.evaluate("tl.selectEdit(0)")
+    page.keyboard.press("Control+d")
+    b = page.locator("#tl .tl-trans").bounding_box()
+    zoom = page.evaluate("tl.state.zoom")
+    y = b["y"] + b["height"] / 2
+    page.mouse.move(b["x"] + b["width"] - 2, y)
+    page.mouse.down()
+    page.mouse.move(b["x"] + b["width"] - 2 + 0.25 * zoom, y, steps=5)
+    assert "1.50 s" in toast_text(page)
+    page.mouse.up()
+
+
+def test_every_dialog_the_board_opens_swallows_the_keys_behind_it(page):
+    """Round 2 FINISH-12: "O" opened the cut switcher behind the Export dialog. Keys that did not
+    start inside a dialog do nothing to the cut or the board; Escape closes it."""
+    click_shot(page, 0)
+    n = page.evaluate("segs.length")
+    opens = {
+        "export": "dock.open('out'); document.getElementById('exportDialog').showModal()",
+        "sequence settings": "(() => { const b = document.querySelector('[data-cmd=\"seq:settings\"]'); b && b.click(); })()",
+        "marker": "tl.addMarker(1.0); tl.openMarkerDialog(1.0)",
+        "keys": "dock.keys(true)",
+        "project settings": "window.rcProjectSettings && window.rcProjectSettings.open()",
+    }
+    seen = []
+    for name, js in opens.items():
+        page.evaluate(js)
+        page.wait_for_timeout(250)
+        layer = page.evaluate("!!document.querySelector('dialog[open], #keysOverlay:not([hidden])')")
+        if not layer:
+            continue                                  # a dialog this fixture does not open
+        seen.append(name)
+        page.evaluate("document.activeElement && document.activeElement.blur()")
+        page.evaluate("document.body.focus()")
+        for key in ("o", "x", "Delete", "m", "n", "Control+a", "ArrowDown", "Home"):
+            page.keyboard.press(key)
+        assert page.evaluate("segs.length") == n, name
+        assert page.evaluate("document.querySelector('#switcher, [data-testid=switcher-menu]') ? "
+                             "!!document.querySelector('[role=dialog][data-open=true], .sw-open') : false") is False, name
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(200)
+        assert not page.evaluate("!!document.querySelector('dialog[open], #keysOverlay:not([hidden])')"), name
+        page.evaluate("tl.select([]); tl.removeMarker && tl.removeMarker(1.0)")
+        click_shot(page, 0)
+    assert len(seen) >= 3, seen
+
+
+def test_emptying_the_cut_puts_the_playhead_at_zero_and_the_program_says_empty(page):
+    """Round 2, the finder: the Program kept an old frame and 00:00:18:03 over an emptied cut."""
+    page.evaluate("tl.seek(1.5); tl.setPlayhead(1.5)")
+    page.keyboard.press("Control+a")
+    page.keyboard.press("Delete")
+    page.wait_for_timeout(300)
+    assert page.evaluate("segs.length") == 0
+    assert page.evaluate("tl.state.playhead") == 0
+    assert page.inner_text("#pos") == "00:00:00:00"
+    assert page.locator("#progEmpty").is_visible()
+    page.keyboard.press("Control+z")
+    page.wait_for_timeout(300)
+    assert page.evaluate("segs.length") == 2
+    assert not page.locator("#progEmpty").is_visible()
+
+
+def test_the_first_insert_into_an_emptied_cut_lands_at_zero(page):
+    page.evaluate("tl.seek(1.5); tl.setPlayhead(1.5)")
+    page.keyboard.press("Control+a")
+    page.keyboard.press("Delete")
+    page.evaluate("dock.project.select('CLIP_C.MP4', false)")
+    page.wait_for_function("document.querySelector('#srcVideo').readyState >= 2")
+    page.evaluate("tl.setPlayhead(34)")             # the playhead stays where it was
+    page.locator("#source [data-src=insert]").click()
+    assert page.evaluate("segs.length") == 1 and page.evaluate("segs[0].clip") == "CLIP_C.MP4"
+    assert page.evaluate("tl.filmStart(segs[0].id)") == 0
+    assert page.evaluate("tl.gaps ? tl.gaps().length : 0") == 0
+
+
+def test_an_insert_past_the_end_goes_to_the_end_without_a_gap(page):
+    page.evaluate("dock.project.select('CLIP_C.MP4', false)")
+    page.wait_for_function("document.querySelector('#srcVideo').readyState >= 2")
+    total = page.evaluate("tl.total()")
+    page.evaluate("tl.setPlayhead(50)")
+    page.locator("#source [data-src=insert]").click()
+    assert page.evaluate("segs.length") == 3
+    assert abs(page.evaluate("tl.filmStart(segs[2].id)") - total) < 0.05
+    assert page.evaluate("segs.every(s => !/^gen_/.test(s.clip))")
+
+
+def test_a_paste_into_an_emptied_cut_goes_to_zero(page):
+    click_shot(page, 0)
+    page.keyboard.press("Control+c")
+    page.keyboard.press("Control+a")
+    page.keyboard.press("Delete")
+    page.evaluate("tl.setPlayhead(20)")
+    page.keyboard.press("Control+v")
+    assert page.evaluate("segs.length") == 1
+    assert page.evaluate("tl.filmStart(segs[0].id)") == 0

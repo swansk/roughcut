@@ -421,6 +421,7 @@
     paste: () => { if (window.tlKeys) tlKeys.pasteKey(); },
     gototc: () => { if (window.rcHands) setTimeout(() => rcHands.editTimecode('timeline'), 0); },
     savenote: () => { if (window.tlKeys) tlKeys.saveKey(); },
+    deftrans: () => { if (window.tl && typeof tl.applyTransition === 'function') tl.applyTransition('video'); },
     undo: () => { const b = $('#undo'); if (b) b.click(); },
     redo: () => { const b = $('#redo'); if (b) b.click(); },
     keys: () => keys(true),

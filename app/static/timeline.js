@@ -2588,6 +2588,7 @@
     const changed = !sameSet(next, state.sel) || anchor !== state.anchor;
     state.sel = next;
     state.anchor = anchor;
+    if (next.size && state.edit) { state.edit = null; setTimeout(paintTransitions, 0); }   // a shot replaces the edit point
     if (next.size && state.osel != null) { state.osel = null; renderV2(); }
     if (anchor != null) {
       const i = indexOf(anchor);
@@ -3006,6 +3007,27 @@
     return v;
   }
 
+  /* What Effect Controls shows for the selected transition (null: none selected): its name, its
+   * length in seconds and frames, and where it sits — before / after the cut, in numbers. */
+  function transitionInfo(key) {
+    const k0 = key || state.tsel;
+    const t = k0 && state.transitions.find((x) => tkey(x) === k0);
+    if (!t || !transValid(t)) return null;
+    const al = alignOf(t), list = segs(), r = gridRate();
+    const d = Number(t.dur) || 0;
+    const info = { key: k0, kind: t.kind, name: TRANS_NAMES[t.kind], family: famOf(t.kind), dur: d,
+                   frames: Math.round(d * r), align: al, rate: r };
+    if (al === 'center') {
+      const c = transCut(t);
+      Object.assign(info, { before: d / 2, after: d / 2, shotA: c + 1, shotB: c + 2, at: filmStart(list[c + 1].id) });
+    } else {
+      const i = transShot(t);
+      Object.assign(info, al === 'start' ? { before: 0, after: d, shotB: i + 1, at: filmStart(list[i].id) }
+        : { before: d, after: 0, shotA: i + 1, at: filmStart(list[i].id) + dur(list[i]) });
+    }
+    return info;
+  }
+
   function selectTransition(key) {
     state.tsel = key && state.transitions.some((t) => tkey(t) === key) ? key : null;
     if (state.tsel) state.edit = null;
@@ -3216,7 +3238,8 @@
     if (!tdrag || e.pointerId !== tdrag.pointerId) return;
     const half = Math.abs(eventTime(e) - tdrag.cut);
     if (!tdrag.began) { tdrag.began = begin('transition duration'); }
-    setTransitionDur(tdrag.key, tdrag.side ? half : 2 * half);
+    const v = setTransitionDur(tdrag.key, tdrag.side ? half : 2 * half);
+    if (v != null) toast(`${TRANS_NAMES[(state.transitions.find((x) => tkey(x) === tdrag.key) || {}).kind] || 'transition'} · ${v.toFixed(2)} s · ${Math.round(v * gridRate())} frames`);
   }
 
   function onTransUp(e) {
@@ -3287,6 +3310,9 @@
     if (best < 0 || bd * state.zoom > 12) return;
     state.edit = { a: list[best].id, b: list[best + 1].id };
     state.tsel = null;
+    // an edit point replaces the shot selection, as in Premiere: Delete then acts on the edit,
+    // never on a shot selected somewhere else (round 2 CLUMSY-10)
+    if (state.sel.size) select([], { source: 'click' });
     setTimeout(paintTransitions, 0);
   }
 
@@ -4768,7 +4794,7 @@
   const tl = {
     state, el, mount, render, on,
     byId, indexOf, idAt, dur, speedOf, filmStart, total, shotAt, timeToX, xToTime, eventTime, snapsFor,
-    begin, commit, cancel, batch, unrecorded, undo, redo, takeBack, clearHistory,
+    begin, commit, cancel, batch, unrecorded, undo, redo, takeBack, clearHistory, undoDepth: () => undoStack.length,
     mark: markEntry,                // an entry for a change outside the cut (fx.js's Accept)
     nextUndo,                       // {label, tag} of what Ctrl+Z takes back now, or null
     history, restoreHistory, onHistory,   // the stacks kept past a reload (app.js, /api/undo)
@@ -4797,7 +4823,7 @@
     // transitions at the edits (verdict 6, punch 6; roughcut/tracks.py)
     transitions: () => state.transitions.map((t) => ({ ...t })),
     transitionHalves, addTransition, removeTransition, setTransitionDur, applyTransition,
-    selectTransition, editTransitionDur, transitionsForSave, editForTransition,
+    selectTransition, transitionInfo, editTransitionDur, transitionsForSave, editForTransition,
     TRANS_NAMES, get tsel() { return state.tsel; },
     // the Effects bin (verdict 8 punch 5): kinds, one-sided ones, drops, the defaults
     VIDEO_KINDS, AUDIO_KINDS, TRANS_MIME, transitionFades, addFade, dropTransition, transTarget,
@@ -4806,6 +4832,7 @@
       const list = segs();
       state.edit = list[k] && list[k + 1] ? { a: list[k].id, b: list[k + 1].id } : null;
       state.tsel = null;
+      if (state.edit && state.sel.size) select([], { source: 'api' });
       paintTransitions();
       return selectedEdit();
     },
