@@ -967,10 +967,14 @@ def test_a_rotation_is_one_step_on_the_boards_own_undo_stack(page):
     page.wait_for_function("tl.nextUndo() && /rotate/.test(tl.nextUndo().label)")
     assert page.evaluate("tl.nextUndo().tag").startswith("rotate:")
     page.keyboard.press("Control+z")
-    page.wait_for_function("%d" % 0 + " === 0 && true")
-    page.wait_for_timeout(500)
-    assert not page.evaluate("tl.nextUndo() && /rotate/.test(tl.nextUndo().label)")
-    assert any('"sensor"' in (c or "") for c in calls)             # the undo turned the clip back
+    # the step leaves the stack, then the board posts the turn back: waited for, not slept for (a busy
+    # box took longer than half a second and the full gate called this test flaky)
+    page.wait_for_function("!(tl.nextUndo() && /rotate/.test(tl.nextUndo().label))", timeout=10000)
+    for _ in range(200):
+        if any('"sensor"' in (c or "") for c in calls):
+            break
+        page.wait_for_timeout(50)
+    assert any('"sensor"' in (c or "") for c in calls), calls      # the undo turned the clip back
 
 
 # ------------------------------------------- the single-key edits act on the editor's selection
@@ -1059,6 +1063,20 @@ def test_eight_quick_taps_of_one_trim_key_walk_the_edge_and_are_not_typing(page)
     _tap(page, "]", "BracketRight", 8)
     page.wait_for_timeout(200)
     assert page.evaluate("segs[0].in") == pytest.approx(in0 + 8 / 24, abs=3e-3), "eight frames, none put back"
+    assert "looked like typing" not in toast_text(page)
+
+
+def test_a_quick_walk_that_overshoots_and_comes_back_is_not_typing(page):
+    """Eight frames on with ] and two back with [ in one quick run: two different keys, but both
+    only step the edge, so nothing is put back (a run of letters still is: the test below)."""
+    page.evaluate("tl.select([tl.idAt(0)])")
+    in0 = page.evaluate("segs[0].in")
+    page.evaluate("""() => { const tap = (key, code) => document.body.dispatchEvent(
+        new KeyboardEvent('keydown', {key, code, bubbles: true, cancelable: true}));
+        for (let i = 0; i < 8; i++) tap(']', 'BracketRight');
+        for (let i = 0; i < 2; i++) tap('[', 'BracketLeft'); }""")
+    page.wait_for_timeout(200)
+    assert page.evaluate("segs[0].in") == pytest.approx(in0 + 6 / 24, abs=3e-3), "eight on, two back, none put back"
     assert "looked like typing" not in toast_text(page)
 
 

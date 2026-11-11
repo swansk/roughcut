@@ -174,8 +174,10 @@
     else { run.n = 1; run.snap = snapshot(); run.tripped = false; run.keys = new Set(); }
     run.at = now;
     run.keys.add(e.key.toLowerCase());
-    // one key pressed again and again (an editor walking an edge a frame at a time with [ or ]) is not a word
-    if (run.n < need || (!run.tripped && run.keys.size < 2)) return false;
+    // one key pressed again and again (an editor walking an edge a frame at a time with [ or ]) is not a word,
+    // and neither is a run made only of the keys that step a value up and down (a walk that overshoots and comes back)
+    const stepping = run.keys.size < 2 || [...run.keys].every((k) => '[]{}-=+_'.includes(k));
+    if (run.n < need || (!run.tripped && stepping)) return false;
     if (!run.tripped) {
       run.tripped = true;
       putBack(run.snap);

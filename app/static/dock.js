@@ -2200,6 +2200,7 @@
     // carries a tag, and the change event of its undo / redo turns the clip back / again.
     let tag = null;
     if (!undo && window.tl && typeof tl.mark === 'function' && d && d.previous !== mode) {
+      hookRot();
       tag = `rotate:${++rotSeq}`;
       rotLog[tag] = { name, from: d.previous || 'sensor', to: mode };
       tl.mark(`rotate ${name}`, tag);
@@ -2222,7 +2223,14 @@
     if (!r || (ev.kind !== 'undo' && ev.kind !== 'redo')) return;
     rotateClip(r.name, ev.kind === 'undo' ? r.from : r.to, true);
   }
-  setTimeout(function hook() { if (window.tl && tl.on) tl.on('change', onRotUndo); else setTimeout(hook, 300); }, 0);
+  // dock.js loads before the timeline: the hook is made as soon as the timeline is there, and again (once
+  // only) by the first rotation, so a rotation undone in the page's first instant is still turned back.
+  let rotHooked = false;
+  function hookRot() {
+    if (!rotHooked && window.tl && tl.on) { tl.on('change', onRotUndo); rotHooked = true; }
+    return rotHooked;
+  }
+  setTimeout(function hook() { if (!hookRot()) setTimeout(hook, 300); }, 0);
   function rotMenu(x, y, name) {
     let m = $('#rotMenu');
     if (!m) {
