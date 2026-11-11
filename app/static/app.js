@@ -2921,6 +2921,9 @@ function programInit() {
   tl.on('playhead', (ev) => programSync(ev && ev.t));
   tl.on('tracks', (ev) => { prog.tracks = (ev && ev.tracks) || tl.tracks(); programSync(); });
   tl.on('change', () => programSync());
+  // the frame's shape changed (Sequence Settings, its undo, another cut: wave 25 VERTICAL): the
+  // Effect Controls are built again, for a 9:16 / 1:1 cut has a Reframe section a 16:9 one has not
+  tl.on('frame', () => { inspecting = null; renderInspector(); programSync(); });
 }
 
 function toggleCut() {

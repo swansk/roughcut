@@ -461,6 +461,10 @@
     keyed(plain('scale', 100, 0, 1000, 0.1, 1, '', 'Scale', 'motion'), 'scale', 'scale'),
     keyed(plain('rotation', 0, -3600, 3600, 0.1, 1, '°', 'Rotation', 'motion'), 'rotation', 'rotation'),
     keyed(plain('opacity', 100, 0, 100, 0.1, 1, ' %', 'Opacity', 'opacity'), 'opacity', 'opacity'),
+    // Reframe (wave 25 VERTICAL): where a shot's crop sits in a 9:16 / 1:1 frame, and its zoom
+    plain('reframe_x', 50, 0, 100, 0.5, 1, ' %', 'Left ↔ right', 'reframe'),
+    plain('reframe_y', 50, 0, 100, 0.5, 1, ' %', 'Up ↔ down', 'reframe'),
+    plain('reframe_zoom', 100, 100, 400, 1, 0, ' %', 'Zoom', 'reframe'),
     keyed(plain('volume_db', 0, -60, 6, 0.1, 2, ' dB', 'Level', 'volume'), 'volume_db', 'volume_db'),
     balProp('temperature', 'Temperature', -100, 100, 0.5, 1, '',
       'the shot\'s white balance, warm ↔ cool — saved as its hand balance; the export renders it'),
@@ -497,8 +501,11 @@
   // volume previews up to 0 dB only: the monitor's element cannot play louder than full
   BY_KEY.get('volume_db').hover = `the shot's level · above 0.00 dB is heard only in the export (the monitor plays at most full level) · ${RENDERED}`;
 
-  const LABELS = { posx: 'position', posy: 'position', volume_db: 'volume' };
+  const LABELS = { posx: 'position', posy: 'position', volume_db: 'volume',
+                   reframe_x: 'reframe', reframe_y: 'reframe', reframe_zoom: 'reframe' };
   const labelOf = (p) => p.undo || LABELS[p.key] || p.key;
+  /* the frame's shape (wave 25 VERTICAL, app/static/frame.js): a 16:9 cut shows no Reframe */
+  const wideFrame = () => !window.rcFrame || window.rcFrame.wide();
   const fmtVal = (p, v) => {
     const s = Number(v).toFixed(p.digits);
     return (p.key === 'exposure' && v > 0 ? '+' : '') + (s === '-0.0' || s === '-0.00' ? s.slice(1) : s) + p.unit;
@@ -1005,6 +1012,48 @@
     };
   }
 
+  /* A 9:16 / 1:1 cut FILLS its frame with the shot (workspace.css: cover, the centre crop); the
+   * shot's Reframe — where its window sits, and a zoom — is the same window the export crops
+   * (roughcut/frame.py `window`, app/static/frame.js, one arithmetic): the picture elements show
+   * just that part of their own frame (`object-view-box`, over `object-fit: fill`). A 16:9 cut,
+   * and a shot at the centre and 100 %, touch nothing. */
+  const REFRAMED = ['#player video.pvbuf', '#gradeCanvas', '#monPoster'];
+  function reframeLook(seg) {
+    const fr = window.rcFrame;
+    if (fr) fr.paint();
+    const r = fr && !fr.wide() && seg && !isOv(seg) ? fr.reframe(ctl(seg)) : null;
+    const moved = !!r && (r.x !== 0.5 || r.y !== 0.5 || r.zoom !== 1);
+    REFRAMED.forEach((sel) => document.querySelectorAll(sel).forEach((el) => {
+      let view = '';
+      if (moved) {
+        const sw = el.videoWidth || el.naturalWidth || el.width || 0;
+        const sh = el.videoHeight || el.naturalHeight || el.height || 0;
+        if (sw && sh) {
+          const [l, tp, w, h] = fr.window(sw, sh, fr.shape(), r.x, r.y, r.zoom);
+          const pc = (v) => `${r4(Math.max(0, v) * 100)}%`;
+          view = `inset(${pc(tp)} ${pc(1 - l - w)} ${pc(1 - tp - h)} ${pc(l)})`;
+        }
+      }
+      if (el.style.objectViewBox !== view) {
+        el.style.objectViewBox = view;
+        el.style.objectFit = view ? 'fill' : '';
+      }
+    }));
+  }
+  /* the shape changed (Sequence Settings, its undo, another cut), or a picture's size arrived */
+  function onShapeChange() {
+    lastStyle = '';
+    apply();          // the Effect Controls are built again by app.js's own 'frame' listener
+  }
+  document.addEventListener('loadedmetadata', () => { if (!wideFrame()) reframeLook(liveId ? (TL() || {}).byId && TL().byId(liveId) : null); }, true);
+  document.addEventListener('load', (e) => { if (e.target && e.target.id === 'monPoster' && !wideFrame()) reframeLook(liveId && TL() ? TL().byId(liveId) : null); }, true);
+  (function watchFrame() {
+    const t = TL();
+    if (!t || typeof t.on !== 'function') { setTimeout(watchFrame, 250); return; }
+    t.on('frame', onShapeChange);
+    if (window.rcFrame) window.rcFrame.paint();
+  }());
+
   function apply() {
     const t = TL();
     liveId = monitorShot();
@@ -1051,6 +1100,7 @@
         el.style.opacity = opacity;
       }));
     }
+    reframeLook(seg);
     const lv = typeof g('liveVideo') === 'function' ? g('liveVideo')() : null;
     if (lv) {
       // One owner for an element's level (meters.js rcAudio): the shot's Volume is the
@@ -1138,6 +1188,7 @@
   const SECTIONS = [
     { key: 'motion', name: 'Motion', fx: true },
     { key: 'opacity', name: 'Opacity', fx: true },
+    { key: 'reframe', name: 'Reframe', fx: true, shaped: true },   // only in a 9:16 / 1:1 cut
     { key: 'time', name: 'Time Remapping', fx: true },
     { key: 'volume', name: 'Volume', fx: true },
     { key: 'lumetri', name: 'Lumetri Color', fx: true, colour: true },
@@ -1207,6 +1258,8 @@
         // needs 177.8 %). Hidden otherwise: nothing new in view.
         + '<div class="ec-row ec-fillrow" data-row="fillscale" hidden><span class="ec-name"></span>'
         + '<button type="button" class="ec-fillbtn" data-fillscale title="set Scale so the turned picture covers the frame (a quarter turn leaves it small, with black bars)">Fill the frame</button></div>';
+    } else if (s.key === 'reframe') {
+      body = ['reframe_x', 'reframe_y', 'reframe_zoom'].map((k) => row(BK(k))).join('');
     } else if (s.key === 'opacity') body = animRow('opacity', 'Opacity', valInput('opacity'), 'opacity', BK('opacity').hover);
     else if (s.key === 'volume') body = animRow('volume_db', 'Level', valInput('volume_db'), 'volume_db', BK('volume_db').hover);
     else if (s.key === 'time') {
@@ -1521,7 +1574,7 @@
       ? SECTIONS.filter((s) => s.key === 'motion' || s.key === 'opacity').map((s) => sectionHtml(s, true)).join('')
         + '<div class="ec-empty ec-ovnote" data-testid="ec-ovnote" title="the export conforms a V2+ clip as shot and composites it over the tracks below by its Opacity">'
         + 'Lumetri Color, Volume and Time Remapping apply to V1 shots: a clip on V2+ renders as shot, picture only.</div>'
-      : SECTIONS.map((s) => sectionHtml(s, gen)).join('');
+      : SECTIONS.filter((s) => !s.shaped || (!gen && !wideFrame())).map((s) => sectionHtml(s, gen)).join('');
     if (opts.overlay) wrap.dataset.ov = String(seg && seg.id);
     const slot = (n) => wrap.querySelector(`[data-slot="${n}"]`);
     if (speed && slot('speed')) slot('speed').appendChild(speed);

@@ -277,6 +277,13 @@ body.ws-resizing.col { cursor: col-resize; } body.ws-resizing.row { cursor: row-
              container-type: size; }
 .screen, .mon { position: relative; flex: none; background: #000; overflow: hidden;
                 aspect-ratio: 16 / 9; width: min(100cqw, calc(100cqh * 16 / 9)); }
+/* The Program takes the cut's own frame shape (wave 25 VERTICAL, app/static/frame.js sets
+   --fw / --fh: 16 / 9 unless the cut is 9:16 or 1:1); letterboxed in the panel, never
+   stretched. A shaped frame FILLS with the shot (cover, the centre crop), the reframe of
+   a shot moving the crop (effects.js `reframeLook`) — the export crops the same window. */
+.screen { --fw: 16; --fh: 9; aspect-ratio: var(--fw) / var(--fh);
+          width: min(100cqw, calc(100cqh * var(--fw) / var(--fh))); }
+.screen[data-frame] video, .screen[data-frame] canvas#gradeCanvas, .screen[data-frame] #monPoster { object-fit: cover; }
 .screen video, .mon video { position: absolute; inset: 0; width: 100%; height: 100%; display: none;
                 object-fit: contain; }
 .screen video.live, .mon video.live { display: block; }

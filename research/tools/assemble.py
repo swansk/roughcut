@@ -64,6 +64,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from roughcut import colour, edits, effects, fx    # noqa: E402  (after sys.path)
+from roughcut import frame as framemod             # noqa: E402  (wave 25 VERTICAL: the frame's shape)
 from roughcut import limiter                       # noqa: E402  (wave 23 FILM: the true-peak stage)
 from roughcut import tracks as tracksmod           # noqa: E402
 from roughcut import vfx as vfxmod                 # noqa: E402
@@ -409,7 +410,8 @@ def input_args(src: Path, orient: str, gpu: dict | None) -> list[str]:
 
 def conform_chain(video: dict, gpu: dict | None, normalise: str | None,
                   speed: float = 1.0, restart: bool = False,
-                  lead: float | None = None) -> list[str]:
+                  lead: float | None = None,
+                  reframe: tuple[float, float, float] | None = None) -> list[str]:
     """Normalise (CPU path), the retime, then the scale / pad / fps conform. On the GPU
     path the scale is `scale_cuda` straight off the decoder, then the frames come down.
 
@@ -417,8 +419,15 @@ def conform_chain(video: dict, gpu: dict | None, normalise: str | None,
     the timestamps move so the in (plus SEEK_TOL_S) is 0 — at a speed, the source
     seconds from it divided by the speed — and `fps` starts there, each film frame the
     last source frame at or before its time (`round=up`): the in's own frame first,
-    whatever its time's rounding. Without one, the read starts at the in as it did."""
+    whatever its time's rounding. Without one, the read starts at the in as it did.
+
+    A 9:16 or 1:1 cut (`video["fill"]`, wave 25 VERTICAL) FILLS the frame instead of fitting
+    and padding it: the scale covers the frame (`increase`), then `frame.fill_filters` cuts
+    the shot's window out of it (`reframe`: x, y, zoom, `frame.window`'s numbers; None the
+    centre). A 16:9 cut takes the branch it always had, filter for filter."""
     w, h = video["w"], video["h"]
+    fill = bool(video.get("fill"))
+    ratio = "increase" if fill else "decrease"
     # An export's own Frame Size (`--size`, verdict 9 punch 5) is scaled with Lanczos, on
     # the GPU and the CPU alike: a 4K GoPro frame taken to 1280×720 is a 3× reduction, and
     # Lanczos keeps the detail bicubic softens without the aliasing a cheaper kernel leaves
@@ -427,7 +436,7 @@ def conform_chain(video: dict, gpu: dict | None, normalise: str | None,
     algo = video.get("scaler") or "bicubic"
     chain = []
     if gpu:
-        chain += [f"scale_cuda={w}:{h}:force_original_aspect_ratio=decrease:"
+        chain += [f"scale_cuda={w}:{h}:force_original_aspect_ratio={ratio}:"
                   f"format=yuv420p:interp_algo={algo}", "hwdownload", "format=yuv420p"]
         if gpu["flip"]:
             chain += ["hflip", "vflip"]
@@ -444,8 +453,12 @@ def conform_chain(video: dict, gpu: dict | None, normalise: str | None,
     elif restart:
         chain.append("setpts=PTS-STARTPTS")
     if not gpu:
-        chain.append(f"scale={w}:{h}:force_original_aspect_ratio=decrease"
+        chain.append(f"scale={w}:{h}:force_original_aspect_ratio={ratio}"
                      + (f":flags={algo}" if video.get("scaler") else ""))
+    if fill:
+        rx, ry, rz = reframe or (0.5, 0.5, 1.0)
+        chain += [*framemod.fill_filters(w, h, rx, ry, rz), fps]
+        return chain
     chain += [f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2", fps]
     return chain
 
@@ -1733,7 +1746,8 @@ def video_filter(video: dict, normalise: str | None = None,
     (`conform_chain`); a full-range source with no LUT is put in limited range here,
     which the CPU path's `format=yuv420p` did by converting from `yuvj420p`. `lead`:
     the read was sought early (`seek_plan`) and starts on the in's own frame."""
-    chain = conform_chain(video, gpu, normalise, speed, lead=lead)
+    chain = conform_chain(video, gpu, normalise, speed, lead=lead,
+                          reframe=framemod.reframe_of(controls) if video.get("fill") else None)
     if gpu and gpu["full"] and not lut:
         chain.append(FULL_TO_LIMITED)
     chain.append(lut if lut else "format=yuv420p")
@@ -2577,7 +2591,8 @@ def frame_size(text: str | None) -> tuple[int, int] | None:
 def resolve_video_profile(name: str, footage: Path, segments: list[dict],
                           fps_override: str | None = None,
                           size_override: tuple[int, int] | None = None,
-                          bitrate_kbps: int | None = None) -> dict:
+                          bitrate_kbps: int | None = None,
+                          shape: str | None = None) -> dict:
     """The concrete {w, h, fps, preset, crf, audio_bitrate, timescale} for `cut()`.
     `fps_override` (`--fps`, the sequence's rate the board asks an export for) wins
     over the profile's own rate; `size_override` (`--size`, the Export dialog's Frame
@@ -2598,6 +2613,12 @@ def resolve_video_profile(name: str, footage: Path, segments: list[dict],
     if fps_override:
         fps = fps_text(rate_of(fps_override))
     extra: dict = {}
+    if shape and not framemod.is_wide(shape):
+        # a 9:16 / 1:1 cut (wave 25 VERTICAL): the frame whose short side is the 16:9
+        # frame's height, and every shot fills it; an export's own Frame Size wins below
+        w, h = framemod.reshape(shape, max(w, h), min(w, h))
+        extra["fill"] = True
+        extra["shape"] = shape
     if size_override:
         w, h = size_override
         extra["scaler"] = "lanczos"
@@ -2875,7 +2896,8 @@ def main() -> int:
         print(f"error: --bitrate {args.bitrate:g} is not 0.1-400 Mbps", file=sys.stderr)
         return 2
     video = resolve_video_profile(args.profile, args.footage, segments, args.fps, size,
-                                  round(args.bitrate * 1000) if args.bitrate else None)
+                                  round(args.bitrate * 1000) if args.bitrate else None,
+                                  framemod.shape_of(edl))
     rate = rate_of(video["fps"])
     spans = frame_spans(segments, rate)
     film_s = float(spans[-1][1] / rate) if spans else 0.0
