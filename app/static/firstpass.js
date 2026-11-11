@@ -195,9 +195,12 @@
       $('.fp-panel', host).addEventListener('input', (e) => {
         if (e.target.matches('.fp-brief')) FP.brief = e.target.value;
         else if (e.target.matches('.fp-lentype')) {
-          const sec = parseLen(e.target.value);
+          const chk = lenCheck(e.target.value);
+          const sec = chk.sec;
           FP.len = sec;
-          e.target.classList.toggle('bad', !!e.target.value.trim() && sec == null);
+          e.target.classList.toggle('bad', !!chk.msg);
+          const lm = $('.fp-lenmsg', host);
+          if (lm) lm.textContent = chk.msg;
           $$('.fp-chip', host).forEach((c) => {
             const on = sec != null && Number(c.dataset.sec) === sec;
             c.classList.toggle('on', on);
@@ -433,16 +436,20 @@
     return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
   }
   /* "1", "1.5" (minutes), "90s", "2m", "1:30" -> seconds, or null */
-  function parseLen(text) {
+  const LEN_RANGE = 'a length from 10 seconds to 30 minutes, like 60, 90 s, 1:30 or 2 min';
+  function lenCheck(text) {
     const t = String(text || '').trim().toLowerCase();
-    if (!t) return null;
+    if (!t) return { sec: null, msg: '' };
     let m = /^(\d+):(\d{1,2})$/.exec(t);
     let sec = null;
     if (m) sec = Number(m[1]) * 60 + Number(m[2]);
-    else if ((m = /^(\d+(?:\.\d+)?)\s*(s|sec|secs|seconds?)$/.exec(t))) sec = Number(m[1]);
-    else if ((m = /^(\d+(?:\.\d+)?)\s*(m|min|mins|minutes?)?$/.exec(t))) sec = Number(m[1]) * 60;
-    return sec != null && sec >= 10 && sec <= 1800 ? Math.round(sec) : null;
+    else if ((m = /^(\d+(?:\.\d+)?)\s*(m|min|mins|minutes?)$/.exec(t))) sec = Number(m[1]) * 60;
+    else if ((m = /^(\d+(?:\.\d+)?)\s*(s|sec|secs|seconds?)?$/.exec(t))) sec = Number(m[1]);   // a bare number is seconds
+    if (sec == null) return { sec: null, msg: `Not a length I can read: type ${LEN_RANGE}.` };
+    if (sec < 10 || sec > 1800) return { sec: null, msg: `${lenWords(Math.round(sec))} is outside what I can aim for: ${LEN_RANGE}.` };
+    return { sec: Math.round(sec), msg: '' };
   }
+  function parseLen(text) { return lenCheck(text).sec; }
   function aimWords(w) {
     const p = (w && w.plain) || {};
     return FP.len ? `about ${lenWords(FP.len)}` : (p.aims || 'about 2–3 min');
@@ -453,14 +460,14 @@
       `<button type="button" class="fp-chip${cur === sec ? ' on' : ''}" data-fp="len" data-sec="${sec}"`
       + ` data-testid="firstpass-len-${sec}" aria-pressed="${cur === sec}">${t}</button>`).join('');
     const custom = cur && !LENGTHS.some(([sec]) => sec === cur) ? lenWords(cur) : '';
-    const typed = `<input type="text" class="fp-lentype" data-testid="firstpass-len-typed" placeholder="or type: 90 s"`
+    const typed = `<input type="text" class="fp-lentype" data-testid="firstpass-len-typed" placeholder="or type: 60, 1:30, 2 min"`
       + ` aria-label="film length, typed" value="${esc(custom)}" size="11" spellcheck="false" autocomplete="off">`;
     const now = FP.len ? '' : ` <span class="fp-note">It aims for ${esc((w.plain || {}).aims || 'about 2–3 min')} unless you pick a length.</span>`;
     const brief = hasCut ? '' : `<label class="fp-q" for="fpBrief">What is the film, and who is it for? <i>optional</i></label>`
       + `<textarea id="fpBrief" class="fp-brief" data-testid="firstpass-brief" rows="2"`
       + ` placeholder="a ski trip with friends, to send round the group chat">${esc(FP.brief)}</textarea>`;
     return `<div class="fp-ask" data-testid="firstpass-ask"><div class="fp-q">How long should the film be?</div>`
-      + `<div class="fp-chips">${chips}${typed}</div>${now}${brief}</div>`;
+      + `<div class="fp-chips">${chips}${typed}</div><div class="fp-lenmsg bad" data-testid="firstpass-len-msg" role="status"></div>${now}${brief}</div>`;
   }
 
   /* The first layer: what it does and how closely it looks, in plain words (K5 stands: the
@@ -468,10 +475,23 @@
   function plainHtml(s, w) {
     const p = w.plain;
     if (!p || !Array.isArray(p.lines)) return '';
-    const lines = p.lines.slice(0, 2).concat([`Picks the best moments and proposes a rough cut ${aimWords(w)} long.`]);
+    let lines = p.lines.slice(0, 2).concat([`Picks the best moments and proposes a rough cut ${aimWords(w)} long.`]);
     const t = w.time || {};
-    const eta = t.words ? `<div class="fp-eta" data-testid="firstpass-eta" title="${esc(t.basis || '')}">`
-      + `Takes ${esc(t.words)} <span class="fp-note">(${esc(t.basis || '')})</span></div>` : '';
+    // While it runs the bullets come from the SAME counts as the progress line and the header pill
+    // (round 2, COLD-04: "heard 26/26" above "7 of 26 clips still to do"); the time is what is left.
+    const ci = running(s) && s.counts && s.counts.index;
+    let live = false;
+    if (ci && ci.clips) {
+      live = true;
+      const lk = ci.look_need || ci.clips;
+      lines = [`Listens to every clip and writes down what is said: heard ${ci.listened || 0} of ${ci.clips}.`,
+        `Looks at a frame every ${p.look_s || 4} seconds, then takes a closer look at the busiest moments: looked at ${ci.looked || 0} of ${lk}.`,
+        lines[2]];
+    }
+    const pj = live ? passJobOf(s) : null;
+    const eta = live ? (pj && pj.eta ? `<div class="fp-eta" data-testid="firstpass-eta">${esc(pj.eta)}</div>` : '')
+      : t.words ? `<div class="fp-eta" data-testid="firstpass-eta" title="${esc(t.basis || '')}">`
+        + `Takes ${esc(t.words)} <span class="fp-note">(${esc(t.basis || '')})</span></div>` : '';
     return `<div class="fp-plain" data-testid="firstpass-plain"><ul>`
       + lines.map((l) => `<li>${esc(l)}</li>`).join('') + `</ul>`
       + `<div class="fp-safe">${esc(p.safe || 'Nothing changes until you accept it.')}</div>${eta}</div>`;
@@ -616,7 +636,7 @@
     const w = s.would || {};
     const typed = $('.fp-lentype', mount());
     if (typed && typed.value.trim() && parseLen(typed.value) == null) {
-      FP.err = 'the length is not something I can read: try 90 s, 1:30 or 2 min';
+      FP.err = `Fix the length first, or clear the box to aim for ${aimWords(w)}: ${LEN_RANGE}.`;
       paintPanel();
       return;
     }
@@ -633,6 +653,12 @@
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
       FP.watching = d.job;
+      // the brief is the film's: the Assistant's "What is this film about?" shows it, editable
+      const story = document.getElementById('story');
+      if (story && FP.brief.trim() && !story.value.trim()) {
+        story.value = FP.brief.trim();
+        story.dispatchEvent(new Event('input', { bubbles: true }));
+      }
       if (window.rcAimsChanged && d.target) window.rcAimsChanged(d);
       const k = (d.keep || []).length;
       const kept = ((FP.s && FP.s.would && FP.s.would.keep) || []).filter((r) => (d.keep || []).includes(r.id));
@@ -850,10 +876,33 @@
     unsupported: 'A closer look found nothing there: the picture does not back up the description of this shot. Check it before you keep it.',
     contradicted: 'A closer look found something different from what the description says.',
   };
-  function chipHtml(c) {
-    const plain = CHIP_PLAIN[c.level] || c.name;
-    return `<i class="cert c-${esc(c.level)}" data-level="${esc(c.level)}" data-testid="certainty-chip" `
-      + `title="${esc(`${plain}\n${c.name}: ${c.title}`)}">${esc(c.chip)}</i>`;
+  /* Round 2 (COLD-10, words): "unsupported" in red on the first shot the AI itself chose read as
+   * an error, on a shot kept for its talk or its place in the story. Only how the list shows it
+   * changes (the checker's record does not): the badge stays red when the shot is in the cut
+   * BECAUSE of the claim that failed (its own reason line repeats the claim), else it is quiet
+   * and says the shot is there for its own reason. */
+  const STOP = new Set(['that', 'this', 'with', 'from', 'then', 'they', 'there', 'their', 'have', 'into', 'while',
+    'about', 'where', 'which', 'what', 'when', 'shot', 'shots', 'clip', 'frame', 'frames', 'looks', 'show', 'shows']);
+  const words = (t) => new Set(String(t || '').toLowerCase().match(/[a-z]{4,}/g) || []);
+  function keptForClaim(claim, why) {
+    if (!claim) return false;
+    const a = words(claim), b = words(why);
+    let n = 0;
+    a.forEach((w) => { if (b.has(w) && !STOP.has(w)) n += 1; });
+    return n >= 2;
+  }
+  function chipHtml(c, why) {
+    let plain = CHIP_PLAIN[c.level] || c.name;
+    let cls = `c-${esc(c.level)}`, label = c.chip, quiet = '';
+    if (c.level === 'unsupported' && why) {
+      const m = /Claimed: [\u201c"]([^\u201d"]*)/.exec(c.title || '');
+      if (!keptForClaim(m && m[1], why)) {
+        cls = 'c-quiet'; quiet = ' data-quiet="1"'; label = 'not confirmed';
+        plain = `Not confirmed by a closer look${m ? ` (it did not find “${m[1]}”)` : ''}, but this shot is in the cut for its own reason: ${why.slice(0, 160)}`;
+      }
+    }
+    return `<i class="cert ${cls}" data-level="${esc(c.level)}"${quiet} data-testid="certainty-chip" `
+      + `title="${esc(`${plain}\n${c.name}: ${c.title}`)}">${esc(label)}</i>`;
   }
   /* The one-line legend under a list of chips: only the levels on screen. */
   function legend(root) {
@@ -875,7 +924,7 @@
       if (el.textContent !== text) el.textContent = text;
     });
   }
-  const CHIP_LEGEND = { unchecked: 'not looked at closely yet', unsupported: 'a closer look found nothing there',
+  const CHIP_LEGEND = { unchecked: 'not looked at closely yet', unsupported: 'a closer look found nothing there (shown quietly as "not confirmed" on a shot kept for its own reason)',
     contradicted: 'a closer look found something else', once: 'one close look saw it', felt: 'a sensor measured it',
     heard: 'found in the words' };
   async function decorate(root) {
@@ -893,7 +942,11 @@
     } catch (e) { out = null; }
     slots.forEach((el, i) => {
       const c = out && out[i];
-      if (c && c.level && el.isConnected) el.innerHTML = chipHtml(c);
+      if (c && c.level && el.isConnected) {
+        const cell = el.closest('td.pw, .pw');
+        const why = cell ? cell.textContent.replace(el.textContent, '').trim() : '';
+        el.innerHTML = chipHtml(c, why);
+      }
     });
     legend(root);
   }

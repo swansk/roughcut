@@ -280,7 +280,7 @@
     el.setAttribute('aria-label', 'how long should the film be');
     el.innerHTML = '<div class="nf-len-q">How long should the film be?</div><div class="nf-len-chips">'
       + LENGTHS.map(([s, t]) => `<button type="button" data-sec="${s}" data-testid="length-${s}">${t}</button>`).join('')
-      + '</div><div class="nf-len-type"><input type="text" placeholder="or type: 90 s, 1:30" aria-label="film length, typed" '
+      + '</div><div class="nf-len-type"><input type="text" placeholder="or type: 60, 1:30, 2 min" aria-label="film length, typed" '
       + 'data-testid="length-typed" size="12" spellcheck="false"><button type="button" class="nf-len-set">Set</button></div>'
       + '<div class="nf-len-err bad" role="status"></div>'
       + '<div class="nf-len-note">The first cut and every Ask after it are written to this length.</div>';
@@ -298,7 +298,7 @@
     const typed = $('input', el);
     const go = () => {
       const sec = window.rcFirstPass && window.rcFirstPass.parseLen ? window.rcFirstPass.parseLen(typed.value) : null;
-      if (sec == null) { err.textContent = 'not a length I can read: try 90 s, 1:30 or 2 min'; return; }
+      if (sec == null) { err.textContent = 'Type a length from 10 seconds to 30 minutes, like 60, 90 s, 1:30 or 2 min.'; return; }
       setLen(sec, err);
     };
     $('.nf-len-set', el).addEventListener('click', go);

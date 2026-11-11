@@ -175,7 +175,7 @@
   // px, 438 measured at 1440 and 1920, its foot wrapped Stop onto a second row, its summary
   // took two lines and 7 rows showed with a clip's detail open), taken the same way.
   const SELECTS_W = 592, SEL_TLW = 460, INDEX_W = SELECTS_W;
-  const SPLIT = 4;
+    const SPLIT = 4;
   // The Assistant's full-height column (a waiting proposal's `ptall`, app.js; an AI review's
   // `aitall`, actions.js) takes its width from the Source monitor, the Program keeping its
   // own. Verdict 11, punch 8: at 1440 that left the Source 343 px (the judge's look review)
@@ -234,6 +234,15 @@
       const give = frac.insp === DEFAULTS.insp ? insp - Math.max(MIN.insp, tabsNeed('#pInspector')) : 0;
       if (short > 0 && short <= give) { insp -= short; room += short; }
       proj = wide;
+      // Round 2 (cold's COLD-18: "the Timeline under half the width"): while a wide tab is open
+      // the Timeline gets all that can be spared toward half the window. Effect Controls gives down to its tabs whole, the wide panel keeps its working size; both come back
+      // when the editor returns to Project, since this is recomputed from the fractions.
+      const half = Math.round(a.W / 2);
+      let deficit = half - (room - proj);
+      if (deficit > 0) {
+        const takeI = Math.min(deficit, Math.max(0, insp - Math.max(MIN.insp, tabsNeed('#pInspector'))));
+        insp -= takeI; room += takeI; deficit -= takeI;
+      }
     }
     px = { proj, insp, src, top, prog: a.W - SPLIT - src, tl: a.H - SPLIT - top, tlw: room - proj };
     root.setProperty('--c-proj', `${proj}px`);

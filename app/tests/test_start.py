@@ -237,7 +237,9 @@ def test_the_first_pass_is_written_to_the_length_the_editor_chose(fp, model):
     assert all("54-66 seconds" in p for p in prompts), [p[:400] for p in prompts]
     assert not any("120-180 seconds" in p for p in prompts)
     assert any("a ski trip with friends at Copper" in p for p in prompts)
-    assert json.loads(server.STATE["edl"].read_text(encoding="utf-8"))["target_s"] == [54, 66]
+    edl = json.loads(server.STATE["edl"].read_text(encoding="utf-8"))
+    assert edl["target_s"] == [54, 66]
+    assert edl["story"] == "a ski trip with friends at Copper, for the group chat"   # the film's own brief
     assert fp.get("/api/firstpass").json()["would"]["target_want_s"] == 60.0
 
 
