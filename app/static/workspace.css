@@ -800,3 +800,15 @@ input.hands-tc { box-sizing: border-box; padding: 0 4px; background: #101013; co
                  border: 1px solid var(--accent, #4a9df8); border-radius: 2px; outline: none;
                  font-variant-numeric: tabular-nums; }
 input.hands-tc.bad { border-color: var(--bad, #e46a6a); }
+
+/* Effect Controls for a selected transition (app.js renderTransitionPanel) */
+.trpanel { display: grid; gap: 8px; padding: 10px 12px; font-size: 12px; }
+.trpanel .trname { color: var(--text); font-weight: 600; }
+.trpanel label { display: flex; align-items: center; gap: 8px; color: var(--dim); }
+.trpanel input { width: 72px; background: #101013; color: var(--text); border: 1px solid var(--line); padding: 2px 4px; font: inherit; }
+.trpanel .tralign, .trpanel .trsplit { color: var(--dim); }
+.trpanel b { color: var(--text); font-weight: 600; }
+.trpanel .trdel { justify-self: start; }
+
+/* an emptied cut draws over the old frame the monitor still holds */
+#progEmpty:not([hidden]) { background: #0b0b0d; z-index: 3; }

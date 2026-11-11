@@ -777,7 +777,7 @@
       return true;
     }
     settle();
-    const at = clamp(tl.state.playhead, 0, tl.total());
+    const at = segs().length ? clamp(tl.state.playhead, 0, tl.total()) : 0;
     const seg = { clip: s.clip, in: s.in, out: s.out, why: s.why };
     // The track targets (the headers): an upper video track (V2, V3…) targeted and V1 not
     // lays the clip over the cut there at the playhead — those tracks are not magnetic,
@@ -805,13 +805,9 @@
       tl.setPlayhead(clamp(end, 0, tl.total()));
       say(`${kind === 'insert' ? 'inserted' : 'overwrote with'} ${stem(s.clip)} ${tl.fmt(s.in)}–${tl.fmt(s.out)} at ${tl.tc(where)} · from ${s.from}`);
     };
-    // The playhead past the film's end (verdict 5, punch 8): the clip lands there, the
-    // time between the end and it a gap on V1, as Premiere leaves one (tl.placeAt).
-    const ph = Math.max(0, tl.state.playhead || 0);
-    if (tl.placeAt && ph > tl.total() + tl.frame() / 2) {
-      tl.placeAt(seg, ph, kind).then((id) => landed(id, ph));
-      return true;
-    }
+    // The playhead past the film's end goes to the end, and on an empty sequence an insert or overwrite
+    // goes to 0 whatever the playhead says: no black gap is left unless the editor made one
+    // (round 2, the finder: the first insert into an emptied cut landed behind 34 s of nothing).
     landed(kind === 'insert' ? tl.insertAt(seg, at) : tl.overwrite(seg, at), at);
     return true;
   }
@@ -880,7 +876,7 @@
       say(`nothing to paste — select shots and press ${L('⌘C')} (or ${L('⌘X')}) first`);
       return true;
     }
-    return pasteAt(clamp(tl.state.playhead, 0, tl.total()), false);
+    return pasteAt(segs().length ? clamp(tl.state.playhead, 0, tl.total()) : 0, false);
   }
 
   /* Paste at film time `at`. Inside a shot it splits it (an insert, as Premiere's) and the toast says

@@ -131,9 +131,14 @@
   const textActive = (e) => { if (e.target instanceof Element && e.target.matches(TEXT)) textAt = performance.now(); };
   document.addEventListener('focusin', textActive, true);
   document.addEventListener('input', textActive, true);
-  document.addEventListener('keydown', textActive, true);
+  document.addEventListener('keydown', (e) => {
+    textActive(e);
+    // leaving a box on purpose (Esc, Enter, Tab) is not a slip: the keys after it are shortcuts
+    if (['Escape', 'Enter', 'Tab'].includes(e.key) && e.target instanceof Element && e.target.matches(TEXT)) textAt = -1e9;
+  }, true);
   document.addEventListener('pointerdown', (e) => {
-    if (e.target instanceof Element && e.target.closest('#tl, .screen, .transport')) textAt = -1e9;
+    // a click on the timeline, the monitors or a button (a dialog's Save) is the editor choosing where the keys go
+    if (e.target instanceof Element && e.target.closest('#tl, .screen, .transport, button, a, select, summary')) textAt = -1e9;
   }, true);
 
   const run = { n: 0, at: -1e9, snap: null, tripped: false };
@@ -178,9 +183,41 @@
     return true;
   }
 
+  /* ------------------------------------------------------------ dialogs and popovers */
+  /* While a dialog or popover the board opened is up (the Export dialog, New film, Sequence
+   * Settings, the marker dialog, Project Settings, the key sheet, the first pass's panel), keys
+   * that did not start inside it are not the board's: FINISH-12, "O" opened the cut switcher
+   * behind the Export dialog. Escape closes a modal dialog from anywhere. */
+  function openLayer() {
+    const all = [...document.querySelectorAll('dialog[open], #keysOverlay:not([hidden]), [role=dialog]')];
+    const live = all.filter((d) => d.tagName === 'DIALOG' || d.id === 'keysOverlay'
+      || (!d.hidden && d.getAttribute('aria-modal') !== 'false' && d.offsetParent !== null));
+    return live.length ? live[live.length - 1] : null;
+  }
+  function layerKey(e, layer) {
+    const t = e.target;
+    if (t instanceof Element && layer.contains(t)) return false;        // its own keys
+    const k = e.key;
+    if (MODIFIER_ONLY.has(k) || k === 'Tab' || /^F\d+$/.test(k)) return false;
+    if ((e.ctrlKey || e.metaKey) && !EDIT_COMBOS.test(k)) return false;  // reload, zoom, devtools
+    if (k === 'Escape') {
+      if (layer.tagName === 'DIALOG') {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        if (layer.dispatchEvent(new Event('cancel', { cancelable: true }))) layer.close();
+      }
+      return false;                                                       // the others close themselves
+    }
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    return true;
+  }
+
   window.addEventListener('keydown', (e) => {
     const menu = $('#menubar .menu.open');
     if (menu) { menuKey(e, menu); return; }
+    const layer = openLayer();
+    if (layer && layerKey(e, layer)) return;
     if (typingBurst(e)) { e.preventDefault(); e.stopImmediatePropagation(); return; }
     const t = e.target;
     if (t instanceof Element && t.matches(CONTROL)) controlKey(e, t);

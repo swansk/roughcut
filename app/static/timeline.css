@@ -593,7 +593,7 @@ body.rc-playing #tl .blk .tl-h::after { transition: none; }
 
 /* Transitions on the cut (verdict 6, punch 6): Premiere's box spanning the edit — over
    both blocks, under the trim lane's edge column (z 3), its ends drag its length. */
-#tl .tl-trans { position: absolute; top: 18%; bottom: 18%; z-index: 2; box-sizing: border-box;
+#tl .tl-trans { position: absolute; top: 18%; bottom: 18%; z-index: 4; box-sizing: border-box;
                 display: flex; align-items: center; justify-content: center; overflow: hidden;
                 border-radius: 3px; cursor: pointer; font-size: 10px; color: #f4f0ff;
                 background: linear-gradient(to bottom right, hsl(265 45% 46% / .92) 49.5%,
@@ -638,3 +638,6 @@ body.rc-playing #tl .blk .tl-h::after { transition: none; }
 #tl .tl-editsel { position: absolute; top: -2px; bottom: -2px; width: 6px; margin-left: -3px; z-index: 2;
                   border: 2px solid var(--warn, #e66); border-top: 0; border-bottom: 0; pointer-events: none; }
 #tl .tl-editsel[hidden] { display: none; }
+
+/* a transition sits over the edit's trim handles (z 3), so a click on a narrow one selects it
+   instead of landing on a handle under it (round 2 FINISH-10: it "selected the shot") */
