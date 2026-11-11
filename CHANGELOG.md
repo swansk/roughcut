@@ -12,6 +12,7 @@ same commit. Releases move entries into a dated version section.
 - Wave 24 GATEFIX, twelve tests the merged lanes broke: the Program's catch-up after an edit no longer collapses the editor's selection to the shot under the playhead (a split's two halves stay selected, an inserted shot stays the selection; `tl.cueQuiet`); a click on a ghost shot keeps the monitor's "proposal · …" line; Next's "Refine" chip is shown again over a cut (the first-cut hide is for the "Cut" offer only); a quiet board writes no undo history (nothing to take back, nothing sent). Tests: the Index panel keeps >= 8 rows at 1440x900 with the clip's found block (10 at 1080), the chip walk holds no cut, two reads made race-free, and the AI scope chip test hands the chip back to the selection ("Follow my selection again") after asking about a clip, as wave 23 DIRECT made a chosen scope stay.
 
 ### Fixed
+- Round 2: the finishing editor's retest (12 fixed, 8 better, 5 same of 26) recorded; wave 25 adds lanes MATCH and MUSIC.
 - Round 2: the clumsy editor's retest (12 fixed, 7 better, 2 same of 21) recorded.
 - Round 2: the words editor's retest (15 fixed, 5 better, 2 same of 23) recorded; wave 25 adds lane DIRECT2 from it.
 - Round 2 of the Copper editors: the cold-start editor's retest (13 fixed, 5 better, 2 same, 0 worse) and new findings recorded under judge/copper-editors/round2/.
