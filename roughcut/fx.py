@@ -435,7 +435,7 @@ def validate_effect(raw: Any, segments: list[dict], clips: dict[str, dict] | Non
     if raw.get("limits"):
         out["limits"] = str(raw["limits"])[:300]      # what the effect could not do
     if keep_meta:
-        for k in ("created", "reference", "verify", "history", "window", "previous", "bounds", "replaces", "auto_accepted"):
+        for k in ("created", "reference", "verify", "history", "window", "previous", "bounds", "replaces", "auto_accepted", "hand_log", "hand_seq"):
             if raw.get(k) is not None:
                 out[k] = raw[k]
     return out

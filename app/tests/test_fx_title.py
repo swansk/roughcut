@@ -687,3 +687,99 @@ def test_an_end_card_is_not_the_title_it_contains():
     same = _effect(events=[{"t": 3.0, "x": 0.5, "y": 0.5}], overlay=title["overlay"])
     assert fx.text_key(title) != fx.text_key(card) and fx.text_key(title) == fx.text_key(same)
     assert fx.removal_targets("remove the Copper Mountain title", [title, card]) == [title, card]
+
+
+# ---------------------------------------------------------------- hand changes are undo steps; Stop (round 3, clumsy)
+
+def _design_one(client, project, answers, note="a title"):
+    s1, _ = _seed(project, client)
+    answers.append(GOOD)
+    return _wait(client, client.post("/api/fx/design", json={"shot": s1, "note": note}).json()["job"])["result"]["id"], s1
+
+
+def test_each_hand_change_is_a_step_that_goes_back_and_forth_on_its_own(server_fx, client):
+    project, answers, calls = server_fx
+    fx_id, _ = _design_one(client, project, answers)
+    client.post("/api/fx/accept", json={"id": fx_id})
+    a = client.post("/api/fx/hand", json={"id": fx_id, "edit": {"size": 0.6}}).json()
+    b = client.post("/api/fx/hand", json={"id": fx_id, "edit": {"x": 0.4, "y": 0.6}}).json()
+    c = client.post("/api/fx/hand", json={"id": fx_id, "edit": {"words": {"COPPER 2026": "Copper"}}}).json()
+    seqs = [x["hand_entry"]["seq"] for x in (a, b, c)]
+    assert seqs == [1, 2, 3] and c["hand_entry"]["tag"] == f"proposal:fxhand:{fx_id}:3"   # `proposal:` tags are kept past a reload
+    # a change that changes nothing is not a step
+    assert "hand_entry" not in client.post("/api/fx/hand", json={"id": fx_id, "edit": {"size": 0.6}}).json()
+    cur = lambda: _effects(client)[fx_id]
+    r = client.post("/api/fx/hand/step", json={"id": fx_id, "seq": 3, "back": True})
+    assert r.status_code == 200
+    assert [s["text"] for s in cur()["overlay"]["shapes"] if s["type"] == "text"] == ["COPPER 2026"]
+    assert cur()["overlay"]["size"] == 0.6 and cur()["events"][0]["x"] == 0.4            # the others stay
+    assert cur()["status"] == "accepted"                                                   # the title is still there
+    client.post("/api/fx/hand/step", json={"id": fx_id, "seq": 2, "back": True})
+    assert cur()["events"][0]["x"] == 0.5 and cur()["overlay"]["size"] == 0.6
+    client.post("/api/fx/hand/step", json={"id": fx_id, "seq": 2, "back": False})        # redo
+    assert cur()["events"][0]["x"] == 0.4
+    # a step that is not where the effect stands is refused, not forced
+    r = client.post("/api/fx/hand/step", json={"id": fx_id, "seq": 1, "back": True})
+    assert r.status_code == 409
+    assert client.post("/api/fx/hand/step", json={"id": fx_id, "seq": 99, "back": True}).status_code == 404
+    # kept with the effect: it is in the record on disk, so it survives a reload and a restart
+    import server
+    on_disk = json.loads((server.fx_home() / f"{fx_id}.json").read_text(encoding="utf-8"))
+    assert [x["seq"] for x in on_disk["hand_log"]] == [1, 2, 3] and on_disk["hand_seq"] == 3
+
+
+def test_stopping_a_revise_during_a_re_ask_keeps_nothing_half_made(server_fx, client, monkeypatch):
+    import threading
+    project, answers, calls = server_fx
+    fx_id, _ = _design_one(client, project, answers)
+    before = json.dumps(_effects(client)[fx_id]["overlay"], sort_keys=True)
+    gate, inside = threading.Event(), threading.Event()
+    called = []
+
+    def slow_revise(effect, note, segments, clips=None):
+        on = getattr(fx._WATCH, "on", None)
+        on("the revise call", False)
+        called.append(note)
+        inside.set()
+        gate.wait(10)
+        on("the revise call", True)                     # (a stopped call's answer is not used)
+        return fx.validate_effect({**effect, "name": "NEW", "overlay": COPPER_2026["overlay"]}, segments, clips)
+
+    monkeypatch.setattr(fx, "revise", slow_revise)
+    job = client.post("/api/fx/revise", json={"id": fx_id, "note": "make it bigger"}).json()["job"]
+    assert inside.wait(10)
+    r = client.post(f"/api/jobs/{job}/stop").json()
+    assert r["stopped"] is True and "the effect is as it was" in r["said"]
+    gate.set()
+    snap = _wait(client, job) if client.get(f"/api/job/{job}").json()["state"] not in ("cancelled",) else client.get(f"/api/job/{job}").json()
+    time.sleep(0.5)
+    assert client.get(f"/api/job/{job}").json()["state"] == "cancelled"
+    assert json.dumps(_effects(client)[fx_id]["overlay"], sort_keys=True) == before and _effects(client)[fx_id]["name"] != "NEW"
+    assert len(called) == 1                              # no re-ask round started after the Stop
+
+
+def test_stopping_a_design_says_no_title_was_added_and_leaves_no_effect(server_fx, client, monkeypatch):
+    import threading
+    project, answers, calls = server_fx
+    s1, _ = _seed(project, client)
+    gate, inside = threading.Event(), threading.Event()
+
+    def slow_design(note, seg, clip, sidecar, **kw):
+        on = getattr(fx._WATCH, "on", None)
+        on("the design call", False)
+        inside.set()
+        gate.wait(10)
+        on("the design call", True)
+        raise AssertionError("never reached after a stop")
+
+    monkeypatch.setattr(fx, "design", slow_design)
+    job = client.post("/api/fx/design", json={"shot": s1, "note": "a COPPER 2026 title"}).json()["job"]
+    assert inside.wait(10)
+    listed = [j for j in client.get("/api/jobs").json()["jobs"] if j["id"] == job][0]
+    assert listed["fx_kind"] == "design" and listed["state"] == "running"        # the pill has what it needs to show a ×
+    r = client.post(f"/api/jobs/{job}/stop").json()
+    assert r["stopped"] is True and r["said"] == "Stopped: no title was added."
+    gate.set()
+    time.sleep(0.5)
+    assert client.get(f"/api/job/{job}").json()["state"] == "cancelled"
+    assert _effects(client) == {}

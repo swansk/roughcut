@@ -33,6 +33,8 @@ OFF_FRAME = {
     "sound": None,
 }
 calls = {"design": 0, "revise": 0}
+import threading  # noqa: E402
+GATE = {"on": None, "inside": threading.Event()}      # a design waits here when a test sets GATE["on"]
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -42,6 +44,14 @@ def stubbed_fx():
     def design(note, seg, clip, sidecar, *, reference=None, place=False, proxy=None,
                workdir=None, segments=None, clips=None, window=None):
         calls["design"] += 1
+        hook = getattr(fx._WATCH, "on", None)
+        if hook:
+            hook("the design call", False)
+        if GATE["on"] is not None:
+            GATE["inside"].set()
+            GATE["on"].wait(20)
+            if hook:
+                hook("the design call", True)
         e = json.loads(json.dumps(OFF_FRAME))
         e.update(shot=seg["id"], clip=seg["clip"], note=note, created="2026-11-11T09:00:00",
                  history=[{"note": note, "at": "2026-11-11T09:00:00"}])
@@ -138,3 +148,98 @@ def test_an_accepted_title_says_it_is_inside_the_frame_and_never_stays_silent(pa
     page.locator("#fx button[data-act=accept]").first.click()
     wait_effect(page, e["id"], "e => e.status === 'accepted'")
     page.wait_for_function("(document.querySelector('#fx .fxcheck') || {}).textContent === '✓ inside the frame'", timeout=20000)
+
+
+def _accept_fitted(page):
+    e = _design(page)
+    page.locator("#fx button[data-act=fit]").first.click()
+    wait_effect(page, e["id"], "e => e.bounds && e.bounds.ok === true")
+    page.locator("#fx button[data-act=accept]").first.click()
+    wait_effect(page, e["id"], "e => e.status === 'accepted'")
+    page.locator("#fx button[data-act=hand]").first.click()
+    page.wait_for_selector("#fx .fxhand")
+    return e
+
+
+def _fire(page, sel, value):
+    page.locator(sel).evaluate("(el, v) => { el.value = v; el.dispatchEvent(new Event('change', {bubbles: true})); }", value)
+
+
+def test_each_hand_change_to_a_title_is_one_undo_step_and_survives_a_reload(page):
+    e = _accept_fitted(page)
+    fid = e["id"]
+    _fire(page, "#fx .fxhand input[data-hand=size]", "0.5")
+    wait_effect(page, fid, "e => e.overlay.size === 0.5")
+    page.wait_for_selector("#fx .fxhand")
+    _fire(page, "#fx .fxhand input[data-hand=x]", "40")
+    wait_effect(page, fid, "e => Math.abs(e.events[0].x - 0.4) < 0.001")
+    page.wait_for_selector("#fx .fxhand")
+    w = page.locator("#fx .fxhand textarea[data-hand=words]")
+    w.fill("Copper")
+    w.dispatch_event("change")
+    wait_effect(page, fid, "e => e.overlay.shapes.some(s => s.text === 'Copper')")
+    assert "title words" in (page.locator("#undo").get_attribute("title") or "")
+    page.evaluate("document.activeElement && document.activeElement.blur()")
+    page.keyboard.press("Control+z")                                   # the words only
+    wait_effect(page, fid, "e => e.overlay.shapes.every(s => s.text === 'COPPER 2026')")
+    got = wait_effect(page, fid, "e => e.status === 'accepted'")     # the title is still there
+    assert got["overlay"]["size"] == 0.5 and abs(got["events"][0]["x"] - 0.4) < 0.001
+    assert "title place" in (page.locator("#undo").get_attribute("title") or "")
+    page.keyboard.press("Control+z")                                   # the place only
+    got = wait_effect(page, fid, "e => Math.abs(e.events[0].x - 0.4) > 0.01")
+    assert got["overlay"]["size"] == 0.5
+    page.keyboard.press("Control+Shift+z")                             # redo puts the place back
+    wait_effect(page, fid, "e => Math.abs(e.events[0].x - 0.4) < 0.001")
+    # past a reload: the step is still on the board's stack and still goes back on its own
+    page.wait_for_timeout(800)
+    page.reload()
+    page.wait_for_selector("#tl .blk")
+    page.wait_for_function("window.fx && fx.ready")
+    page.wait_for_function("(document.querySelector('#undo').getAttribute('title') || '').includes('title place')", timeout=10000)
+    page.evaluate("document.activeElement && document.activeElement.blur()")
+    page.keyboard.press("Control+z")
+    got = wait_effect(page, fid, "e => Math.abs(e.events[0].x - 0.4) > 0.01")
+    assert got["status"] == "accepted" and got["overlay"]["size"] == 0.5
+
+
+def test_a_number_box_that_cannot_read_what_was_typed_keeps_its_value_and_says_why(page):
+    e = _accept_fitted(page)
+    fid = e["id"]
+    before = wait_effect(page, fid, "e => true")["events"][0]
+    box = page.locator("#fx .fxhand input[data-hand=y]")
+    good = box.input_value()
+    for junk in ("", "500", "-3"):
+        _fire(page, "#fx .fxhand input[data-hand=y]", junk)
+        assert box.input_value() == good                                     # the last good value is kept
+        assert "bad" in (box.get_attribute("class") or "")
+        assert "a number from 0 to 100" in page.locator("#fx .fxhandmsg").inner_text()
+    assert wait_effect(page, fid, "e => true")["events"][0]["y"] == before["y"]    # nothing was sent
+    _fire(page, "#fx .fxhand input[data-hand=y]", "60")
+    wait_effect(page, fid, "e => Math.abs(e.events[0].y - 0.6) < 0.001")
+    page.wait_for_selector("#fx .fxhand")
+    assert page.locator("#fx .fxhandmsg").inner_text() == ""
+    for k, junk, rule in (("start", "-1", "seconds"), ("length", "0", "0.1 to 30")):
+        _fire(page, f"#fx .fxhand input[data-hand={k}]", junk)
+        assert rule in page.locator("#fx .fxhandmsg").inner_text()
+
+
+def test_a_title_being_designed_has_a_stop_on_its_card_and_its_pill_and_leaves_nothing(page):
+    GATE["on"], GATE["inside"] = threading.Event(), threading.Event()
+    try:
+        open_fx(page)
+        open_design(page)
+        page.locator("#fxNote").fill("a COPPER 2026 title")
+        page.locator("#fxDesign").click()
+        page.wait_for_selector("#fx #fxStop", timeout=10000)                   # from the first second
+        assert GATE["inside"].wait(10)
+        page.wait_for_selector("#progress .job[data-kind=fx] .jx", timeout=10000)    # and on the header's pill
+        page.locator("#fx #fxStop").click()
+        page.wait_for_function("(document.querySelector('#fx .fxstopped') || {}).textContent === 'stopped: no title was added.'",
+                               timeout=10000)
+        GATE["on"].set()
+        page.wait_for_timeout(800)
+        assert effects(page) == []
+        assert page.locator("#fx #fxStop").count() == 0
+    finally:
+        GATE["on"].set()
+        GATE["on"] = None

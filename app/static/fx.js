@@ -96,6 +96,7 @@
     whyOpen: new Set(),      // cards whose "why? ▸" is open (the note, the checklist, links)
     momentsOpen: new Set(),  // accepted cards whose "adjust the moments ▸" is open
     autoAccept: true,        // a title an accepted AI answer asked for is accepted with it (acceptWithAnswer)
+    stopped: null,           // {text}: what the last Stop did, said on the card for a while
     handOpen: new Set(),     // cards whose "edit by hand ▸" (words, size, place, in / out) is open
     guides: null,            // {id, until}: the title-safe guides on the monitor while a hand control is used
     checking: new Set(),     // effects whose free check is queued or running (server jobs)
@@ -427,6 +428,14 @@
       forget(asks.undone.splice(0));
       const x = followUndo.expect;
       if (x && ev.label === x.label) { followUndo.done.push(x); followUndo.expect = null; }
+      return;
+    }
+    if ((ev.kind === 'undo' || ev.kind === 'redo') && /^proposal:fxhand:/.test(String(ev.tag || ''))) {
+      // a hand change to a title: that one step goes back or forth on the server
+      const [, , id, seq] = String(ev.tag).split(':');
+      api('POST', '/api/fx/hand/step', { id, seq: Number(seq), back: ev.kind === 'undo' })
+        .then((n) => { const k = S.effects.findIndex((x) => x.id === id); if (k >= 0) S.effects[k] = n; paint(true); draw(); refresh(); })
+        .catch((err) => say(err.message));
       return;
     }
     if (ev.kind === 'undo' || ev.kind === 'redo') followAsks(ev);    // an AI accept's design requests
@@ -1105,7 +1114,7 @@
     const into = sg ? Math.max(0, Number(ev.t) - Number(sg.in)) : 0;
     const words = textsOf(e).map((t) => `<label class="fxh"><span>words</span>`
       + `<textarea rows="${Math.min(4, t.split('\n').length)}" maxlength="80" data-hand="words" data-from="${esc(t)}">${esc(t)}</textarea></label>`).join('');
-    const num = (k, v, min, max, step, unit) => `<input type="number" data-hand="${k}" min="${min}" max="${max}" step="${step}" value="${v}" aria-label="${k}">${unit}`;
+    const num = (k, v, min, max, step, unit) => `<input type="number" data-hand="${k}" data-good="${v}" min="${min}" max="${max}" step="${step}" value="${v}" aria-label="${k}">${unit}`;
     const arrows = [['←', -1, 0], ['↑', 0, -1], ['↓', 0, 1], ['→', 1, 0]]
       .map(([a, dx, dy]) => `<button class="nudge" data-hand-nudge="${dx},${dy}" title="one percent of the frame">${a}</button>`).join('');
     return `<div class="fxhand" data-hand-for="${esc(e.id)}">`
@@ -1114,9 +1123,15 @@
       + `<output>${Number(e.overlay.size).toFixed(2)}</output></label>`
       + `<div class="fxh"><span>place</span>x ${num('x', Math.round(ev.x * 100), 0, 100, 1, '%')} y ${num('y', Math.round(ev.y * 100), 0, 100, 1, '%')} ${arrows}</div>`
       + `<div class="fxh"><span>in / out</span>in ${num('start', into.toFixed(2), 0, 3600, 0.04, ' s')} for ${num('length', Number(e.overlay.duration).toFixed(2), 0.1, 30, 0.1, ' s')}</div>`
+      + `<div class="fxh fxhandmsg-row"><span></span><span class="fxhandmsg" role="status"></span></div>`
       + `<div class="fxh"><span></span><button data-act="fit" title="shrink and move it until the words are inside the safe area — no model is asked">Fit to frame</button>`
       + `<span class="hint">no model call · the dashed line on the monitor is the title-safe area</span></div>`
       + `</div>`;
+  }
+
+  function handWhat(edit) {
+    return 'words' in edit ? 'words' : 'size' in edit ? 'size' : ('x' in edit || 'y' in edit || 'nudge' in edit) ? 'place'
+      : ('start' in edit || 'length' in edit) ? 'in / out' : edit.fit ? 'fit to frame' : 'change';
   }
 
   async function hand(e, edit) {
@@ -1124,6 +1139,12 @@
       const n = await api('POST', '/api/fx/hand', { id: e.id, edit });
       const k = S.effects.findIndex((x) => x.id === e.id);
       if (k >= 0) S.effects[k] = n; else S.effects.push(n);
+      // one undo step per hand change (CLUMSY-13): the entry's tag names the effect and the
+      // step, and the history the server keeps (`proposal:` tags are kept past a reload)
+      if (n.hand_entry) {
+        const t = TL();
+        if (t && typeof t.mark === 'function') t.mark(`title ${handWhat(edit)}`, n.hand_entry.tag);
+      }
       S.checking.add(e.id);
       showGuides(e.id);
       paint(true);
@@ -1564,7 +1585,7 @@
       S.window && [S.window.t0, S.window.t1],
       S.peaks.length,
       S.sketch && [S.sketch.strokes.length, S.sketch.goal], [...S.iterOpen], S.place,
-      [...S.whyOpen], [...S.momentsOpen], [...S.handOpen], [...S.checking], S.designOpen,
+      [...S.whyOpen], [...S.momentsOpen], [...S.handOpen], S.stopped && S.stopped.text, [...S.checking], S.designOpen,
       S.busy && [S.busy.id, S.busy.state, S.busy.detail, S.busy.milestone],
     ]);
   }
@@ -1598,7 +1619,13 @@
     // must not drop it from the waiting proposal's Preview between flow.js's passes
     const blue = el.querySelector('.is-next[data-fx]');
     const blueFx = blue ? blue.dataset.fx : null;
+    // a design or a revision in progress has its Stop from its first second to its last (CLUMSY-12);
+    // what a Stop did stays said on the card for a while: "stopped: no title was added"
+    const run = S.busy && ['design', 'revise'].includes(S.busy.fx_kind) ? S.busy : null;
     el.innerHTML = `<div class="fxtitle">Shot ${i + 1} · ${len.toFixed(1)} s</div>`
+      + (run ? `<div class="fxbusy" data-job="${esc(run.id)}"><span>${esc(run.label)}${run.detail ? ` — ${esc(run.detail)}` : ''}</span>`
+        + `<div class="grow"></div><button id="fxStop" title="end the call; nothing half-made is kept">Stop</button></div>` : '')
+      + (S.stopped ? `<div class="fxstopped" role="status">${esc(S.stopped.text)}</div>` : '')
       + list.map(cardHtml).join('')
       + (designShown(list) ? designHtml()
         : `<button class="fxlink" id="fxAdd">+ design another effect</button>`);
@@ -1630,6 +1657,25 @@
     };
   }
 
+  async function stopRunning(btn) {
+    const row = btn.closest('.fxbusy');
+    const id = row ? row.dataset.job : null;
+    if (!id) return;
+    btn.disabled = true;
+    btn.textContent = 'Stopping…';
+    try {
+      const d = await api('POST', `/api/jobs/${encodeURIComponent(id)}/stop`);
+      const text = (d && d.said && /^Stopped/.test(d.said)) ? d.said.replace(/^Stopped:/, 'stopped:') : 'stopped: nothing was added';
+      S.stopped = { text };
+      say(d && d.said ? d.said : text, 5000);
+      setTimeout(() => { if (S.stopped && S.stopped.text === text) { S.stopped = null; paint(true); } }, 15000);
+    } catch (err) {
+      say(err.message);
+    }
+    await pollJobs();
+    paint(true);
+  }
+
   function onToolPointerDown(e) {
     if (e.target.closest('#fxBar')) onBarDown(e);
   }
@@ -1639,6 +1685,7 @@
     const btn = e.target.closest('button');
     if (btn) {
       if (btn.id === 'fxDesign') { design(); return; }
+      if (btn.id === 'fxStop') { stopRunning(btn); return; }
       if (btn.id === 'fxSketch') { startSketch(); return; }
       if (btn.id === 'fxUse') { useSketch(); return; }
       if (btn.id === 'fxCancel') { cancelSketch(); return; }
@@ -1688,6 +1735,22 @@
     }
   }
 
+  const NUMBER_RULE = { x: [0, 100, 'a number from 0 to 100'], y: [0, 100, 'a number from 0 to 100'],
+    size: [0.1, 1.6, 'a number from 0.1 to 1.6'], start: [0, 3600, 'a number of seconds, 0 or more'],
+    length: [0.1, 30, 'a number of seconds from 0.1 to 30'] };
+  /* Why a number box's text cannot be used, or '' (typing "abc" read as 0 and put a title half
+   * off the frame): empty, not a number, or outside what the field takes. */
+  function badNumber(t, k) {
+    const rule = NUMBER_RULE[k];
+    if (!rule) return '';
+    const raw = String(t.value).trim();
+    const v = Number(raw);
+    if (raw === '' || !Number.isFinite(v) || v < rule[0] || v > rule[1] || (t.validity && t.validity.badInput)) {
+      return `“${raw || 'nothing'}” is not ${rule[2]} — the last value is kept`;
+    }
+    return '';
+  }
+
   function onHandInput(e) {
     const t = e.target, k = t.dataset.hand;
     const card = t.closest('.fxcard');
@@ -1695,6 +1758,19 @@
     if (!eff || !k) return;
     if (t.type === 'range') { const o = t.parentElement.querySelector('output'); if (o) o.textContent = Number(t.value).toFixed(2); }
     if (e.type !== 'change') { showGuides(eff.id); return; }     // typed or dragged: guides now, the call on release
+    const bad = badNumber(t, k);
+    const msg = t.closest('.fxhand').querySelector('.fxhandmsg');
+    if (bad) {                                  // keep the last good value, say why (CLUMSY-14)
+      t.value = t.dataset.good != null ? t.dataset.good : t.defaultValue;
+      t.classList.add('bad');
+      t.setAttribute('aria-invalid', 'true');
+      if (msg) msg.textContent = bad;
+      return;
+    }
+    t.classList.remove('bad');
+    t.removeAttribute('aria-invalid');
+    if (msg) msg.textContent = '';
+    if (t.type === 'number') t.dataset.good = t.value;
     let edit = null;
     if (k === 'words') {
       const to = t.value.split('\n').map((l) => l.trim()).filter(Boolean).join('\n');

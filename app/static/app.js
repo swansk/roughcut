@@ -195,14 +195,17 @@ function paintJob(row, j) {
   if (j.state === 'cancelled') { row.style.display = 'none'; return; }
   row.style.display = '';
   let x = row.querySelector('.jx');
-  if (CANCEL[j.kind] && j.state === 'running') {
+  // a title's design or revision (fx jobs that call the model) stops like any AI job; a check does not
+  const stoppable = CANCEL[j.kind] || (j.kind === 'fx' && (j.fx_kind === 'design' || j.fx_kind === 'revise') ? stopUrl : null);
+  if (stoppable && j.state === 'running') {
     if (!x) {
       x = document.createElement('span');
       x.className = 'jx';
       x.setAttribute('role', 'button');
       x.dataset.testid = 'job-cancel';
       x.textContent = '×';
-      x.title = j.kind === 'index' ? 'Stop indexing (proxies, close looks, previews): what finished is kept'
+      x.title = j.kind === 'fx' ? 'Stop this design: the call is ended and nothing half-made is kept'
+        : j.kind === 'index' ? 'Stop indexing (proxies, close looks, previews): what finished is kept'
         : j.kind === 'ask' ? 'Stop this AI job: the call is ended, no proposal is kept, the cut stays as it is'
           : j.kind === 'find' || j.kind === 'deep' ? 'Stop this AI job: nothing it read is kept'
             : 'Stop this render: nothing is written';
@@ -214,8 +217,8 @@ function paintJob(row, j) {
         x.textContent = '…';
         x.title = 'stopping…';
         try {
-          const r = await fetch(CANCEL[j.kind](j), { method: 'POST' });
-          const d = j.kind === 'ask' || j.kind === 'find' || j.kind === 'deep' ? await r.json() : null;
+          const r = await fetch(stoppable(j), { method: 'POST' });
+          const d = ['ask', 'find', 'deep', 'fx'].includes(j.kind) ? await r.json() : null;
           if (d && d.said) toast(d.said, 5000);
         } catch (_) { /* the next poll says how it went */ }
         const seen = strip.seen.get(j.id);

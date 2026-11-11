@@ -148,3 +148,8 @@
 #fx .fxh output { min-width: 34px; font-variant-numeric: tabular-nums; }
 #fx .fxh .nudge { padding: 0 8px; line-height: 20px; }
 #fx .fxreads { font-size: 12px; margin-top: 3px; color: var(--dim); }
+#fx .fxh input.bad { border-color: var(--bad); outline: 1px solid var(--bad); }
+#fx .fxhandmsg { color: var(--bad); font-size: 12px; }
+#fx .fxbusy { display: flex; align-items: center; gap: 8px; font-size: 12px; margin: 0 0 8px; }
+#fx .fxbusy .grow { flex: 1; }
+#fx .fxstopped { font-size: 12px; margin: 0 0 8px; color: var(--dim); }
