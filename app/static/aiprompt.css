@@ -67,6 +67,7 @@
 :is(#aiPrompt, #aiUnder) .aip-status b { font-weight: 600; color: var(--text, #dcdcdf); font-variant-numeric: tabular-nums; }
 :is(#aiPrompt, #aiUnder) .aip-what { color: var(--text, #dcdcdf); }
 :is(#aiPrompt, #aiUnder) .aip-cost { color: var(--dim, #94949c); }
+:is(#aiPrompt, #aiUnder) .aip-look { color: var(--text, #e8e8ec); min-width: 0; max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 :is(#aiPrompt, #aiUnder) .aip-cost::before { content: "· "; }
 :is(#aiPrompt, #aiUnder) .aip-dim .aip-cost::before { content: ""; }
 :is(#aiPrompt, #aiUnder) .aip-dim { color: var(--dim, #94949c); }

@@ -28,16 +28,20 @@ a model call; an assist is one short call, so it is not asked for a bar.)
 
 from __future__ import annotations
 
+import json
 import re
-from typing import Any
+from typing import Any, Callable
 
 from . import actions, config
+from . import look as lookmod
 from . import tracks as tracksmod
 from .firstpass import clip_name, cost_words
 from .inference import complete
 
 ROLE = config.ROLE_SKELETON            # a judgement about the footage, as the Ask is
 KINDS = ("ops", "plan", "answer")
+SAW_MAX = 900                          # what the frames showed, with their times, stored on the record
+TIME_IN = re.compile(r"\b\d{1,3}:\d{2}")
 TEXT_MAX = 2000                        # the editor's words, and an answer's text
 PLAN_MAX = 6000                        # a re-cut's brief: whole, cut at a sentence if it ever must be
 HISTORY_CHARS = 6000                   # earlier turns the prompt carries (~1,500 tokens), newest first
@@ -62,6 +66,22 @@ OUTPUT_SCHEMA = {
     "note": "kind plan only: the brief for re-cutting the whole sequence",
     "from_picture": "true when the edit depends on what the pictures show (a wobble, a jump, where "
                     "the camera points), which you know only from the written descriptions",
+}
+
+# Only when the ask rests on the picture (look_allowed): a first answer may be a request to look.
+LOOK_SCHEMA = {
+    **OUTPUT_SCHEMA,
+    "kind": "ops | plan | answer | look",
+    "looks": [{"shots": [9, 10, 11], "film_in": 38.0, "film_out": 43.0,
+               "clip": "a Source clip, with in and out in clip seconds, when the cut has no such shot",
+               "reason": "what you need to see there", "density": "fine | medium | coarse"}],
+    "scan": "true for a question about the whole cut: every shot is looked at, about a frame a second",
+}
+
+# The answer after a look: the same shapes, no further look, and what the frames showed.
+AFTER_LOOK_SCHEMA = {
+    **OUTPUT_SCHEMA,
+    "saw": "what the frames showed, each claim with the film time of the frame it is on (0:40.6)",
 }
 
 
@@ -99,6 +119,30 @@ PICTURE_WORDS = re.compile(
     r"\b(wobble|wobbly|shak(?:e|y|ing)|jitter\w*|blur\w*|out of focus|in focus|jump(?:s|ing|ed)?|"
     r"tricks?|crash\w*|falls?|flips?|spins?|horizon|tilt\w*|framing|looks? (?:like|good|bad)|"
     r"on screen|visible|snow spray|best skiing|lens|camera (?:is|was|at|on|pointing|pointed))\b", re.I)
+# More cues that the ask rests on the picture, for the gate on looking (`look_allowed`).
+SEEN_WORDS = re.compile(
+    r"\b(ground|sky|pointing|points?|waves?|waving|smil\w+|upside|sideways|nobody|empty|in (?:the )?frame|"
+    r"in shot|shows?|showing|seen|sees?|look(?:s|ing)?|faces?|people|person|trees?|lift|spray|biggest|"
+    r"best|worst|brightest|darkest|level|crooked|straight|dirty|glove|finger|thumb|sunset|sunrise)\b", re.I)
+# Words that mean the words and the index already answer it (a length, a swap, a spoken line):
+# no look, because looks cost time (EYES (c)).
+PLAIN_WORDS = re.compile(
+    r"\b(swap|swapped|reorder|rearrange|shorten|tighten|longer|shorter|seconds?|minutes?|length|duration|trim|"
+    r"fade|dissolve|transition|export|marker|colou?r|warmer|cooler|saturation|contrast|volume|louder|"
+    r"quieter|music|title|says?|said|spoken|sentence|transcript|undo|redo|first|last|second|third|move|"
+    r"delete shot|remove shot|speed up|duplicate|rename)\b", re.I)
+
+
+def look_allowed(text: str) -> bool:
+    """Whether the AI may ask to look at frames for these words. Not when the ask is plainly
+    about the cut's structure or its sound and says nothing about the picture ("swap the
+    last two shots", "trim shot 3 to 5 seconds", "end on the funniest line"): the index
+    answers those, and a look costs time. Everything else the model decides."""
+    text = text or ""
+    pic = bool(PICTURE_WORDS.search(text) or SEEN_WORDS.search(text))
+    return pic or not PLAIN_WORDS.search(text)
+
+
 FROM_TEXT = ("From the written descriptions and the transcript; I have not looked at these frames. ")
 LOOKED_WORDS = re.compile(r"not looked|have not seen|haven't looked|did not look|from the description|"
                           r"written description", re.I)
@@ -382,8 +426,82 @@ def history_block(history: list[str] | None) -> str:
             "refer to these turns.\n" + "\n".join(history) + "\n\n")
 
 
+SEE_BLIND = """## What you can and cannot see
+You have the transcript and a short written description of each clip. You have not looked at
+any frames. When an edit depends on what the pictures show (a wobble, a jump, where the camera
+points, how a shot looks), set `from_picture` to true, and say in the first words of `summary`
+that it comes from the descriptions and not from the frames. When the editor states a visual
+fact the descriptions do not confirm ("there is a wobble at 0:40"), do not cut on it: answer
+(kind "answer") that you cannot find it in what you know, say what the descriptions do say near
+that time, and offer to look closer (AI › Look deeper at the selected clip). A clip the
+description marks as unconfirmed stays unconfirmed in your answer. Never say you saw something.
+If the request contradicts itself ("make it longer but cut half the shots"), answer with the
+conflict and ask which matters more, instead of doing one of them.
+"""
+
+SEE_CAN_LOOK = """## What you can and cannot see
+You have the transcript and a short written description of each clip. You have not looked at
+any frames, but you can ask to, once, and it costs the editor time (a minute or so), so only
+when the answer rests on what the picture shows (a wobble, a jump, where the camera points,
+"the shot where he waves", whether the horizon is level, anything the descriptions do not
+already settle). When the words, the shot table or the descriptions answer the ask, do NOT
+look: a length, a swap, a spoken line, a colour, a transition, an effect.
+To look, answer `kind: "look"` instead of an answer, with:
+  - `looks`: up to {items} ranges, each by `shots` (the row numbers above), or by `film_in` /
+    `film_out` (seconds of the sequence, as the editor reads the timeline), or by `clip` with
+    `in` / `out` (a Source clip not in the cut); each with a `reason` and a `density`:
+    "fine" 4 frames a second (a wobble, a landing, a quick move), "medium" 2, "coarse" 1.
+    Pick the smallest ranges that settle it; a range is at most {span:g} s.
+  - or `scan: true` for a question about the whole cut ("every bit where the camera points at
+    the ground or the sky", "every shot where nobody is in frame"): every shot is looked at,
+    about a frame a second.
+A question about "the biggest", "the best" or "every" something in the picture, with no time
+or shot named, is a scan: someone saying "jump" in the audio is not a jump in the frames, so
+do not pick shots from the words alone. A named time or shot is a range.
+The server cuts the frames from the proxies, caps them ({cap} frames for ranges, {scan} for a
+scan; it thins the density to fit and tells the editor), shows the editor what it is looking
+at, and calls you again with the contact sheets and this same conversation. You then answer
+for real (ops, plan or answer); you cannot ask to look a second time.
+If the editor states a visual fact ("a wobble at about 0:40"), look at it before you cut on
+it, and take a wide enough range: their time is approximate. If you do not look,
+do not cut on it: answer (kind "answer") that you cannot find it in what you know. Any edit that rests on the
+picture sets `from_picture` to true and says in the first words of `summary` that it comes from
+the descriptions and not from the frames. Never say you saw something you
+did not look at. A clip the description marks as unconfirmed stays unconfirmed unless the
+frames you look at settle it.
+If the request contradicts itself ("make it longer but cut half the shots"), answer with the
+conflict and ask which matters more, instead of doing one of them.
+""".format(items=lookmod.MAX_ITEMS, span=lookmod.MAX_SPAN_S, cap=lookmod.LOOK_CAP, scan=lookmod.SCAN_CAP)
+
+
+def looked_block(first: dict, plan_: dict, sheets_text: str, said: str) -> str:
+    """What the second call is given beside the first prompt: its own request, the plan the
+    server cut it down to, and the account of the attached sheets."""
+    return f"""
+
+## Your first answer (a request to look)
+{said}
+
+## What you are now looking at
+The server cut your request to: {plan_['words']}. The frames are attached as contact sheets
+(images), in film order. Each cell is one frame, labelled in yellow with its film time
+(minutes:seconds.tenth, as the timeline reads) and its shot number, e.g. "0:40.6 s9". The
+frames are stills, {('about a frame a second' if plan_['scan'] else 'some a quarter of a second apart')}: camera shake shows as
+framing that jumps or smears between neighbours, not as motion you can watch.
+{sheets_text}
+
+Now answer for real. Say what the frames show, and put the film time of the frame beside
+each thing you say you saw ("the camera jolts at 0:40.6"). Claim nothing about a time you
+did not look at. If you looked and did not find what the editor described, answer
+(kind "answer") that you looked at those times and did not find it, and say what you did see;
+propose no edit. Put what the frames showed, with their times, in `saw`. Your ops use the
+shot ids and clip seconds from the tables above (a film time is the shot's film start plus
+the offset into it). You cannot look again.
+"""
+
+
 def build_prompt(text: str, scope: dict | None, state: dict, clips: dict,
-                 history: list[str] | None = None) -> str:
+                 history: list[str] | None = None, look_ok: bool = False) -> str:
     looks = ", ".join(state.get("looks") or []) or "(none)"
     presets = ", ".join(f"{k} ({v})" for k, v in (state.get("presets") or {}).items()) or "(none)"
     return f"""{history_block(history)}The editor asked now:
@@ -430,18 +548,7 @@ Export presets: {presets}
 ## The app (name only what exists here)
 {APP_GUIDE}
 
-## What you can and cannot see
-You have the transcript and a short written description of each clip. You have not looked at
-any frames. When an edit depends on what the pictures show (a wobble, a jump, where the camera
-points, how a shot looks), set `from_picture` to true, and say in the first words of `summary`
-that it comes from the descriptions and not from the frames. When the editor states a visual
-fact the descriptions do not confirm ("there is a wobble at 0:40"), do not cut on it: answer
-(kind "answer") that you cannot find it in what you know, say what the descriptions do say near
-that time, and offer to look closer (AI › Look deeper at the selected clip). A clip the
-description marks as unconfirmed stays unconfirmed in your answer. Never say you saw something.
-If the request contradicts itself ("make it longer but cut half the shots"), answer with the
-conflict and ask which matters more, instead of doing one of them.
-
+{SEE_CAN_LOOK if look_ok else SEE_BLIND}
 ## What to answer
 JSON with `kind`:
 - "ops": the request is one or more edits the tools above make. `ops` lists them in the
@@ -463,12 +570,21 @@ The editor reads `summary`, `text`, `note` and every design_effect `note`: there
 
 # ---------------------------------------------------------------- the answer
 
-def validate_answer(payload: Any) -> dict:
+def validate_answer(payload: Any, allow_look: bool = False, after_look: bool = False) -> dict:
     """The model's JSON, shaped: a kind, a summary, and the field that kind needs. The
-    ops themselves are checked by `actions.validate` (a bad op is refused, not re-asked)."""
+    ops themselves are checked by `actions.validate` (a bad op is refused, not re-asked).
+    `allow_look`: the first answer of an ask that may look may be `kind: "look"`.
+    `after_look`: the answer to the frames: no further look, and what it saw is told with
+    the film times of the frames."""
     if not isinstance(payload, dict):
         raise ValueError("expected an object with `kind`")
     kind = str(payload.get("kind") or "").strip().lower()
+    if kind == "look":
+        if not allow_look:
+            raise ValueError("`kind` look is not available now: answer from what you have"
+                             + (" and the frames you were given; you cannot look again" if after_look else
+                                " (the descriptions and the transcript), as ops, plan or answer"))
+        return {"kind": "look", **lookmod.clean_request(payload)}
     if kind not in KINDS:
         if isinstance(payload.get("ops"), list) and payload["ops"]:
             kind = "ops"
@@ -488,15 +604,28 @@ def validate_answer(payload: Any) -> dict:
             raise ValueError("kind answer needs `text`")
         out["text"] = fit(txt, TEXT_MAX)
     out["from_picture"] = payload.get("from_picture") is True
+    if after_look:
+        saw = str(payload.get("saw") or "").strip()
+        if kind == "ops" and not TIME_IN.search(saw):
+            raise ValueError("`saw` must say what the frames showed with the film time of each "
+                             "frame (like 0:40.6) when you propose an edit from them")
+        out["saw"] = fit(saw, SAW_MAX)
     return out
 
 
-def honest_summary(out: dict, text: str, flagged: bool) -> dict:
+def honest_summary(out: dict, text: str, flagged: bool, looked: dict | None = None) -> dict:
     """An edit that rests on the picture, from an AI that has only the descriptions, says so
     in its first line. The model is asked to; the editor's words and its own summary are
     checked here as well, because a model that writes "so the shot picks up just after the
     wobble" has not said it (WORDS-08, -17)."""
     summary = out.get("summary") or ""
+    if looked:
+        # it looked: the line says where, once, and the descriptions' disclaimer is not true
+        out["from_picture"] = True
+        out["from_descriptions"] = False
+        if "looked" not in summary[:60].lower():
+            out["summary"] = f"Looked at {looked['where']}: {summary}".strip()[:420]
+        return out
     rests = flagged or bool(PICTURE_WORDS.search(text or "")) or bool(PICTURE_WORDS.search(summary))
     out["from_picture"] = rests
     if rests and not LOOKED_WORDS.search(summary[:160]):
@@ -516,17 +645,49 @@ def estimate_cost(prompt: str) -> dict:
 
 
 def run(text: str, scope: dict | None, state: dict, clips: dict,
-        history: list[str] | None = None) -> dict:
-    """One call. Returns `{kind, summary, ops?, lines?, refused?, preview?, families?,
-    text?, note?, cost}`; raises `inference.InferenceError` / `ValueError` on a failed
-    call (the server's job marks itself failed with the sentence)."""
-    prompt = build_prompt(text, scope, state, clips, history)
-    result = complete(prompt, role=ROLE, schema=OUTPUT_SCHEMA, system=SYSTEM,
-                      validate=validate_answer, retries=1)
+        history: list[str] | None = None, looker: Callable[[dict, str], dict | None] | None = None) -> dict:
+    """One call, or two when the ask rests on the picture. Returns `{kind, summary, ops?,
+    lines?, refused?, preview?, families?, text?, note?, cost, looked?}`; raises
+    `inference.InferenceError` / `ValueError` on a failed call (the server's job marks
+    itself failed with the sentence).
+
+    `looker(request, prompt)` is the server's: given the model's look request it plans the
+    frames under the cap, tells the editor, cuts the sheets and returns `{plan, sheets,
+    images, block, record}` (or raises `look.Stopped`). Without one, or when `look_allowed`
+    says the words need no picture, the model is not offered the look at all."""
+    look_ok = looker is not None and look_allowed(text)
+    prompt = build_prompt(text, scope, state, clips, history, look_ok=look_ok)
+    result = complete(prompt, role=ROLE, schema=LOOK_SCHEMA if look_ok else OUTPUT_SCHEMA, system=SYSTEM,
+                      validate=lambda p: validate_answer(p, allow_look=look_ok), retries=1)
+    calls = [result]
     got = dict(result.content)
-    cost = {**cost_words(result.projected_usd), "projected_usd": round(result.projected_usd, 4),
-            "measured": True, "model": result.model,
-            "input_tokens": result.input_tokens, "output_tokens": result.output_tokens}
+    looked = None
+    if got["kind"] == "look":
+        req = {"scan": got["scan"], "looks": got["looks"]}
+        seen = looker(req, prompt)
+        if seen and seen.get("images"):
+            prompt2 = prompt + looked_block(req, seen["plan"], seen["block"], json.dumps(req))
+            second = complete(prompt2, role=ROLE, images=seen["images"], schema=AFTER_LOOK_SCHEMA,
+                              system=SYSTEM, retries=1, isolated=True,
+                              validate=lambda p: validate_answer(p, after_look=True))
+            calls.append(second)
+            got = dict(second.content)
+            looked = {**seen["record"], "saw": got.get("saw") or ""}
+        else:
+            second = complete(prompt + "\n\n## Your first answer (a request to look)\n" + json.dumps(req)
+                              + "\n\nNone of the ranges you named is in the cut, so nothing was looked at. "
+                                "Answer from the descriptions and the transcript, and say you have not looked.",
+                              role=ROLE, schema=OUTPUT_SCHEMA, system=SYSTEM, retries=1,
+                              validate=lambda p: validate_answer(p))
+            calls.append(second)
+            got = dict(second.content)
+    usd = sum(c.projected_usd for c in calls)
+    cost = {**cost_words(usd), "projected_usd": round(usd, 4),
+            "measured": True, "model": calls[-1].model,
+            "input_tokens": sum(c.input_tokens for c in calls),
+            "output_tokens": sum(c.output_tokens for c in calls)}
+    if len(calls) > 1:
+        cost["calls"] = len(calls)
     out: dict = {"kind": got["kind"], "summary": got.get("summary") or "", "cost": cost}
     if got["kind"] == "ops":
         checked = actions.check(got["ops"], state)
@@ -543,6 +704,12 @@ def run(text: str, scope: dict | None, state: dict, clips: dict,
     else:
         out["text"] = got["text"]
     if out["kind"] == "ops" and out.get("ops"):
-        out = honest_summary(out, text, bool(got.get("from_picture")))
+        out = honest_summary(out, text, bool(got.get("from_picture")), looked)
+    if looked:
+        out["looked"] = looked
+        if out["kind"] == "answer" and "looked" not in out["text"][:80].lower():
+            out["text"] = f"Looked at {looked['where']}. " + out["text"]
+        if looked.get("saw"):
+            looked["saw"] = name_shots(looked["saw"], state.get("segments") or [])
     # the editor's words name shots as the editor does, whatever the model wrote
     return _named(out, state.get("segments") or [])
