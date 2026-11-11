@@ -221,20 +221,21 @@ def test_the_inspector_carries_a_poster_not_a_video_stream(page):
 
 def test_trimming_the_in_point_moves_the_poster_without_one_frame_per_nudge(page):
     """A poster that lags a nudge by a moment is fine; one that fetches a frame on
-    every 0.25 s press is not. (The timeline's block catches up on the same settle,
+    every one-frame press is not. (The timeline's block catches up on the same settle,
     so two requests for the one frame is the ceiling.)"""
     asked: list[str] = []
     page.on("request",
             lambda r: asked.append(r.url) if "/media/poster/" in r.url else None)
     select_shot(page, 0)
     for _ in range(6):
-        page.keyboard.press("]")                   # in +0.25 — the strip has no trim buttons
-    assert page.evaluate("segs[0].in") == pytest.approx(2.5, abs=0.01)
+        page.keyboard.press("]")                   # in +1 frame — the strip has no trim buttons
+    landed = 1.0 + 6 / 24
+    assert page.evaluate("segs[0].in") == pytest.approx(landed, abs=0.01)
     page.wait_for_function(
-        "document.querySelector('#inspector img.poster').src.includes('t=2.50')",
+        "document.querySelector('#inspector img.poster').src.includes('t=1.25')",
         timeout=10000)
     page.wait_for_timeout(400)         # any straggler request would have started by now
-    assert any("t=2.50" in u for u in asked), asked
+    assert any("t=1.25" in u for u in asked), asked
     # (the other shot's own filmstrip poster is fetched when its block first scrolls into view,
     # whenever that lands: it is not the trimmed shot's frame, so only the trimmed clip counts)
     # and it counts frames, not requests: the inspector's, the monitor's rest still and the block
@@ -331,14 +332,14 @@ def test_edits_reach_the_disk_without_being_asked(page, project):
     page.locator("#story").fill("the milk is the running joke")
     page.evaluate("document.activeElement.blur()")   # the keys are the board's, not the story's
     select_shot(page, 0)
-    page.keyboard.press("}")                       # extend the out point
+    page.keyboard.press("Alt+BracketRight")        # extend the out point one frame (HANDS round 3)
     page.wait_for_function(
         "document.querySelector('#saveState').textContent.startsWith('saved')",
         timeout=8000)
 
     on_disk = json.loads(Path(project["edl"]).read_text(encoding="utf-8"))
     assert on_disk["story"] == "the milk is the running joke"
-    assert on_disk["segments"][0]["out"] == 3.25
+    assert on_disk["segments"][0]["out"] == pytest.approx(3.0 + 1 / 24, abs=1e-3)
 
 
 def test_the_cut_survives_a_reload(page):
