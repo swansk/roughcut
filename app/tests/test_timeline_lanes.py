@@ -581,13 +581,19 @@ def test_a_kept_row_or_a_find_result_dropped_on_v1_inserts_there(page, project):
     page.locator("#findQ").press("Enter")      # Enter finds (the Find button went, M16)
     page.wait_for_selector("#findResults .cand", timeout=15000)
     assert page.locator("#findResults .cand").first.get_attribute("draggable") == "true"
+    # the row that names CLIP_A (wave 25 FIND2: every row names its clip, and Find now reads the
+    # transcripts' word forms and the cut's own notes too, so which clip ranks first for "goodbye"
+    # is no longer this test's business: the payload of a row is the clip that row names)
     payload = page.evaluate("""() => {
-        const row = document.querySelector('#findResults .cand');
+        const rows = [...document.querySelectorAll('#findResults .cand')];
+        const row = rows.find((r) => /CLIP_A/.test(r.innerText)) || null;
+        if (!row) return {rows: rows.map((r) => r.innerText.slice(0, 60))};
         const dt = new DataTransfer();
         row.dispatchEvent(new DragEvent('dragstart', {bubbles: true, dataTransfer: dt}));
         return JSON.parse(dt.getData(tlLanes.MIME)); }""")
-    assert payload["clip"] == "CLIP_A.MP4"
-    assert payload["start"] == pytest.approx(5.0, abs=0.6)
+    assert payload.get("clip") == "CLIP_A.MP4", payload
+    # its window is that row's own: the spoken "goodbye" near 5.0 s, or the kept range 4.0-5.5 that Find now reads too
+    assert payload["start"] == pytest.approx(4.5, abs=1.1)
     assert payload["end"] > payload["start"]
     # …and a synthetic drop of it lands at the drop line, like the rows above
     before = page.evaluate("segs.length")
