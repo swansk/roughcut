@@ -204,6 +204,17 @@ def test_a_real_picture_match_clears_the_floor():
     assert got["matches"] and got["matches"][0]["clip"] == "GX4.MP4"
 
 
+def test_a_weak_words_match_a_picture_agrees_with_is_kept():
+    clips = _clips()
+    clips["GX4.MP4"]["visual"]["moments"] = [
+        {"start": 2, "end": 8, "kind": "action", "notable": False, "what": "a chairlift, snow, a man in a cap"}]
+    alone = _search("a man holding a chairlift ticket", clips)
+    assert alone["matches"] == []                         # one word in five: a guess
+    agreed = _search("a man holding a chairlift ticket", clips,
+                     [{"clip": "GX4", "start": 3.0, "end": 5.0, "score": 0.24}])
+    assert agreed["matches"] and "seen" in agreed["matches"][0]["source"] and "local" in agreed["matches"][0]["source"]
+
+
 def test_a_picture_match_in_a_black_stretch_is_dropped():
     got = _search("hot tub", _clips(), [{"clip": "GX2", "start": 1.0, "end": 3.0, "score": 0.30}])
     assert got["matches"] == []                  # a black frame looks like everything
@@ -230,6 +241,26 @@ def test_an_unchecked_claim_is_findable_but_labelled():
     rows = find.lexical("someone jumps off a kicker", clips)
     assert rows and rows[0]["clip"] == "GX3.MP4" and rows[0]["start"] == pytest.approx(19.4)
     assert "not checked" in rows[0]["why"]
+
+
+def test_a_word_in_the_moments_kind_is_firmer_than_the_same_word_in_its_prose():
+    clips = _clips()
+    clips["GX3.MP4"]["visual"]["moments"] = [
+        {"start": 2, "end": 8, "kind": "fall", "notable": False, "what": "the skier goes down hard"},
+        {"start": 12, "end": 18, "kind": "pov-gear", "notable": False, "what": "the wearer's shadow falls across the snow"}]
+    rows = {r["start"]: r for r in find.lexical("wipes out and falls", clips)}
+    assert rows[2.0]["base"] > rows[12.0]["base"]
+    assert rows[12.0]["base"] == pytest.approx(find.PROSE_WEIGHT * rows[2.0]["base"], rel=0.01)
+
+
+def test_a_sensor_bump_in_a_black_clip_is_not_a_match():
+    clips = _clips()
+    clips["GX2.MP4"]["felt_rows"] = [{"start": 0.3, "end": 0.9, "kind": "crash", "notable": False,
+                                      "what": "impact 6.2 g at 0.3 crash hit fall bump"}]
+    clips["GX3.MP4"]["felt_rows"] = []
+    clips["GX1.MP4"]["felt_rows"] = []
+    clips["GX4.MP4"]["felt_rows"] = []
+    assert find.lexical("crash", clips) == []          # GX2 is black end to end
 
 
 def test_what_the_clip_is_finds_it_and_an_editors_words_count():

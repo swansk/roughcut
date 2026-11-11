@@ -76,9 +76,12 @@ MAX_LEXICAL = 20
 #                 0.153 and 0.196; the lowest score of a window the editor audit calls right
 #                 and that nothing else found was 0.224. 0.21 sits between.
 #   LEXICAL_FLOOR the share of the query's words (weighted by how rare each is in this bin)
-#                 a spoken line or a described moment must answer for.
+#                 a spoken line or a described moment must answer for. The absent queries'
+#                 best word hit was 0.392 ("the wearer's shadow falls across the snow" for
+#                 "someone wipes out and falls"); the lowest sole evidence for a real moment
+#                 was 0.441 (the one clear jump, an unchecked claim). A thin margin: one bin.
 LOCAL_FLOOR = 0.21
-LEXICAL_FLOOR = 0.4
+LEXICAL_FLOOR = 0.42
 # A line that says every word of the query outranks a window that only looks like it.
 SPOKEN_BONUS = 0.6
 
@@ -166,6 +169,29 @@ def _weights(q: list[str], clips: dict[str, dict]) -> dict[str, float]:
     return out
 
 
+def _unusable_share(c: dict, lo: float, hi: float) -> float:
+    """How much of [lo, hi] the look called unusable (black, covered, unreadable)."""
+    span = max(hi - lo, 1e-6)
+    got = 0.0
+    for u in (c.get("visual") or {}).get("unusable") or []:
+        try:
+            got += max(0.0, min(hi, float(u["end"])) - max(lo, float(u["start"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return min(1.0, got / span)
+
+
+# A query word that names the moment's own KIND ("jump", "fall") is firmer evidence than the
+# same word somewhere in its prose ("the wearer's shadow falls across the snow").
+PROSE_WEIGHT = 0.8
+
+
+def _moment_match(q: list[str], m: dict, cover: Callable[[set], float]) -> tuple[set[str], float]:
+    by_kind = _matched(q, str(m.get("kind", "")))
+    by_prose = _matched(q, str(m.get("what", "")), denies=True) - by_kind
+    return by_kind | by_prose, cover(by_kind) + PROSE_WEIGHT * cover(by_prose)
+
+
 def lexical(query: str, clips: dict[str, dict], *, floor: float = 0.0) -> list[dict]:
     """Free matches: the query against what was said and what was seen.
 
@@ -211,7 +237,7 @@ def lexical(query: str, clips: dict[str, dict], *, floor: float = 0.0) -> list[d
         seen_rows = [(m, False) for m in vis_c.get("moments") or []]
         seen_rows += [(m, True) for m in vis_c.get("unsupported") or []]
         for m, unchecked in seen_rows:
-            got = _matched(q, f"{m.get('kind', '')} {m.get('what', '')}", denies=True)
+            got, strength = _moment_match(q, m, cover)
             if not got:
                 continue
             lo, hi = window(float(m["start"]), float(m["end"]))
@@ -221,23 +247,25 @@ def lexical(query: str, clips: dict[str, dict], *, floor: float = 0.0) -> list[d
                          "source": "seen",
                          "kind": m.get("kind", ""),
                          "notable": bool(m.get("notable")),
-                         "score": cover(got) * (0.9 if unchecked else 1.0)
+                         "score": strength * (0.9 if unchecked else 1.0)
                          + (0.25 if m.get("notable") else 0.0),
-                         "base": cover(got) * (0.9 if unchecked else 1.0), "tokens": got})
+                         "base": strength * (0.9 if unchecked else 1.0), "tokens": got})
 
         # What the camera felt (wave 20): the same words the planner reads, so "where did I
         # jump" and "where did I stop" find the sensor's airs and stops with no model call.
         for m in c.get("felt_rows") if "felt_rows" in c else telemetry_events.felt_words(clip):
-            got = _matched(q, f"{m.get('kind', '')} {m.get('what', '')}", denies=True)
+            got, strength = _moment_match(q, m, cover)
             if not got:
                 continue
             lo, hi = window(float(m["start"]) - PAD_HEAD_S, float(m["end"]) + PAD_TAIL_S)
+            if _unusable_share(c, lo, hi) >= 0.5:
+                continue          # a bump in a clip the look found black: nothing there to look at
             hits.append({"clip": clip, "start": lo, "end": hi,
                          "what": str(m.get("what", "")).strip(),
                          "why": "felt by the camera", "source": "felt",
                          "kind": m.get("kind", ""), "notable": bool(m.get("notable")),
-                         "score": cover(got) * 0.9 + (0.25 if m.get("notable") else 0.0),
-                         "base": cover(got) * 0.9, "tokens": got})
+                         "score": strength * 0.9 + (0.25 if m.get("notable") else 0.0),
+                         "base": strength * 0.9, "tokens": got})
 
     # One moment, one row: a line and the frames that show it land within seconds of
     # each other and should reinforce a match rather than crowd the list with twins.
@@ -528,18 +556,6 @@ def union(lexical_rows: list[dict], local: list[dict], *, k: int = FUSE_K, n_lex
     return out[:limit]
 
 
-def _unusable_share(c: dict, lo: float, hi: float) -> float:
-    """How much of [lo, hi] the look called unusable (black, covered, unreadable)."""
-    span = max(hi - lo, 1e-6)
-    got = 0.0
-    for u in (c.get("visual") or {}).get("unusable") or []:
-        try:
-            got += max(0.0, min(hi, float(u["end"])) - max(lo, float(u["start"])))
-        except (KeyError, TypeError, ValueError):
-            continue
-    return min(1.0, got / span)
-
-
 def search(query: str, clips: dict[str, dict], *, local: bool = True,
            local_search: Callable[..., dict] | None = None, weak: bool = False) -> dict:
     """The free Find: lexical, plus the 3080 when it is there.
@@ -548,21 +564,19 @@ def search(query: str, clips: dict[str, dict], *, local: bool = True,
     Under the floors (LEXICAL_FLOOR, LOCAL_FLOOR) a hit is a guess: it is left out and
     counted in `floor.hidden`, so an empty `matches` means "nothing like that in this
     footage" and says how many weak guesses were held back. `weak=True` shows them.
-    A picture match inside a stretch the look called unusable (a black frame) is dropped
-    either way: a black frame looks like everything and shows nothing."""
+    A weak words-match that a picture match above its floor lands on is kept (two weak sources
+    agreeing). A picture match inside a stretch the look called unusable (a black frame) is
+    dropped either way: a black frame looks like everything and shows nothing."""
     lex_all = lexical(query, clips)
-    lex = lex_all if weak else [r for r in lex_all if r.get("base", 1.0) >= LEXICAL_FLOOR]
-    hidden = len(lex_all) - len(lex)
     floor = {"lexical": LEXICAL_FLOOR, "local": LOCAL_FLOOR, "hidden": 0, "weak": weak}
     if not local:
-        out = {"matches": [dict(r, label=_label(r["source"]),
-                                evidence=[_evidence(r, r["source"], i)]) for i, r in enumerate(lex)],
-               "local": {"used": False, "why": "not asked for"}}
-        floor["hidden"] = hidden
-        out["floor"] = floor
-        return out
+        lex = lex_all if weak else [r for r in lex_all if r.get("base", 1.0) >= LEXICAL_FLOOR]
+        floor["hidden"] = len(lex_all) - len(lex)
+        return {"matches": [dict(r, label=_label(r["source"]),
+                                 evidence=[_evidence(r, r["source"], i)]) for i, r in enumerate(lex)],
+                "local": {"used": False, "why": "not asked for"}, "floor": floor}
     vis, why = local_rows(query, clips, search=local_search)
-    kept = []
+    kept, hidden = [], 0
     for r in vis:
         if _unusable_share(clips.get(r["clip"]) or {}, r["start"], r["end"]) >= 0.5:
             continue                                    # a black frame, not a match
@@ -570,7 +584,16 @@ def search(query: str, clips: dict[str, dict], *, local: bool = True,
             hidden += 1
             continue
         kept.append(r)
-    floor["hidden"] = hidden
+
+    def corroborated(row: dict) -> bool:
+        """A weak words-match that a picture match above ITS floor lands on is two weak
+        sources agreeing, which is not weak."""
+        return any(_stem(k["clip"]) == _stem(row["clip"])
+                   and k["start"] <= row["end"] + FUSE_GAP_S and k["end"] >= row["start"] - FUSE_GAP_S
+                   for k in kept)
+
+    lex = [r for r in lex_all if weak or r.get("base", 1.0) >= LEXICAL_FLOOR or corroborated(r)]
+    floor["hidden"] = hidden + len(lex_all) - len(lex)
     if not kept:
         return {"matches": union(lex, []), "floor": floor,
                 "local": {"used": False, "why": why or "no frame matched"}}
