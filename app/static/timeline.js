@@ -2571,6 +2571,7 @@
     const changed = !sameSet(next, state.sel) || anchor !== state.anchor;
     state.sel = next;
     state.anchor = anchor;
+    if (next.size && state.edit) { state.edit = null; setTimeout(paintTransitions, 0); }   // a shot replaces the edit point
     if (next.size && state.osel != null) { state.osel = null; renderV2(); }
     if (anchor != null) {
       const i = indexOf(anchor);
@@ -3030,7 +3031,7 @@
    * said in the usual line. Returns what it made, or null when this is not that case. */
   function fadeEnd(which) {
     const list = segs();
-    if (!list.length || (state.tsel && selectedEdit() >= 0)) return null;
+    if (!list.length || selectedEdit() >= 0) return null;
     const half = 0.5 / fps();
     const ph = state.playhead || 0;
     const head = ph <= half, tail = ph >= total() - half;
@@ -3270,6 +3271,9 @@
     if (best < 0 || bd * state.zoom > 12) return;
     state.edit = { a: list[best].id, b: list[best + 1].id };
     state.tsel = null;
+    // an edit point replaces the shot selection, as in Premiere: Delete then acts on the edit,
+    // never on a shot selected somewhere else (round 2 CLUMSY-10)
+    if (state.sel.size) select([], { source: 'click' });
     setTimeout(paintTransitions, 0);
   }
 
@@ -4684,7 +4688,7 @@
   const tl = {
     state, el, mount, render, on,
     byId, indexOf, idAt, dur, speedOf, filmStart, total, shotAt, timeToX, xToTime, eventTime, snapsFor,
-    begin, commit, cancel, batch, unrecorded, undo, redo, clearHistory,
+    begin, commit, cancel, batch, unrecorded, undo, redo, clearHistory, undoDepth: () => undoStack.length,
     mark: markEntry,                // an entry for a change outside the cut (fx.js's Accept)
     nextUndo,                       // {label, tag} of what Ctrl+Z takes back now, or null
     history, restoreHistory, onHistory,   // the stacks kept past a reload (app.js, /api/undo)
@@ -4722,6 +4726,7 @@
       const list = segs();
       state.edit = list[k] && list[k + 1] ? { a: list[k].id, b: list[k + 1].id } : null;
       state.tsel = null;
+      if (state.edit && state.sel.size) select([], { source: 'api' });
       paintTransitions();
       return selectedEdit();
     },

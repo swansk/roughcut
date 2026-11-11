@@ -549,13 +549,37 @@
     return true;
   }
 
+  /* What a delete names: "shot 12 · GX010495 (9.0 s)", or "3 shots (2, 3, 4 · 14.2 s)". The
+   * shot may be off screen: the toast is how the editor learns which one went. */
+  function namedShots(ids) {
+    const list = segs();
+    const hit = list.map((s, i) => [s, i + 1]).filter(([s]) => ids.includes(s.id));
+    const secs = hit.reduce((a, [s]) => a + tl.dur(s), 0).toFixed(1);
+    if (hit.length === 1) return `shot ${hit[0][1]} · ${stem(hit[0][0].clip)} (${secs} s)`;
+    return `${hit.length} shots (${hit.map(([, n]) => n).join(', ')} · ${secs} s)`;
+  }
+
+  /* An edit point selected (a click on a cut, or a transition on it): Delete is about THAT, not
+   * about a shot somewhere else. Its transitions go (one undo step); none, and it says so. */
+  function deleteAtEdit() {
+    const ed = tl.state.edit;
+    if (!ed) return false;
+    const here = (tl.state.transitions || []).filter((t) => t.a === ed.a && t.b === ed.b);
+    if (!here.length) { say('nothing to delete at this edit — select a shot to remove it'); return true; }
+    tl.batch('delete transition', () => { here.forEach((t) => tl.removeTransition(`${t.a}|${t.b}|${t.kind}`)); });
+    say(`removed ${here.length > 1 ? 'the transitions' : 'the transition'} at this edit — ${L('⌘Z')} brings ${here.length > 1 ? 'them' : 'it'} back`);
+    return true;
+  }
+
   function rippleDelete() {
     if (removeOverlaySel()) return true;
+    if (!tl.state.sel.size && deleteAtEdit()) return true;
     const ids = [...tl.state.sel];
     if (!ids.length) { say('nothing selected'); return true; }
+    const what = namedShots(ids);
     tl.remove(ids);                  // the foundation selects the shot that takes the place
     chosen = false;                  // …which nobody chose
-    say(`removed ${ids.length} shot${ids.length > 1 ? 's' : ''} — ${L('⌘Z')} brings ${ids.length > 1 ? 'them' : 'it'} back`);
+    say(`removed ${what} — ${L('⌘Z')} brings ${ids.length > 1 ? 'them' : 'it'} back`);
     return true;
   }
 
@@ -578,6 +602,7 @@
 
   function backspace() {
     if (removeOverlaySel()) return true;
+    if (!tl.state.sel.size && deleteAtEdit()) return true;
     if (chosen) return rippleDelete();
     say(tl.state.sel.size ? 'click a shot to choose it — ⌫ takes out only a shot you selected'
       : 'nothing selected');
@@ -855,8 +880,14 @@
       say(`nothing to paste — select shots and press ${L('⌘C')} (or ${L('⌘X')}) first`);
       return true;
     }
+    return pasteAt(clamp(tl.state.playhead, 0, tl.total()), false);
+  }
+
+  /* Paste at film time `at`. Inside a shot it splits it (an insert, as Premiere's) and the toast says
+   * where it went and offers the next cut instead, one click (round 2 CLUMSY-06: a click on an empty
+   * track had moved the playhead and the editor did not know). */
+  function pasteAt(at, again) {
     settle();
-    const at = clamp(tl.state.playhead, 0, tl.total());
     if (clip.over) {
       const o = clip.over;
       const oid = tl.addOverlay({ clip: o.clip, in: o.in, out: o.out, why: o.why }, at, o.track || 'V2');
@@ -871,6 +902,14 @@
       ? names.filter((n) => n[0] === 'V' && n !== 'V1').reverse().find((n) => tr[n] && tr[n].target) : null;
     const made = [];
     let end = at;
+    let split = null;
+    {
+      const h = tl.shotAt(at);
+      if (h && !upper) {
+        const st = tl.filmStart(h.id), en = st + tl.dur(tl.byId(h.id)), fr = tl.frame();
+        if (at - st > fr / 2 && en - at > fr / 2) split = { n: h.index + 1, start: st, end: en };
+      }
+    }
     tl.batch(`paste ${clip.shots.length > 1 ? clip.shots.length + ' shots' : 'a shot'}`, () => {
       for (const rec of clip.shots) {
         const seg = JSON.parse(JSON.stringify(rec));
@@ -895,7 +934,15 @@
     }
     tl.seek(clamp(end, 0, tl.total()));
     tl.setPlayhead(clamp(end, 0, tl.total()));
-    say(`pasted ${made.length} shot${made.length > 1 ? 's' : ''} ${upper ? `on ${upper} ` : ''}at ${tl.tc(at)} — ${L('⌘Z')} takes ${made.length > 1 ? 'them' : 'it'} back`);
+    const n = `${made.length} shot${made.length > 1 ? 's' : ''}`;
+    const home = split ? { start: split.start, end: split.end } : null;
+    const msg = `pasted ${n} ${upper ? `on ${upper} ` : ''}at ${tl.tc(at)}${split ? `, inside shot ${split.n} (split)` : ''} — ${L('⌘Z')} takes ${made.length > 1 ? 'them' : 'it'} back`;
+    if (split && !upper && !again && typeof window.toast === 'function') {
+      window.toast(msg, 8000, { action: { label: 'at the next cut instead', run: () => {
+        tl.undo();
+        pasteAt(clamp(home.end, 0, tl.total()), true);
+      } } });
+    } else say(msg);
     return true;
   }
 

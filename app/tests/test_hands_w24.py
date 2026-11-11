@@ -428,4 +428,110 @@ def test_a_burst_of_letters_with_no_text_box_stops_acting_as_shortcuts(page):
     page.keyboard.type("bbbbbbbbxxxxxx", delay=8)   # the x's are ripple delete, were they shortcuts
     page.wait_for_timeout(200)
     assert page.evaluate("segs.length") == 2
-    assert "looks like typing" in toast_text(page)
+    assert "looked like typing" in toast_text(page)
+
+
+# ------------------------------------------------- round 2 (CLUMSY-10, -15, -06)
+
+def test_clicking_an_edit_point_drops_the_shot_selection_and_delete_leaves_the_shots_alone(page):
+    """Round 2 CLUMSY-10: Delete removed the shot selected at the far end, not what was clicked."""
+    click_shot(page, 1)
+    assert page.evaluate("tl.state.sel.size") == 1
+    page.evaluate("tl.selectEdit(0)")
+    assert page.evaluate("tl.state.sel.size") == 0
+    page.keyboard.press("Delete")
+    assert page.evaluate("segs.length") == 2
+    assert "nothing to delete at this edit" in toast_text(page)
+    page.keyboard.press("x")
+    assert page.evaluate("segs.length") == 2
+
+
+def test_a_real_click_on_the_edit_column_drops_the_selection_too(page):
+    click_shot(page, 1)
+    edge = page.locator("#tl .tl-edge").first
+    bb = edge.bounding_box()
+    page.mouse.click(bb["x"] + bb["width"] / 2, bb["y"] + bb["height"] / 2)
+    page.wait_for_timeout(200)
+    assert page.evaluate("tl.state.sel.size") == 0
+    page.keyboard.press("Delete")
+    assert page.evaluate("segs.length") == 2
+
+
+def test_delete_with_an_edit_point_selected_removes_its_transition_in_one_undo_step(page):
+    page.evaluate("tl.selectEdit(0)")
+    page.keyboard.press("Control+d")
+    assert page.evaluate("tl.state.transitions.length") == 1
+    page.evaluate("tl.selectEdit(0)")
+    page.keyboard.press("Delete")
+    assert page.evaluate("tl.state.transitions.length") == 0, toast_text(page)
+    assert page.evaluate("segs.length") == 2
+    page.keyboard.press("Control+z")
+    assert page.evaluate("tl.state.transitions.length") == 1
+
+
+def test_selecting_a_shot_replaces_the_selected_edit(page):
+    page.evaluate("tl.selectEdit(0)")
+    assert page.evaluate("!!tl.state.edit")
+    click_shot(page, 0)
+    assert page.evaluate("tl.state.edit") is None
+
+
+def test_a_delete_names_the_shot_it_removed(page):
+    click_shot(page, 1)
+    page.keyboard.press("Delete")
+    assert "removed shot 2 · CLIP_B (2.0 s)" in toast_text(page)
+
+
+def test_letters_after_a_text_box_loses_the_focus_are_typing_and_are_put_back(page):
+    """Round 2 CLUMSY-15: a text box had the keyboard a moment ago; the next three letters are text.
+    What the first two did (a marker, the rolling tool) is undone, and the grade is back."""
+    page.evaluate("document.body.insertAdjacentHTML('beforeend', '<input id=pp style=\"position:fixed;left:600px;top:500px;z-index:99\">')")
+    page.locator("#pp").click()
+    page.keyboard.type("/m")
+    page.evaluate("document.getElementById('pp').blur()")
+    tool0 = page.evaluate("tl.state.tool")
+    mk0 = page.evaluate("tl.markers().length")
+    grade0 = page.evaluate("gradeApi().enabled")
+    page.keyboard.type("gmn", delay=30)             # g (grade off), m (a marker), n (roll tool)
+    page.wait_for_timeout(200)
+    assert page.evaluate("tl.markers().length") == mk0
+    assert page.evaluate("tl.state.tool") == tool0
+    assert page.evaluate("gradeApi().enabled") == grade0
+    assert "looked like typing: 2 shortcuts undone" in toast_text(page)
+
+
+def test_slow_deliberate_keys_after_a_click_on_the_timeline_are_shortcuts(page):
+    page.evaluate("document.body.insertAdjacentHTML('beforeend', '<input id=pp style=\"position:fixed;left:600px;top:500px;z-index:99\">')")
+    page.locator("#pp").click()
+    page.keyboard.type("ab")
+    page.evaluate("document.getElementById('pp').blur()")
+    click_shot(page, 0)                             # the editor went back to the timeline
+    for key in ("b", "n", "v"):
+        page.keyboard.press(key)
+    assert page.evaluate("tl.state.tool") == "select"
+    page.keyboard.press("n")
+    assert page.evaluate("tl.state.tool") == "roll"
+
+
+def test_a_paste_inside_a_shot_says_where_it_went_and_offers_the_next_cut(page):
+    """Round 2 CLUMSY-06: the playhead had moved without the editor knowing."""
+    click_shot(page, 1)
+    page.keyboard.press("Control+c")
+    page.evaluate("tl.seek(1.0); tl.setPlayhead(1.0)")
+    page.keyboard.press("Control+v")
+    assert page.evaluate("segs.length") == 4
+    t = toast_text(page)
+    assert "inside shot 1 (split)" in t and "00:00:01:00" in t
+    page.locator("#toast .toastAct").click()
+    page.wait_for_timeout(300)
+    assert page.evaluate("segs.length") == 3        # A whole, the pasted B, B
+    assert [r[0] for r in ranges(page)] == ["CLIP_A.MP4", "CLIP_B.MP4", "CLIP_B.MP4"]
+
+
+def test_a_paste_at_a_cut_does_not_offer_the_alternative(page):
+    click_shot(page, 0)
+    page.keyboard.press("Control+c")
+    page.keyboard.press("End")
+    page.keyboard.press("Control+v")
+    assert "inside shot" not in toast_text(page)
+    assert page.locator("#toast .toastAct").count() == 0

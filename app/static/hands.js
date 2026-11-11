@@ -114,22 +114,66 @@
     }
   }
 
-  /* Typing with no text box focused (CLUMSY-15: a path typed after the box had lost the focus
-   * started playback, added a marker and changed the tool). Eight plain letters in a row, each
-   * within 150 ms of the one before, is typing, not shortcuts: from the eighth on they do
-   * nothing, and one line says why. (J K L, held and tapped together, do not count.) */
-  const burst = { n: 0, at: 0, told: -1e9 };
+  /* Typing with no text box focused (CLUMSY-15, and again in round 2: a path typed after the box
+   * had lost the focus set a marker, In and Out, the rolling tool, the zoom, and switched the
+   * grade off). Two signs that letters are text, not shortcuts:
+   *   - the context: a text box had the keyboard in the last 3 s and the editor has not clicked
+   *     the timeline or the Program since. Then THREE plain letters in a row (each within 350 ms
+   *     of the last) are typing.
+   *   - the rhythm alone: eight in a row, each within 150 ms (a person aims a shortcut; the
+   *     deliberate ones a suite or an editor presses leave more room than that).
+   * When it trips, what the first letters of the run did is put back (the undo stack, the tool,
+   * the zoom, the grade, playback) and one line says so; the rest of the run does nothing.
+   * (J K L and Space do not count: held and tapped together they are a chord.) */
+  const TEXT = 'input:not([type=range]):not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit]),'
+    + 'textarea, [contenteditable=""], [contenteditable=true]';
+  let textAt = -1e9;
+  const textActive = (e) => { if (e.target instanceof Element && e.target.matches(TEXT)) textAt = performance.now(); };
+  document.addEventListener('focusin', textActive, true);
+  document.addEventListener('input', textActive, true);
+  document.addEventListener('keydown', textActive, true);
+  document.addEventListener('pointerdown', (e) => {
+    if (e.target instanceof Element && e.target.closest('#tl, .screen, .transport')) textAt = -1e9;
+  }, true);
+
+  const run = { n: 0, at: -1e9, snap: null, tripped: false };
+  function snapshot() {
+    const g = typeof gradeApi === 'function' ? gradeApi() : null;
+    return {
+      tool: window.tl ? tl.state.tool : null,
+      zoom: window.tl ? tl.state.zoom : null,
+      depth: window.tl && typeof tl.undoDepth === 'function' ? tl.undoDepth() : null,
+      grade: g && 'enabled' in g ? !!g.enabled : null,
+      playing: window.player ? !!player.playing : false,
+    };
+  }
+  function putBack(s) {
+    if (!s || !window.tl) return;
+    try {
+      while (s.depth != null && tl.undoDepth() > s.depth) tl.undo();
+      if (s.tool && tl.state.tool !== s.tool) tl.setTool(s.tool);
+      if (s.zoom && Math.abs(tl.state.zoom - s.zoom) > 1e-6 && typeof tl.zoomTo === 'function') tl.zoomTo(s.zoom);
+      const g = typeof gradeApi === 'function' ? gradeApi() : null;
+      if (g && s.grade != null && !!g.enabled !== s.grade && typeof g.toggle === 'function') g.toggle();
+      if (window.player && player.playing && !s.playing && typeof pauseCut === 'function') pauseCut();
+    } catch (_) { /* a restore that fails leaves what it could */ }
+  }
   function typingBurst(e) {
     if (e.repeat || e.ctrlKey || e.metaKey || e.altKey || e.key.length !== 1 || /^[jkl ]$/i.test(e.key)) return false;
     const t = e.target;
     if (t instanceof Element && (t.closest('input, textarea, select, [contenteditable=""], [contenteditable=true], dialog[open]'))) return false;
     const now = performance.now();
-    burst.n = now - burst.at < 150 ? burst.n + 1 : 1;
-    burst.at = now;
-    if (burst.n < 8) return false;
-    if (now - burst.told > 3000) {
-      burst.told = now;
-      say('that looks like typing with no text box selected, so the keys were ignored — click the box first (the first letters may have acted: Ctrl+Z)');
+    const hint = now - textAt < 3000;
+    const gap = hint ? 350 : 150, need = hint ? 3 : 8;
+    if (now - run.at < gap) run.n += 1;
+    else { run.n = 1; run.snap = snapshot(); run.tripped = false; }
+    run.at = now;
+    if (run.n < need) return false;
+    if (!run.tripped) {
+      run.tripped = true;
+      putBack(run.snap);
+      const k = run.n - 1;
+      say(`that looked like typing: ${k} shortcut${k === 1 ? '' : 's'} undone; click the timeline to use keys`);
     }
     return true;
   }
