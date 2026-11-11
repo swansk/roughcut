@@ -83,6 +83,13 @@ EVENT_KINDS = ("jump", "fall", "crash")
 # An airborne moment lasts under two seconds; a fall a few. At the coarse interval a
 # real one shows in at most this many consecutive sampled frames.
 MAX_EVENT_FRAMES = 2
+
+
+def max_event_frames(step: float) -> int:
+    """Frames a real jump / fall can span at this spacing. The rule is about time (nothing
+    is airborne for more than about two seconds), so a finer whole-clip look, where one
+    jump shows in many frames, is held to seconds, not to two frames."""
+    return MAX_EVENT_FRAMES if step >= 1.0 else max(MAX_EVENT_FRAMES, int(2.0 / step + 0.5))
 # Words that describe a person upside down. R10 adjudicated every inversion claim either
 # pass made on Killington by eye — "clearly upside-down mid-air", "another inverted
 # aerial trick", "aerial flip or backflip", "skier rotates or flips" — and none survived:
@@ -105,7 +112,7 @@ SCHEMA = {
 }
 
 PROMPT = """This contact sheet is {n} frames from {clip}, sampled every {interval:g}s, \
-covering {start:.0f}s to {end:.0f}s of the clip. Frames read left to right, top to \
+covering {start:g}s to {end:g}s of the clip. Frames read left to right, top to \
 bottom, and each is labelled with its timestamp. The frame timestamps are: {stamps}.
 
 First write the `description` of what this sheet shows: **who** is there (by what they
@@ -165,7 +172,7 @@ A sheet with no event is the normal answer for events: leave jump / fall / crash
 # has already said "something is happening around here" and the only thing worth
 # reporting now is *what*, with a start and end tight enough to cut on.
 FINE_PROMPT = """This contact sheet is {n} frames from {clip}, sampled every \
-{interval:g}s, covering {start:.0f}s to {end:.0f}s of the clip — a close look at one \
+{interval:g}s, covering {start:g}s to {end:g}s of the clip — a close look at one \
 short window that a motion and audio scan flagged as unusual. Frames read left to \
 right, top to bottom, and each is labelled with its timestamp. The frame timestamps are: \
 {stamps}.
@@ -200,7 +207,7 @@ Write claims as what the frame shows, never as a guess: *appears*, *seems*, *sug
 `description` is one or two plain sentences on what this window shows (who, where, what
 happens), with no verdict such as "nothing notable" in it.
 
-Do not report a moment outside {start:.0f}-{end:.0f}s; you cannot see outside it."""
+Do not report a moment outside {start:g}-{end:g}s; you cannot see outside it."""
 
 
 def build_sheets(video: Path, out_dir: Path, interval: float, cols: int, rows: int,
@@ -308,7 +315,7 @@ def validate(payload, lo: float, hi: float, times: list[float] | None = None) ->
                 demoted = f"confidence {confidence}"
             elif kind in EVENT_KINDS and not frames:
                 demoted = "no frame named for an event"
-            elif kind in EVENT_KINDS and step and len(frames) > MAX_EVENT_FRAMES:
+            elif kind in EVENT_KINDS and step and len(frames) > max_event_frames(step):
                 demoted = (f"{len(frames)} consecutive frames at {step:g} s is not a "
                            f"{kind} — nothing is airborne that long")
             elif kind in EVENT_KINDS and any(w in what.lower() for w in INVERSION):
@@ -316,9 +323,9 @@ def validate(payload, lo: float, hi: float, times: list[float] | None = None) ->
                            "a second look agrees")
         if demoted:
             notable = False
-        row = {"start": round(start, 1), "end": round(end, 1), "what": what,
+        row = {"start": round(start, 2), "end": round(end, 2), "what": what,
                "kind": kind, "notable": notable, "confidence": confidence,
-               "frames": [round(f, 1) for f in frames]}
+               "frames": [round(f, 2) for f in frames]}
         if demoted:
             row["demoted"] = demoted
         clean.append(row)
@@ -367,6 +374,22 @@ def description_of(sidecar: dict) -> str:
     """What a clip's sidecar says it is: `description` (prompt_version 4+), else the old
     `summary`. Every reader goes through here, so an old sidecar still reads."""
     return str((sidecar or {}).get("description") or (sidecar or {}).get("summary") or "")
+
+
+def _describe_whole(summaries: list[str], cap: int = 1200) -> tuple[str, int]:
+    """The clip's description from every sheet's: all of them when they fit, else an even
+    spread across the clip (the first sheets alone would describe only the start of a clip
+    read in eighty sheets). Returns the text and how many sheets' lines it holds."""
+    parts = [x for x in summaries if x]
+    if len(" ".join(parts)) <= cap or len(parts) <= 1:
+        return " ".join(parts)[:cap], len(parts)
+    per = max(1, len(parts[0]))
+    n = max(1, min(len(parts), cap // (per + 1)))
+    picks = [parts[round(i * (len(parts) - 1) / max(1, n - 1))] for i in range(n)] if n > 1 else parts[:1]
+    picks = list(dict.fromkeys(picks))
+    while len(" ".join(picks)) > cap and len(picks) > 1:
+        picks.pop(len(picks) // 2)
+    return " ".join(picks)[:cap], len(picks)
 
 
 def analyse(video: Path, out_dir: Path, interval: float, cols: int, rows: int,
@@ -422,7 +445,7 @@ def analyse(video: Path, out_dir: Path, interval: float, cols: int, rows: int,
             print(f"  {s['path'].name}: {len(got['moments'])} moments "
                   f"(${got['usage']['projected_usd']:.4f})", flush=True)
     moments.sort(key=lambda m: m["start"])
-    text = " ".join(x for x in summaries if x)[:1200]
+    text, kept_d = _describe_whole(summaries)
     out = {"clip": video.name, "moments": moments, "unusable": unusable,
            "description": text, "summary": text,
            "events": [m for m in moments if m["kind"] in EVENT_KINDS and m["notable"]],
@@ -430,6 +453,14 @@ def analyse(video: Path, out_dir: Path, interval: float, cols: int, rows: int,
            "failed_sheets": failed,
            "sheets_read": len(sheets) - len(failed), "sheets_total": len(sheets),
            "frames_sampled": sorted(set(sampled)),
+           # what was actually read, said plainly: a clip is "whole" only when it had no
+           # window and every sheet came back; a partial read is never labelled as the clip
+           "coverage": {"whole_clip": not windows and not failed and bool(sampled),
+                        "interval_s": interval, "frames": len(set(sampled)),
+                        "sheets_read": len(sheets) - len(failed), "sheets": len(sheets),
+                        "from_s": min(sampled) if sampled else None,
+                        "to_s": max(sampled) if sampled else None,
+                        "descriptions_kept": kept_d, "descriptions": len([x for x in summaries if x])},
            "params": {"interval_s": interval, "cols": cols, "rows": rows,
                       "width": width, "role": role,
                       # Which model read the sheets, as the backend reported it. A role

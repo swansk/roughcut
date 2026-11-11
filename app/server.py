@@ -1629,7 +1629,10 @@ def fine_stems() -> set[str]:
 # 30 cells at 4s (visual_pass.py's defaults) and measured $0.09 on CLIP_01 (two sheets,
 # $0.18) — provisional like everything about that pass (RQ-1/RQ-7 are unmeasured).
 VISUAL_INTERVAL_S = 4.0            # visual_pass.py's default: one frame every 4 s
-VISUAL_INTERVALS = (4.0, 3.0, 2.0, 1.0)   # the open screen's slider, coarse to fine
+# The whole-clip look's stops, coarse to fine (the open screen's slider, the Index panel's
+# select, the first pass's detail choice). Below 1 s every frame of every clip is read, in
+# as many sheets as it takes (30 frames each, one call per sheet): there is no cap.
+VISUAL_INTERVALS = (4.0, 3.0, 2.0, 1.0, 0.5, 0.25, 0.1)
 VISUAL_CELLS = 30                  # 6 cols x 5 rows per sheet, the tool's default
 
 
@@ -1814,6 +1817,50 @@ def sheets_for(clip: str, interval: float | None = None, probe: bool = True) -> 
     """Contact sheets one look at `clip` reads: at `interval`, else the clip's own."""
     d = clip_duration(clip) if probe else clip_duration_known(clip)
     return max(1, math.ceil((d or 0.0) / sheet_seconds(interval or clip_look_interval(clip))))
+
+
+def look_frames(clip: str, interval: float, probe: bool = False) -> int:
+    """Frames a whole-clip look at `interval` reads: one every `interval` seconds."""
+    d = clip_duration(clip) if probe else clip_duration_known(clip)
+    return max(1, math.ceil((d or 0.0) / float(interval) - 1e-9))
+
+
+LOOK_WORKERS = 2          # contact sheets read at once (journal.DEFAULT_WORKERS["sheet"])
+
+
+def look_eta_s(sheets: int) -> float:
+    """Seconds a number of sheet reads takes: ~40 s each (measured), two at a time."""
+    return max(0, int(sheets)) * VISUAL_SHEET_READ_S / LOOK_WORKERS
+
+
+def look_words(sheets: int, frames: int) -> str:
+    """"about 2 h 10 min: 6,600 frames in 220 sheets" — how long a look will take, and what
+    it reads, in the words the first pass and the Index foot both use."""
+    return f"{startwords.minutes_words(look_eta_s(sheets))}: {frames:,} frames in {sheets:,} sheet{'s' if sheets != 1 else ''}"
+
+
+def look_got(stem: str) -> str:
+    """What a clip actually got, in words: "every 4 s; every 1 s on 0:32–0:46" or "every
+    0.25 s, whole clip". From its two sidecars; '' when it has not been looked at."""
+    vf = _side_facts(STATE["visual"] / f"{stem}.visual.json")
+    if not vf:
+        return ""
+    iv = float(vf.get("interval_s") or VISUAL_INTERVAL_S)
+    out = f"every {iv:g} s" + (", whole clip" if iv < 4.0 and vf.get("whole") else "")
+    ff = _side_facts(STATE["visual"] / f"{stem}.fine.json")
+    spans = (ff or {}).get("spans") or []
+    if spans:
+        civ = float(ff.get("interval_s") or 1.0)
+        out += "; " + f"every {civ:g} s on " + ", ".join(
+            f"{_mmss(a)}–{_mmss(b)}" for a, b in spans[:3]) + (f" and {len(spans) - 3} more" if len(spans) > 3 else "")
+    if vf.get("partial"):
+        out += f" (partial: {vf.get('sheets')} of {vf.get('sheets_total')} sheets read)"
+    return out
+
+
+def _mmss(t: float) -> str:
+    t = int(round(float(t)))
+    return f"{t // 60}:{t % 60:02d}"
 
 
 def audit_plan(ranked: list[dict], n: int = AUDIT_CLAIMS) -> list[dict]:
@@ -6091,6 +6138,73 @@ def _fp_index_counts(stage: dict) -> dict:
     return out
 
 
+# The first pass's detail choice (before Run): how closely the whole of every clip is looked at.
+# Quick is today's pass: a frame every 4 s, then a closer look where a lot happens. The rest
+# read the whole clip at that spacing (and need no closer look at 1 s or finer).
+LOOK_CHOICES = (
+    (4.0, "Quick: a frame every 4 s, closer where a lot happens"),
+    (1.0, "Every second: the whole of every clip at 1 s"),
+    (0.5, "Every 0.5 s"), (0.25, "Every 0.25 s"), (0.1, "Every 0.1 s"))
+
+
+def firstpass_look_choice() -> float:
+    """The last choice made on this bin's first-pass panel (kept in the cut's `look` block)."""
+    try:
+        v = float((_look_block() or {}).get("first_pass"))
+    except (TypeError, ValueError):
+        return 4.0
+    return v if v in [c[0] for c in LOOK_CHOICES] else 4.0
+
+
+def _side_interval(stem: str) -> float | None:
+    f = _side_facts(STATE["visual"] / f"{stem}.visual.json")
+    return float(f.get("interval_s") or VISUAL_INTERVAL_S) if f else None
+
+
+def clips_to_relook(interval: float) -> list[str]:
+    """Clips with a whole-clip look coarser than `interval`: the ones a first pass asked to
+    look that closely reads again (a missing look is the index's own work, not a re-run).
+    Confirmed junk is never looked at."""
+    junk = confirmed_junk()
+    out = []
+    for c in footage_clips():
+        iv = _side_interval(Path(c).stem)
+        if iv is not None and iv > float(interval) + 1e-9 and c not in junk:
+            out.append(c)
+    return out
+
+
+def look_choice_table(base_seconds: float) -> dict:
+    """What each choice on the first-pass panel would read and how long it would take, said
+    before the click. `base_seconds` is the quick pass's own estimate (heard, picks, the cut)."""
+    junk = confirmed_junk()
+    clips = [c for c in footage_clips() if c not in junk]
+
+    def need(iv: float, c: str) -> bool:
+        have = _side_interval(Path(c).stem)
+        return have is None or have > iv + 1e-9
+
+    def reads(iv: float) -> tuple[int, int, int]:
+        todo = [c for c in clips if need(iv, c)]
+        return (len(todo), sum(look_frames(c, iv) for c in todo),
+                sum(sheets_for(c, iv, probe=False) for c in todo))
+    q_sheets = reads(4.0)[2]
+    out = []
+    for iv, label in LOOK_CHOICES:
+        n, frames, sheets = reads(iv)
+        quick = iv >= 4.0
+        secs = base_seconds + (0 if quick else max(0, sheets - q_sheets) * VISUAL_SHEET_READ_S / LOOK_WORKERS)
+        words = startwords.minutes_words(secs)
+        if not quick and n:
+            words += f": {frames:,} frames in {sheets:,} sheet{'s' if sheets != 1 else ''}"
+        out.append({"interval_s": iv, "label": label, "quick": quick, "clips": n, "frames": frames,
+                    "sheets": sheets, "seconds": round(secs), "words": words,
+                    "line": ("Looks at a frame every 4 seconds, then takes a closer look at the busiest "
+                             "moments (falls, jumps, anything that moves a lot)." if quick else
+                             f"Looks at the whole of every clip, a frame every {iv:g} second{'' if iv == 1 else 's'}.")})
+    return {"choice": firstpass_look_choice(), "options": out}
+
+
 def firstpass_plan(mode: str | None = None, keep=None, *, facts: dict | None = None,
                    edl: dict | None = None, manual: list[dict] | None = None) -> dict:
     """What a run would do, and its cost on this backend: the steps with their own
@@ -6171,7 +6285,7 @@ def firstpass_plan(mode: str | None = None, keep=None, *, facts: dict | None = N
                              want_s=want, will_replace=len(replace_rows) if segments else 0)
     when = startwords.estimate(startwords.load_history(fp_history_path()), to_index)
     return {"mode": mode, "steps": steps, "keep": keep_rows, "replace": replace_rows,
-            "plain": plain, "time": when,
+            "plain": plain, "time": when, "look": look_choice_table(float(when["seconds"])),
             "target": edl.get("target_s") or [120, 180], "target_want_s": want,
             "has_cut": bool(segments),
             "locked": locked, "cost": fpmod.cost_words(ix_usd + cut_usd),
@@ -6827,9 +6941,29 @@ async def api_firstpass_post(request: Request) -> JSONResponse:
             startwords.target_for(want)
         except (TypeError, ValueError) as exc:
             raise HTTPException(400, f"length_s: {exc}")
+    look_iv = None
+    if body.get("look_interval_s") is not None:
+        try:
+            look_iv = float(body["look_interval_s"])
+        except (TypeError, ValueError):
+            raise HTTPException(400, "look_interval_s must be a number")
+        if look_iv not in VISUAL_INTERVALS:
+            raise HTTPException(400, f"look_interval_s must be one of {list(VISUAL_INTERVALS)}")
     with FIRSTPASS_LOCK:
         if _fp_live():
             raise HTTPException(409, "the first pass is already running")
+        redo: list[str] = []
+        if look_iv is not None:
+            # the whole-clip look runs at the choice: the clips already looked at coarser are
+            # read again (before the index), the rest are the index's own looks
+            redo = clips_to_relook(look_iv)
+            if look_iv < 4.0:
+                set_clip_look_interval([], look_iv, whole_bin=True)
+            else:
+                set_look_interval(look_iv)
+            _e = read_edl()
+            _e["look"] = {**(_e.get("look") or {}), "first_pass": look_iv}
+            write_edl(_e)
         if want is not None:
             set_target(want_s=float(want))
         # the sentence given before the pass is the film's own: the Assistant shows it, editable,
@@ -6852,7 +6986,8 @@ async def api_firstpass_post(request: Request) -> JSONResponse:
             "note": str(body.get("note") or "").strip()[:600], "stage": "index",
             "started": time.time(), "ask": None, "picks": None,
             "steps": {k: {"state": "pending"} for k in ("index", "picks", "cut")},
-            "scope": procscope.Scope(f"first pass {job}"), "index_job": None}
+            "scope": procscope.Scope(f"first pass {job}"), "index_job": None,
+            "look_s": look_iv, "redo": redo}
     threading.Thread(target=_firstpass_job, args=(job,), daemon=True).start()
     return JSONResponse({"job": job, "mode": would["mode"], "keep": would["locked"],
                          "would": would, "target": would.get("target"),
@@ -7050,6 +7185,23 @@ def _fp_verify(fp: dict, plan: dict, locked: list[str]) -> dict:
                         f"({str(exc)[:120]}); the cut stands as proposed."}
 
 
+def _fp_relook(fp: dict) -> None:
+    """The clips already looked at coarser than the choice are looked at again at it (the
+    Index panel's re-run of the look, scoped to them), and waited for."""
+    try:
+        r = _rerun_start({"clips": fp["redo"], "stages": ["look"], "interval_s": fp["look_s"]})
+    except HTTPException:
+        return                      # nothing to run again (junk, or already as fine)
+    fp["index_job"] = r["job"]
+    while not fp.get("cancel"):
+        e = INDEXES.get(r["job"]) or {}
+        if e.get("state") in progress.TERMINAL or not e:
+            if e.get("state") == "failed":
+                raise RuntimeError(f"the finer look failed: {e.get('detail')}")
+            return
+        time.sleep(FIRSTPASS_POLL_S)
+
+
 def _firstpass_walk(job: str, fp: dict) -> None:
     # The clips the last finished pass saw: what is new to this one, which its cut is
     # told about and its notes account for (verdict 9, punch 2). A run that stopped or
@@ -7075,6 +7227,10 @@ def _firstpass_walk(job: str, fp: dict) -> None:
         # 1 · index — until every clip is heard and looked at; the rest (previews,
         # close looks) carries on in the background and is not waited for
         _fp_step(fp, "index", "running")
+        if fp.get("redo"):
+            _fp_relook(fp)
+            if fp.get("cancel"):
+                raise _FpCancelled()
         stages = {s["key"]: s for s in flowmod.compute(flow_facts())["stages"]}
         counts = _fp_index_counts(stages["index"])
         # wave 24 START: what the time estimate learns from — the clips this pass had to hear
@@ -8704,6 +8860,12 @@ def _index_stage(j: journal.Journal, clip: str, stage: str) -> float:
             raise RuntimeError("the visual pass wrote no sidecar")
         return sheets_for(clip) * VISUAL_USD_PER_SHEET
     if stage == "close":
+        # A clip already read whole at 1 s or finer has no close look to make: the close
+        # look reads three windows at 1 s. Asked for by name (forced) it still runs.
+        if not forced:
+            vf = _side_facts(STATE["visual"] / f"{stem}.visual.json") or {}
+            if vf.get("whole") and float(vf.get("interval_s") or VISUAL_INTERVAL_S) <= 1.0:
+                raise _Skip(f"the whole clip was read every {float(vf['interval_s']):g} s")
         windows = STATE["work"] / f"windows_{stem}.json"
         # Looked at closely again (the Index panel): the windows are chosen afresh, as if
         # no close look had been read (the scan skips claims a close look already
@@ -10292,7 +10454,13 @@ def rerun_plan(body: dict) -> dict:
             else ", ".join(RERUN_WORDS[s] for s in stages if s in RERUN_WORDS))
     if interval is not None and "look" in stages:
         what += f" (looks at {interval:g} s)"
+    frames = sum(look_frames(c, interval or clip_look_interval(c)) for c in looks)
+    fine = any((interval or clip_look_interval(c)) < 1.0 for c in looks)
+    eta_s = look_eta_s(sheets) + len(closes) * FINE_WINDOWS_PER_CLIP * FINE_WINDOW_READ_S / LOOK_WORKERS
     return {
+        "frames": frames, "fine": fine, "eta_s": round(eta_s),
+        "eta_words": startwords.minutes_words(eta_s) if (looks or closes) else "",
+        "look_words": look_words(sheets, frames) if looks else "",
         "clips": list(plan), "whole_bin": whole, "stages": stages, "only_missing": missing,
         "plan": plan, "interval_s": interval,
         "looks": len(looks), "sheets": sheets, "close": len(closes),
@@ -10400,7 +10568,16 @@ def _side_facts(p: Path) -> dict | None:
     except (TypeError, ValueError):
         usd = None
     frames = d.get("frames_sampled")
+    cov = d.get("coverage") or {}
+    spans = [[float(w[0]), float(w[1])] for w in (wr or []) if isinstance(w, (list, tuple)) and len(w) == 2]
+    partial = bool(d.get("failed_sheets")) or (
+        d.get("sheets_total") is not None and d.get("sheets_read") is not None
+        and d.get("sheets_read") < d.get("sheets_total"))
     facts = {"at": st.st_mtime, "interval_s": params.get("interval_s"),
+             # a clip read whole: no window and every sheet back (older sidecars have no
+             # `coverage`; their sheets_read/sheets_total says the same)
+             "whole": bool(cov.get("whole_clip")) if cov else (wr is None and not partial),
+             "partial": partial, "spans": spans,
              "sheets": d.get("sheets_read"), "sheets_total": d.get("sheets_total"),
              # visual_pass.py writes the sampled times (a list); older sidecars a count
              "frames": len(frames) if isinstance(frames, list) else frames,
@@ -10484,6 +10661,7 @@ def _index_clips_disk() -> dict:
             "orient": orient_row(clip),
             # the interval its next look reads it at, and whether it is tuned off the bin's
             "interval_s": per.get(clip) or proj, "tuned": clip in per,
+            "got": look_got(stem),
             "sheets_at": {f"{i:g}": sheets_for(clip, i, probe=False) for i in VISUAL_INTERVALS},
             "stages": stages})
     return {"rows": rows, "journal": j is not None,

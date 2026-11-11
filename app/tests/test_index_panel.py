@@ -122,12 +122,12 @@ def test_the_report_says_what_ran_on_each_clip(indexed):
         assert st["look"]["cost_usd"] == pytest.approx(0.09)
         assert st["close"]["cost_usd"] == pytest.approx(0.073)
         assert r["interval_s"] == 4.0 and r["tuned"] is False
-        assert set(r["sheets_at"]) == {"4", "3", "2", "1"}
+        assert set(r["sheets_at"]) == {"4", "3", "2", "1", "0.5", "0.25", "0.1"}
     s = rep["summary"]
     assert (s["clips"], s["heard"], s["looked"], s["close"], s["previews"]) == (3, 3, 3, 3, 3)
     assert s["looked_at"] == {"4": 3} and s["no_telemetry"] == 3
     assert rep["charged"] is False and rep["backend"] == "claude_cli"
-    assert rep["intervals"] == [4.0, 3.0, 2.0, 1.0] and rep["running"] is False
+    assert rep["intervals"] == [4.0, 3.0, 2.0, 1.0, 0.5, 0.25, 0.1] and rep["running"] is False
 
 
 def test_a_look_sidecar_whose_frames_are_a_count_does_not_take_the_picks_down(indexed):
@@ -155,7 +155,7 @@ def test_a_clip_is_retuned_and_looked_at_again_alone(indexed):
     assert price["plan"] == {"CLIP_B.MP4": ["look", "picks"]}
     assert price["looks"] == 1 and price["close"] == 0 and price["replaces"]["look"] == 1
     assert price["usd"] == pytest.approx(server.sheets_for("CLIP_B.MP4", 2.0) * server.VISUAL_USD_PER_SHEET)
-    assert set(price["by_interval"]) == {"4", "3", "2", "1"} and price["charged"] is False
+    assert set(price["by_interval"]) == {"4", "3", "2", "1", "0.5", "0.25", "0.1"} and price["charged"] is False
     assert looks == [], "a price starts nothing"
     assert "clips" not in (server.read_edl().get("look") or {}), "and writes nothing"
 

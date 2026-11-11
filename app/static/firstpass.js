@@ -31,7 +31,7 @@
   function detailsWas() { try { return localStorage.getItem('rc.fp.details') === '1'; } catch (_) { return false; } }
   function detailsNow(on) { try { localStorage.setItem('rc.fp.details', on ? '1' : '0'); } catch (_) { /* private window */ } }
   const FP = { s: null, open: false, keepMine: true, keptOpen: false, busy: false, watching: null,
-               len: null, brief: '', detailsOpen: detailsWas(),
+               len: null, look: null, brief: '', detailsOpen: detailsWas(),
                shown: null, timer: 0, err: '', jobs: [], jobsKey: '[]',
                acct: null, acctKey: '', acctAt: 0, acctBusy: false };
 
@@ -211,6 +211,9 @@
           const last = $('.fp-plain li:last-child', host);
           if (last) last.textContent = `Picks the best moments and proposes a rough cut ${aimWords(FP.s && FP.s.would)} long.`;
         }
+      });
+      $('.fp-panel', host).addEventListener('change', (e) => {
+        if (e.target.matches('.fp-detail')) { FP.look = Number(e.target.value); paintPanel(); }
       });
       $('.fp-panel', host).addEventListener('keydown', (e) => e.stopPropagation());
       document.addEventListener('mousedown', (e) => {
@@ -470,6 +473,14 @@
       + `<div class="fp-chips">${chips}${typed}</div><div class="fp-lenmsg bad" data-testid="firstpass-len-msg" role="status"></div>${now}${brief}</div>`;
   }
 
+  /* The option on the detail select: the editor's pick, else the one this bin last used. */
+  function lookOpt(w) {
+    const lk = w && w.look;
+    if (!lk || !Array.isArray(lk.options) || !lk.options.length) return null;
+    const want = FP.look != null ? FP.look : lk.choice;
+    return lk.options.find((o) => Number(o.interval_s) === Number(want)) || lk.options[0];
+  }
+
   /* The first layer: what it does and how closely it looks, in plain words (K5 stands: the
    * models and pipeline terms are in the Details under it). */
   function plainHtml(s, w) {
@@ -485,15 +496,24 @@
       live = true;
       const lk = ci.look_need || ci.clips;
       lines = [`Listens to every clip and writes down what is said: heard ${ci.listened || 0} of ${ci.clips}.`,
-        `Looks at a frame every ${p.look_s || 4} seconds, then takes a closer look at the busiest moments: looked at ${ci.looked || 0} of ${lk}.`,
+        (p.look_s && p.look_s <= 1 ? `Looks at the whole of every clip, a frame every ${p.look_s} second${p.look_s === 1 ? '' : 's'}`
+          : `Looks at a frame every ${p.look_s || 4} seconds, then takes a closer look at the busiest moments`) + `: looked at ${ci.looked || 0} of ${lk}.`,
         lines[2]];
     }
+    // how closely it looks: the choice is made here, before Run, and the time follows it
+    const opt = live ? null : lookOpt(w);
+    if (opt) lines[1] = opt.line;
+    const words = opt && !opt.quick ? opt.words : t.words;
     const pj = live ? passJobOf(s) : null;
     const eta = live ? (pj && pj.eta ? `<div class="fp-eta" data-testid="firstpass-eta">${esc(pj.eta)}</div>` : '')
-      : t.words ? `<div class="fp-eta" data-testid="firstpass-eta" title="${esc(t.basis || '')}">`
-        + `Takes ${esc(t.words)} <span class="fp-note">(${esc(t.basis || '')})</span></div>` : '';
+      : words ? `<div class="fp-eta" data-testid="firstpass-eta" title="${esc(t.basis || '')}">`
+        + `Takes ${esc(words)} <span class="fp-note">(${esc(opt && !opt.quick ? 'a long look is your call: Stop ends it and keeps the clips already looked at' : t.basis || '')})</span></div>` : '';
+    const pick = opt ? `<div class="fp-q">How closely should it look?</div>`
+      + `<select class="fp-detail" data-testid="firstpass-detail" aria-label="how closely to look">`
+      + w.look.options.map((o) => `<option value="${o.interval_s}"${o === opt ? ' selected' : ''}>${esc(o.label)}</option>`).join('')
+      + `</select>` : '';
     return `<div class="fp-plain" data-testid="firstpass-plain"><ul>`
-      + lines.map((l) => `<li>${esc(l)}</li>`).join('') + `</ul>`
+      + lines.map((l) => `<li>${esc(l)}</li>`).join('') + `</ul>${pick}`
       + `<div class="fp-safe">${esc(p.safe || 'Nothing changes until you accept it.')}</div>${eta}</div>`;
   }
 
@@ -647,12 +667,14 @@
       const r = await fetch('/api/firstpass', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ mode: w.mode, keep: FP.keepMine ? 'manual' : 'none',
+          ...(() => { const o = lookOpt(w); return o && (!o.quick || Number(w.look.choice) !== Number(o.interval_s)) ? { look_interval_s: o.interval_s } : {}; })(),
           ...(FP.len ? { length_s: FP.len } : {}),
           ...(FP.brief.trim() && !w.has_cut ? { note: FP.brief.trim() } : {}) }),
       });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.detail || `HTTP ${r.status}`);
       FP.watching = d.job;
+      FP.look = null;
       // the brief is the film's: the Assistant's "What is this film about?" shows it, editable
       const story = document.getElementById('story');
       if (story && FP.brief.trim() && !story.value.trim()) {

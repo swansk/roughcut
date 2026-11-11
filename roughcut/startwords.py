@@ -153,7 +153,9 @@ def plain(*, clips: int, minutes: float | None, to_index: int, look_s: float,
         listen = (f"Listens to every clip and writes down what is said "
                   f"({to_index} of {clipw} still to do{span}).") if to_index < n else \
             f"Listens to every clip and writes down what is said ({clipw}{span})."
-        look = (f"Looks at a frame every {look_s:g} seconds, then takes a closer look at the "
+        look = (f"Looks at the whole of every clip, a frame every {look_s:g} second"
+                f"{'' if look_s == 1 else 's'}." if look_s <= 1 else
+                f"Looks at a frame every {look_s:g} seconds, then takes a closer look at the "
                 "busiest moments (falls, jumps, anything that moves a lot).")
     else:
         listen = f"Every clip is already heard and looked at ({clipw}{span})."
