@@ -296,9 +296,9 @@
           <h2>Proposed cut</h2>
           <div class="pbtns">
             <button id="playProposal" data-next-for="cut" title="play the proposed cut in the Program monitor">▶ Play it</button>
-            <button id="acceptProposal">Accept</button>
+            <button id="acceptProposal" class="primary" title="Put the proposed cut on the timeline — one undo takes it back">Accept</button>
             <button id="acceptAll" hidden title="every proposed shot, the rejected ones too">Accept all</button>
-            <button id="rejectProposal">Discard</button>
+            <button id="rejectProposal" class="ghost" title="Set it aside — it is kept under Recent proposals, and Ctrl+Z brings it back">Discard</button>
           </div>
           <div id="proposalChecks" class="pchecks" hidden></div>
           <div id="proposalNotes"></div>
@@ -322,6 +322,7 @@
           </div>
         </div>
         <div id="lastAsk" class="hint" style="display:none;margin-bottom:10px"></div>
+        <div id="askRecent" class="panel flat" data-testid="recent-proposals" hidden></div>
       </section>
 
       <!-- EXPORT (the tool key stays `out`: #tool=out and the flow keep working). -->

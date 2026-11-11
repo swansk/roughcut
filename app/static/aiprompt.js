@@ -917,6 +917,29 @@
     }
   }
 
+  /* The proposal a whole-film re-cut made was answered (Accept or Discard): the line that
+   * said "A new cut is ready · Review" has nothing left to offer, and Review would open the
+   * cut already in the film as a fresh proposal (wave 23 SAFE; CLUMSY-11, WORDS-03). A re-cut
+   * that was stopped says so instead of "Re-cutting the sequence". */
+  window.addEventListener('rc:proposal-answered', () => {
+    const r = AI.result;
+    if (r && r.kind === 'plan' && AI.state === 'done' && r.planReady) {
+      clearTimeout(AI.planTimer);
+      AI.state = 'idle';
+      AI.result = null;
+      closePop();
+      paintStatus();
+    }
+  });
+  window.addEventListener('rc:plan-stopped', (e) => {
+    const r = AI.result;
+    if (!r || r.kind !== 'plan' || (e.detail && e.detail.ask && r.plan_ask !== e.detail.ask)) return;
+    clearTimeout(AI.planTimer);
+    AI.state = 'stopped';
+    AI.result = null;
+    paintStatus();
+  });
+
   function review(d) {
     if (!d) return;
     const A = window.rcActions;

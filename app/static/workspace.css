@@ -745,3 +745,18 @@ a.floorbtn:hover { color: var(--text); background: var(--card-hi); border-color:
   z-index: 50; max-width: 70vw;
 }
 #toast.show { opacity: 1; }
+#toast.act.show { pointer-events: auto; }
+#toast .toastAct { margin-left: 8px; padding: 1px 10px; font-size: 12px; }
+
+/* Recent proposals, in the Assistant (wave 23 SAFE) */
+#askRecent h3 { margin: 0 0 6px; font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: .08em; color: var(--dim); }
+#askRecent .rr { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 8px; align-items: baseline;
+  padding: 4px 0; border-top: 1px solid var(--line); }
+#askRecent .rr:first-of-type { border-top: 0; }
+#askRecent .rr-st { font-size: 11px; color: var(--dim); white-space: nowrap; }
+#askRecent .rr[data-status=waiting] .rr-st, #askRecent .rr[data-status=screen] .rr-st { color: var(--accent); }
+#askRecent .rr[data-status=accepted] .rr-st { color: var(--good); }
+#askRecent .rr-what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#askRecent .rr .hint { grid-column: 2; }
+#askRecent .rr-open { grid-column: 3; grid-row: 1 / span 2; padding: 1px 8px; }
