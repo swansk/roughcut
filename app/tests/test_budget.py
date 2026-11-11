@@ -162,8 +162,14 @@ HEADER_MAX_PX = 50
 # are gone from the budget with the screens themselves, so the budget measures the editor
 # alone. Nothing on the board's five states changed in view (the File menu's items and
 # Selects' rows are not in view at rest); measured, no headroom.
-WORDS_IN_VIEW = {"/": 110, "/ shot": 139, "/ film": 118, "/ fx": 144, "/ jobs": 119}
-CONTROLS_IN_VIEW = {"/": 58, "/ shot": 73, "/ film": 57, "/ fx": 61, "/ jobs": 59}
+# Wave 23, lane SAFE (the Copper editors' CLUMSY-13: a whole-film AI re-cut could only be hidden,
+# never stopped), measured, no headroom: a running Ask's pill in the header carries a Stop (the ×
+# an index or a first pass already had), so the job can be stopped from any panel: / jobs words
+# 119 → 120, controls 59 → 60. The other four states are unchanged: wave 23's Transcript button
+# in the Source head (+1 word, +1 control on all five) was moved into the Clip menu and the
+# Source monitor's right-click menu to keep them so.
+WORDS_IN_VIEW = {"/": 110, "/ shot": 139, "/ film": 118, "/ fx": 144, "/ jobs": 120}
+CONTROLS_IN_VIEW = {"/": 58, "/ shot": 73, "/ film": 57, "/ fx": 61, "/ jobs": 60}
 
 # Contracts another lane delivers (M16 stage 1, C1): until that lane is merged the
 # check is an expected failure on that screen. Every stage-1 lane is merged, so this is

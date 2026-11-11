@@ -700,3 +700,12 @@ next judge runs, and the next judge rules it honest or lenient.
   pacer is a display frame late on a real GPU" (28 of 45) is therefore unproven, and "sharpen / blur holds are the
   software GL" (15 of 15) stands only as "they do not happen there". What the trial did show for dimension 6: the
   graded canvas has no recovery from a lost graphics context and reports its draws as good while black.
+- 2026-11-11 (wave 23, the lead at the merge; the screens budget is LOOSER by one on one state, said plainly): `/ jobs`
+  words 119 → 120 and controls 59 → 60 in `app/tests/test_budget.py`, for lane SAFE's Stop on a running Ask's header
+  pill (the Copper editors' CLUMSY-13: "Close" only hid a whole-film re-cut that kept running). Measured, no headroom.
+  The other four states hold their numbers: lane DESCRIBE's always-visible Transcript button was sent back and moved
+  into menus instead of raising them. Also from this merge: Find's offline numbers on Killington regressed
+  (find_overlap 0.632 → 0.526) when DESCRIBE re-weighted the ranking for Copper's absent queries, and are back at
+  baseline (0.632 / 0.421) with the ranking restored; a score floor that hides hits could not be made to hold on
+  both bins (Killington's right picture hits score 0.19-0.20, Copper's absent queries 0.15-0.20), so "nothing
+  convincing like that" is now said above the hits and nothing is filtered. `baseline.json` untouched.
