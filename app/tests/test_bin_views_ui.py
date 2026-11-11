@@ -734,10 +734,12 @@ def test_the_passs_picks_are_subclips_with_their_why(live_server, project, brows
     pg.wait_for_function("rcSource.clip === 'CLIP_C.MP4'", timeout=5000)
     assert pg.evaluate("[rcSource.inPoint, rcSource.outPoint]") == [1.0, 3.5]
     # a search finds a subclip by its why, its clip shown open on it
-    pg.locator("#projQ").fill("hello")
+    # (wave 25: the search also reads what is said in a clip, so "hello" now finds all three; a
+    # phrase only a pick's why carries finds its clip, open on it)
+    pg.locator("#projQ").fill("off the lip")
     pg.wait_for_function("document.querySelectorAll('#projList tr.row').length === 1", timeout=3000)
-    assert pg.locator("#projList tr.row").get_attribute("data-clip") == "CLIP_A.MP4"
-    assert pg.locator("#projList tr.sub[data-of='CLIP_A.MP4'] .nm").inner_text() == "“hello there”"
+    assert pg.locator("#projList tr.row").get_attribute("data-clip") == "CLIP_C.MP4"
+    assert pg.locator("#projList tr.sub[data-of='CLIP_C.MP4'] .nm").inner_text() == "a jump off the lip, landed clean"
     pg.locator("#projQ").fill("")
     assert pg.errors == []
     pg.context.close()

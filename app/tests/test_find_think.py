@@ -116,6 +116,8 @@ def described(project):
                      "notable": True, "confidence": "high", "frames": [1.0]}],
         "unusable": [], "frames_sampled": [0.0, 4.0], "params": {"prompt_version": 4, "interval_s": 4.0}}), encoding="utf-8")
     original = project["edl"].read_text(encoding="utf-8")
+    import shutil
+    shutil.rmtree(project["work"] / "find", ignore_errors=True)       # the cached expansions of other tests
     server.configure(project["edl"], project["footage"], project["sidecars"], project["work"],
                      proxies=False, visual=vis, assets=project["assets"])
     server.ensure_proxies([f"{s}.MP4" for s in project["stems"]])

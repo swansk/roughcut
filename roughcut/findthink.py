@@ -280,7 +280,7 @@ def apply_judge(rows: list[dict], verdict: dict) -> dict:
     order = {"strong": 0, "possible": 1, "weak": 2}
     judged = demote_whole(judged)
     strong = any(r["strength"] == "strong" for r in judged)
-    nothing = bool(verdict.get("nothing")) and not strong and not any(r["strength"] == "possible" for r in judged)
+    nothing = bool(verdict.get("nothing")) and not strong
     return {"rows": judged + rest, "nothing": nothing, "notes": verdict.get("notes", "")}
 
 
