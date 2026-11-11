@@ -203,8 +203,11 @@ def test_a_clip_the_ai_has_not_heard_goes_on_v1_at_once(how, live_server, ingest
                          timeout=2000)
     b = pg.evaluate("segs.find(s => s.clip === 'CLIP_B.MP4')")
     assert b["out"] - b["in"] == pytest.approx(6.0, abs=0.1), b      # the whole clip
-    if how in ("insert", "drag"):
+    if how == "drag":
         assert b.get("why", "") == "", b
+    elif how == "insert":
+        # (wave 24 HANDS: the Source's Insert button runs `,`'s path, which names where the shot came from)
+        assert b.get("why", "") == "from the Source monitor · CLIP_B", b
     # listed as footage the AI has not heard: the monitor can play it, no transcript yet
     clip = pg.evaluate("P.clips['CLIP_B.MP4']")
     assert clip["heard"] is False and clip["transcript"] == [] and clip["proxy"], clip
@@ -355,7 +358,7 @@ def test_make_a_first_cut_waits_while_the_first_pass_runs(live_server, ingest_bi
     assert "Drag a clip here or press ," in pg.locator("#tlEmpty .empty").inner_text()
     # ONE AI action at every first-pass state (verdict 4, punch 10): the pass's before and
     # while it runs — "Make a first cut" is not beside it — and this button once it has run
-    one = """() => [...document.querySelectorAll('#tlEmpty button')].filter(b => b.getClientRects().length)
+    one = """() => [...document.querySelectorAll('#tlEmpty button')].filter(b => b.getClientRects().length && !b.classList.contains('fp-newfilm'))   // (wave 24 START: "New film" is a way to start, not an AI action)
         .map(b => b.id || b.className)"""
     for state in ("never-run", "running", "stopped", "failed"):
         pg.evaluate(f"rcFirstPass.state = () => ({{ state: '{state}' }})")

@@ -1383,7 +1383,7 @@
     }
     if (el.closest('#pSource #srcScreen, #pSource #srcBar')) {
       const s = sourceScope();
-      return s ? { what: 'clip', target: s } : null;
+      return s ? { what: 'clip', target: s, transcript: !!el.closest('#pSource #srcScreen') } : null;
     }
     if (el.closest('#pProgram .screen')) {
       const T = TL();
@@ -1406,7 +1406,10 @@
     m.innerHTML = `<button type="button" role="menuitem" data-ctx="ask" data-testid="ai-ctx-ask">${ICON}`
       + `<span>Ask AI about this${hit.what === 'sequence' ? ' sequence' : ''}…</span><span class="k">${esc(KEY)}</span></button>`
       + (deep ? '<button type="button" role="menuitem" data-ctx="deep" data-testid="ai-ctx-deep">'
-        + '<span class="aip-noico"></span><span>Look deeper…</span></button>' : '');
+        + '<span class="aip-noico"></span><span>Look deeper…</span></button>' : '')
+      // the Source monitor's clip record (wave 23 DESCRIBE), in the same menu
+      + (hit.transcript ? '<button type="button" role="menuitem" data-ctx="transcript" data-testid="src-transcript">'
+        + '<span class="aip-noico"></span><span>Transcript…</span></button>' : '');
     m.hidden = false;
     m.style.left = `${Math.max(8, Math.min(e.clientX, window.innerWidth - m.offsetWidth - 8))}px`;
     m.style.top = `${Math.max(8, Math.min(e.clientY, window.innerHeight - m.offsetHeight - 8))}px`;
@@ -1415,6 +1418,7 @@
       if (!b) return;
       closeFloating();
       if (b.dataset.ctx === 'ask') askAbout(hit.target);
+      else if (b.dataset.ctx === 'transcript') { const t = document.querySelector('[data-testid="clip-transcript"]'); if (t) t.click(); }
       else lookDeeper(hit.target.id);
     };
   }
