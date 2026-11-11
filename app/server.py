@@ -45,6 +45,7 @@ import argparse
 import asyncio
 import tempfile
 import base64
+import contextlib
 import contextvars
 import ctypes
 import gc
@@ -15012,6 +15013,91 @@ class FxStopped(Exception):
     """The design job was cancelled: no further call, nothing kept."""
 
 
+def _fx_retire(fx_id: str) -> None:
+    """An effect taken out because a newer one is its replacement, or because it was asked
+    to go: an accepted one leaves the cut but is kept (status removed: Restore brings it
+    back, the accept's undo too); a proposal still waiting is set aside."""
+    edl = read_edl()
+    lst = list(edl.get("effects") or [])
+    gone = next((x for x in lst if x.get("id") == fx_id), None)
+    if gone is not None:
+        rest = [x for x in lst if x.get("id") != fx_id]
+        if rest:
+            edl["effects"] = rest
+        else:
+            edl.pop("effects", None)
+        write_edl(edl)
+        gone = dict(gone)
+        gone["status"] = "removed"
+        fx.save(fx_home(), gone)
+        return
+    e = fx.load(fx_home(), fx_id)
+    if e is not None and e.get("status") == "proposed":
+        e["status"] = "withdrawn"
+        e["withdrawn"] = {"from": "proposed", "at": datetime.now().isoformat(timespec="seconds")}
+        fx.save(fx_home(), e)
+
+
+def _fx_frame() -> tuple[int, int]:
+    """The frame the free check measures on: the proof's."""
+    return PROOF_W, PROOF_H
+
+
+def _fx_bounds(e: dict) -> dict | None:
+    """Where the effect really draws, against the frame and its title-safe area (the
+    renderer's own pixels, `fx.check_bounds`), as the card and the check read it. None when
+    there is no text to judge."""
+    if not e.get("overlay") or not any(s.get("type") == "text" for s in e["overlay"].get("shapes") or []):
+        return None
+    w, h = _fx_frame()
+    res = fx.check_bounds(e, w, h)
+    return None if res.get("ok") is None else res
+
+
+def _fx_refit(e: dict, segments: list[dict], clips: dict, entry: progress.Job | None = None,
+              scope=None, on_call=None) -> dict:
+    """The frame check on a fresh design; while it fails the designer is asked again with
+    the measured overflow, up to `fx.MAX_REFITS` times, before the editor sees it (wave 23,
+    TITLE: "COPPER 2026" came out as "PER 2026", every time "✓ checked"). The result's
+    `bounds` is what the card shows; `bounds.asked` how many times the designer was asked."""
+    w, h = _fx_frame()
+    if _fx_bounds(e) is None:
+        e.pop("bounds", None)
+        return e
+
+    def say(n: int, res: dict) -> None:
+        if entry is not None:
+            entry.note(f"the words run outside the frame — asking the designer again ({n} of {fx.MAX_REFITS})")
+
+    ctx = (procscope.active(scope), fx.watched(on_call)) if scope is not None and on_call else ()
+    with contextlib.ExitStack() as stack:
+        for c in ctx:
+            stack.enter_context(c)
+        e2, asked, res = fx.refit(e, segments, clips, w=w, h=h, on_try=say)
+    e2["bounds"] = {"ok": res["ok"], "problems": res["problems"], "text": res["text"],
+                    "safe": res["safe"], "asked": asked}
+    return e2
+
+
+def _fx_replaces(e: dict) -> list[str]:
+    """Ids of the effects this one is the new version of: another effect (accepted, or
+    proposed and still waiting) that carries the same words. Asking for "the title, but
+    fitted" or "the title at the start" lands a new design; the old one must go when it is
+    accepted, not stay under it (wave 23, WORDS-20 / -21: two titles over one shot)."""
+    key = fx.text_key(e)
+    if not key:
+        return []
+    out = []
+    seen = set()
+    for x in _fx_all():
+        if x.get("id") == e.get("id") or x.get("id") in seen or x.get("status") in ("removed",):
+            continue
+        if fx.text_key(x) == key:
+            out.append(x["id"])
+            seen.add(x["id"])
+    return out
+
+
 def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict | None,
                    window: tuple[float, float] | None = None) -> None:
     entry = FX[job]
@@ -15031,6 +15117,19 @@ def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict 
         edl = read_edl()
         segments = edl.get("segments") or []
         seg = next(s for s in segments if str(s.get("id")) == str(shot))
+        on_shot = [x for x in _fx_all() if str(x.get("shot")) == str(shot)
+                   and x.get("status") in ("accepted", "proposed")]
+        gone = fx.removal_targets(note, on_shot)
+        if gone is not None:                         # "remove the title": a removal, not a design
+            if not gone:
+                said = ", ".join(f"“{x.get('name')}”" for x in on_shot) or "no effect"
+                raise ValueError(f"nothing here to remove by that name — this shot has {said}")
+            for x in gone:
+                _fx_retire(x["id"])
+            names = ", ".join(f"“{x.get('name')}”" for x in gone)
+            entry["result"] = {"id": None, "removed": [x["id"] for x in gone]}
+            entry.finish("done", detail=f"removed {names}")
+            return
         clips, _ = _ask_clips()
         clip = clips.get(seg["clip"]) or {"clip": seg["clip"]}
         fx_id = fx.new_id()
@@ -15048,6 +15147,10 @@ def _fx_design_job(job: str, shot: str, note: str, place: bool, reference: dict 
         if ref:
             e["reference"] = ref
         e = fx.validate_effect(e, segments, clips)
+        e = _fx_refit(e, segments, clips, entry, scope, on_call)
+        e["replaces"] = _fx_replaces(e) or None
+        if e["replaces"] is None:
+            e.pop("replaces")
         with FX_DESIGN_LOCK:
             if entry.get("cancel"):
                 raise FxStopped("the design")
@@ -15124,7 +15227,9 @@ def _fx_revise_job(job: str, fx_id: str, note: str) -> None:
             if e.get(k) is not None:
                 new[k] = e[k]
         new.pop("verify", None)
+        new.pop("bounds", None)
         new = fx.validate_effect(new, segments, clips)
+        new = _fx_refit(new, segments, clips, entry)
         fx.save(fx_home(), new)
         _fx_sound(new)
         if e.get("status") == "accepted":
@@ -15518,6 +15623,22 @@ async def api_fx_accept(request: Request) -> JSONResponse:
     reversable / we can add more on top of them."*"""
     body = await request.json()
     fx_id = str(body.get("id") or "")
+    if body.get("auto"):
+        # an accepted AI answer's design is accepted with it (wave 23: one Accept for a
+        # title, not one in the Assistant and one in Designed Effects). Only a title the
+        # frame check passed and that changes no shot; anything else keeps its review.
+        e = _fx_get(fx_id)
+        if (e.get("status") != "proposed" or e.get("edits") or not (e.get("bounds") or {}).get("ok")):
+            return JSONResponse({"ok": True, "accepted": False, "effect": _fx_urls(e)})
+        res = await asyncio.to_thread(_fx_accept, fx_id, auto=True)
+        return res
+    return _fx_accept(fx_id)
+
+
+def _fx_accept(fx_id: str, *, auto: bool = False) -> JSONResponse:
+    """The accept itself (the endpoint's, and a design asked for by an accepted AI answer:
+    `auto`, wave 23 — one Accept for a title, not one in the Assistant and one in Designed
+    Effects)."""
     e = fx.load(fx_home(), fx_id) or _fx_get(fx_id)
     if e.get("status") == "withdrawn":
         _fx_get(fx_id)                              # refused: taken back, waiting for a redo
@@ -15569,7 +15690,12 @@ async def api_fx_accept(request: Request) -> JSONResponse:
     elif current is not None and current.get("previous"):
         e["previous"] = current["previous"]
     e["status"] = "accepted"
+    if auto:
+        e["auto_accepted"] = True
     e = fx.validate_effect(e, segments)
+    for old_id in e.pop("replaces", None) or []:        # the title this one is the new version of
+        if old_id != fx_id:
+            _fx_retire(str(old_id))
     _fx_put(e)
     _fx_accept_record(fx_id, undo, e)
     return JSONResponse({"ok": True, "effect": _fx_urls(e)})
@@ -15683,6 +15809,13 @@ async def api_fx_restore(request: Request) -> JSONResponse:
     fx_id = str(body.get("id") or "")
     e = fx.load(fx_home(), fx_id)
     if e is not None and e.get("status") == "withdrawn":
+        was = (e.get("withdrawn") or {}).get("from") or "proposed"
+        if was == "accepted":                       # its Ctrl+Z took the accept back: put it back
+            e.pop("withdrawn", None)
+            e["status"] = "proposed"
+            fx.save(fx_home(), e)
+            await asyncio.to_thread(_fx_follow, fx_id, False)
+            return JSONResponse({"ok": True, "effect": _fx_urls(fx.load(fx_home(), fx_id) or e, _fx_segments())})
         e["status"] = (e.pop("withdrawn", None) or {}).get("from") or "proposed"
         fx.save(fx_home(), e)
         if not e.get("verify"):
@@ -15734,6 +15867,15 @@ async def api_fx_discard(request: Request) -> JSONResponse:
     if e is None:
         raise HTTPException(404, f"no proposal {fx_id}")
     current = next((x for x in read_edl().get("effects") or [] if x.get("id") == fx_id), None)
+    if body.get("withdraw") and current is not None and current.get("auto_accepted"):
+        # the Ctrl+Z of an AI answer whose design was accepted with it: take that accept back
+        # (the cut as it was) and set the proposal aside for the redo
+        await asyncio.to_thread(_fx_follow, fx_id, True)
+        e = fx.load(fx_home(), fx_id) or e
+        e["status"] = "withdrawn"
+        e["withdrawn"] = {"from": "accepted", "at": datetime.now().isoformat(timespec="seconds")}
+        fx.save(fx_home(), e)
+        return JSONResponse({"ok": True, "withdrawn": True})
     if body.get("withdraw") and current is None and e.get("status") in ("proposed", "withdrawn"):
         if e.get("status") == "proposed":
             e["status"] = "withdrawn"
@@ -15783,13 +15925,52 @@ async def api_fx_update(fx_id: str, request: Request) -> JSONResponse:
         if k in body:
             merged[k] = body[k]
     merged.pop("verify", None)
+    merged.pop("bounds", None)
     try:
         new = fx.validate_effect(merged, _fx_segments())
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+    res = await asyncio.to_thread(_fx_bounds, new)
+    if res is not None:
+        new["bounds"] = {"ok": res["ok"], "problems": res["problems"], "text": res["text"],
+                         "safe": res["safe"], "asked": 0, "by_hand": True}
     _fx_put(new)
     if body.get("sound") is not None:
         await asyncio.to_thread(_fx_sound, new)  # off the loop: a long synth holds it
+    _fx_autoverify(fx_id)
+    return JSONResponse(_fx_urls(new))
+
+
+@app.post("/api/fx/hand")
+async def api_fx_hand(request: Request) -> JSONResponse:
+    """The card's own controls (wave 23, TITLE): the words, the size, the place, the moment
+    and the length of an effect, changed by hand — no model is asked. `{id, edit}` with
+    `edit` as `fx.apply_hand` reads it (`words`, `size`, `x`, `y`, `nudge`, `start`,
+    `length`, `fit`). The change is validated like any other, the frame check reads it
+    again at once (`bounds` in the answer), and the proof check is queued."""
+    body = await request.json()
+    fx_id = str(body.get("id") or "")
+    e = _fx_current(fx_id)
+    seg = None
+    try:
+        seg = _fx_seg(e["shot"])
+    except HTTPException:
+        pass
+    w, h = _fx_frame()
+    try:
+        merged = await asyncio.to_thread(      # the measuring draws frames: off the event loop
+            fx.apply_hand, e, body.get("edit") or {}, w=w, h=h,
+            shot=(float(seg["in"]), float(seg["out"])) if seg and seg.get("out") else None)
+        merged.pop("verify", None)
+        merged.pop("bounds", None)
+        new = fx.validate_effect(merged, _fx_segments())
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    res = await asyncio.to_thread(_fx_bounds, new)
+    if res is not None:
+        new["bounds"] = {"ok": res["ok"], "problems": res["problems"], "text": res["text"],
+                         "safe": res["safe"], "asked": 0, "by_hand": True}
+    _fx_put(new)
     _fx_autoverify(fx_id)
     return JSONResponse(_fx_urls(new))
 

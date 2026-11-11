@@ -137,3 +137,14 @@
 #fx .fxsketch input { width: 100%; margin-top: 6px; }
 #fx .fxsketch input:focus { outline: none; border-color: var(--accent); }
 #fx .fxsketch .fxstrokes { color: var(--text); }
+
+/* by hand: the words, size, place, in / out (wave 23, TITLE) */
+#fx .fxhand { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; display: grid; gap: 6px; }
+#fx .fxh { display: flex; align-items: center; gap: 6px; font-size: 12px; flex-wrap: wrap; }
+#fx .fxh > span:first-child { width: 58px; color: var(--dim); flex: none; }
+#fx .fxh textarea { flex: 1; min-width: 0; font: inherit; resize: vertical; }
+#fx .fxh input[type=number] { width: 62px; }
+#fx .fxh input[type=range] { flex: 1; min-width: 80px; }
+#fx .fxh output { min-width: 34px; font-variant-numeric: tabular-nums; }
+#fx .fxh .nudge { padding: 0 8px; line-height: 20px; }
+#fx .fxreads { font-size: 12px; margin-top: 3px; color: var(--dim); }

@@ -423,7 +423,7 @@ def validate_effect(raw: Any, segments: list[dict], clips: dict[str, dict] | Non
     if raw.get("limits"):
         out["limits"] = str(raw["limits"])[:300]      # what the effect could not do
     if keep_meta:
-        for k in ("created", "reference", "verify", "history", "window", "previous"):
+        for k in ("created", "reference", "verify", "history", "window", "previous", "bounds", "replaces", "auto_accepted"):
             if raw.get(k) is not None:
                 out[k] = raw[k]
     return out
@@ -793,34 +793,38 @@ def overlay_static(overlay: dict, fps) -> bool:
 
 def render_overlay_frame(overlay: dict, w: int, h: int, t: float,
                          *, anchor: tuple[float, float] = (0.5, 0.5),
-                         sprites: dict | None = None):
+                         sprites: dict | None = None, pad: int = 0):
     """The full frame (w × h, RGBA) of the sprite at `t` seconds into the effect, at
     `anchor` (fractions of the frame). Geometry: the sprite's box is `overlay.size × w`
     pixels square; shapes are in -1..1 across it; `pose_at(t)` scales, fades, rotates
     and offsets it. A `flash` tints the whole frame for its duration. PIL,
     anti-aliased (draw at 2× and downsample); only the part inside the frame is drawn.
     `sprites` (a dict the caller keeps across frames): sprites already drawn, by
-    everything but their opacity, so a fade draws its sprite once."""
+    everything but their opacity, so a fade draws its sprite once.
+    `pad` (measuring only): the canvas is `pad` px larger on every side, the frame sitting
+    at (pad, pad) in it, so what the sprite draws OUTSIDE the frame is on the picture too
+    (`measure` reads it); 0 is the frame itself, as the export draws it."""
     from PIL import Image
 
     RENDERED["frames"] += 1
+    W, H = w + 2 * pad, h + 2 * pad
     box_px = overlay["size"] * w
     flash = overlay.get("flash")
     pose = pose_at(overlay, t)
     if flash and t < flash["duration"]:
-        frame = Image.new("RGBA", (w, h), _rgba(flash["color"], flash["opacity"]))
+        frame = Image.new("RGBA", (W, H), _rgba(flash["color"], flash["opacity"]))
     else:
-        frame = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        frame = Image.new("RGBA", (W, H), (0, 0, 0, 0))
     if pose["opacity"] > 0 and pose["scale"] > 0:
         half = box_px * pose["scale"] / 2
         ext = int(math.ceil(half * 2.6 + 3))
-        cx = anchor[0] * w + pose["dx"] * w
-        cy = anchor[1] * h + pose["dy"] * w
+        cx = anchor[0] * w + pose["dx"] * w + pad
+        cy = anchor[1] * h + pose["dy"] * w + pad
         x0, y0 = int(round(cx)) - ext, int(round(cy)) - ext
         # the frame's share of the sprite's square (alpha_composite needs a
         # non-negative dest, and nothing outside the frame is worth drawing)
         left, top = max(0, -x0), max(0, -y0)
-        right, bottom = min(2 * ext, w - x0), min(2 * ext, h - y0)
+        right, bottom = min(2 * ext, W - x0), min(2 * ext, H - y0)
         if right > left and bottom > top:
             window = (left, top, right, bottom)
             key = (tuple(round(float(pose[k]), 6) for k in ("scale", "rotate", "dx", "dy")),
@@ -1252,7 +1256,7 @@ _EXAMPLE_TYPEWRITER = {
         "shapes": [
             {"type": "rect", "at": [0, 0], "w": 3, "h": 3, "fill": True, "color": "#050507", "opacity": 1.0,
              "end": 7.0, "fade": 1.5},
-            {"type": "text", "text": "2026 BLIZZARD\nKillington, VT\nwith the boys", "at": [0, 0], "h": 0.07,
+            {"type": "text", "text": "2026 BLIZZARD\nKillington, VT\nwith the boys", "at": [0, 0], "h": 0.05,
              "bold": True, "color": "#f2efe6", "reveal": "typewriter", "cps": 12, "start": 0.4, "end": 7.0, "fade": 1.0}],
         "anim": {}},
     "sound": {
@@ -1264,6 +1268,21 @@ _EXAMPLE_TYPEWRITER = {
 }
 
 
+_EXAMPLE_LOWERTHIRD = {
+    "name": "Spencer name lower third",
+    "why": "a name in the lower left on a dark plate with a white accent bar at its left end, held 3.5 s, no sound",
+    "events": [{"t": 26.5, "x": 0.27, "y": 0.8, "label": "the name"}],
+    "overlay": {
+        "duration": 3.5, "size": 0.5,
+        "shapes": [
+            {"type": "rect", "at": [0, 0], "w": 1.8, "h": 0.5, "fill": True, "color": "#0b0b0f", "opacity": 0.65},
+            {"type": "rect", "at": [-0.86, 0], "w": 0.05, "h": 0.5, "fill": True, "color": "#ffffff", "opacity": 0.95},
+            {"type": "text", "text": "Spencer", "at": [0.05, 0], "h": 0.16, "bold": True, "color": "#ffffff"}],
+        "anim": {"opacity": [[0, 0], [0.25, 1], [3.2, 1], [3.5, 0]], "dx": [[0, -0.02], [0.25, 0]]}},
+    "sound": None,
+}
+
+
 _EXAMPLE_SLIDE = {
     "name": "opening title on a black slide",
     "why": "a 3 s black slide put before the first shot, the title typed on it, the slide's last second fading is the footage arriving",
@@ -1271,7 +1290,7 @@ _EXAMPLE_SLIDE = {
     "shot": "new:1", "clip": "gen_black_x.mp4",
     "events": [{"t": 0.0, "x": 0.5, "y": 0.5, "label": "the slide"}],
     "overlay": {"duration": 3.0, "size": 1.6,
-                "shapes": [{"type": "text", "text": "2026 BLIZZARD\nKillington, VT", "at": [0, 0], "h": 0.07, "bold": True,
+                "shapes": [{"type": "text", "text": "2026 BLIZZARD\nKillington, VT", "at": [0, 0], "h": 0.05, "bold": True,
                             "color": "#f2efe6", "reveal": "typewriter", "cps": 12, "start": 0.3}],
                 "anim": {}},
     "sound": {"gain_db": -12,
@@ -1333,6 +1352,8 @@ of those — a title on a slide you generate):
   for what it is for: a title slide before a shot is a generated black clip plus a text
   effect on it; a fade-in of the video is an overlay; slow motion is an edit.
 
+TEXT MUST BE INSIDE THE FRAME. The renderer draws the text fitted to the BOX (95 % of its width), not to the frame, and the check MEASURES the pixels: it rejects any text outside the middle 90 % of the frame (the title-safe area), a shape cut by the frame's edge (unless it runs across the whole frame), a shape lying across a text (the stripe through a letter; a plate shorter than its words) and two texts drawn on each other. A line of bold text is about characters × 0.65 × h × size of the frame's width: "Copper Mountain · February 2026" (31 characters) at h 0.055 and size 1.6 is 1.5 frame widths wide — off both sides. So: a centred title has its anchor at x 0.5 and a width of at most 0.85; a box of `size` s centred at x reaches x ± s/2, so a lower third at x 0.18 needs size ≤ 0.36 or its anchor moved right; put two lines in ONE text shape with \n; a plate (filled rect) is wider and taller than its words, an accent bar goes at the plate's end beside the words, never at the middle (x 0) where the text is; keep titles above y 0.92 and below y 0.08. A title, a lower third or an end card is silent: "sound": null unless the note asks for a sound.
+
 SIZES that read well (with size 1.0, the box as wide as the frame): a headline line h 0.10–0.14, a subtitle 0.06–0.08, a caption 0.04–0.05; a full-frame slide is a filled rect w 3 h 3 at size 1.6. Stack lines with \\n in ONE text shape, never several shapes at the same spot.
 
 WHAT AN EFFECT CANNOT DO: change the shot's length, speed or framing (no extra seconds, no slow motion, no zoom, no trim), move or cut footage, or use a recording. Say so in "limits" in one sentence and do the rest.
@@ -1372,6 +1393,8 @@ def _system_design() -> str:
             + "\n\nA SECOND EXAMPLE — a title: 'SEND IT' over a dark bar at the top of the frame, "
               "held 1.8 s with a quick settle and a fade, a rising whoosh under it:\n"
             + json.dumps(_EXAMPLE_TITLE, indent=1)
+            + "\n\nA LOWER THIRD — a name on a plate with an accent bar beside the words, inside the "
+              "frame, silent:\n" + json.dumps(_EXAMPLE_LOWERTHIRD, indent=1)
             + "\n\nA THIRD EXAMPLE — a typed title slide: a black slide, three lines typed at 12 "
               "characters a second with a click per character (repeat every 1/12 s, one per "
               "character), the slide fading to the footage over its last 1.5 s, and a `limits` "
@@ -1642,6 +1665,7 @@ def design(note: str, seg: dict, clip: dict, sidecar: dict | None, *,
         "status": "proposed",
         "limits": answer.get("limits") or None,
     }
+    effect = silence_unasked(effect, note)
     if window is not None and not str(shot_id).startswith("new:"):
         inside = [e for e in events if isinstance(e, dict) and e.get("t") is not None
                   and t0 <= float(e["t"]) <= t1]
@@ -1714,6 +1738,557 @@ def revise(effect: dict, note: str, segments: list[dict], clips: dict | None = N
     new = name_shots(validate_effect(new, segments, clips), segments)
     new["history"] = list(effect.get("history") or []) + [{"note": note, "at": _now()}]
     return new
+
+
+# ---------------------------------------------------------------- where it really draws
+#
+# Wave 23 (TITLE): three editors asked for a title and each got one outside the frame, each
+# "✓ checked". The check only looked at the anchor (the middle of the sprite's box); the
+# words are fitted to the BOX, not to the frame, and a box of 1.0–1.6 frame widths centred
+# on an anchor at 0.18 draws "PER 2026". So the check measures the pixels: the overlay is
+# drawn by the renderer itself (`render_overlay_frame`, the one the export uses) on a canvas
+# larger than the frame, and the alpha's bounding box is what the effect covers, whatever
+# the spec meant. Each shape is drawn alone to say where IT is.
+
+SAFE_MARGIN = 0.05              # title-safe: 5 % of the frame in from every edge
+MEASURE_W = 320                 # the measuring frame's width: 0.3 % of the frame a pixel
+_ALPHA_MIN = 64                 # a pixel counts at this alpha (of 255) when drawn opaque
+_TOL = 0.004                    # slack in frame fractions: a pixel of antialiasing
+_MAX_MEASURED = 12              # shapes drawn on their own, per pose
+
+
+_REAL_FRAME = render_overlay_frame     # a test may replace the renderer; the measuring uses the real one
+
+
+def _bare(overlay: dict, only: int | None = None) -> dict:
+    """The overlay as the measuring draws it: every shape there at once, whole text, fully
+    opaque, no fade — geometry, not paint — with the poses' scale, shift and turn kept."""
+    shapes = []
+    for i, s in enumerate(overlay["shapes"]):
+        if only is not None and i != only:
+            continue
+        c = {k: v for k, v in s.items() if k not in ("start", "end", "fade", "reveal", "cps")}
+        c["opacity"] = 1.0
+        if c["type"] in ("text", "rect", "circle", "ring"):      # a hand-written record may lack what validate fills
+            c.setdefault("x", 0.0)
+            c.setdefault("y", 0.0)
+        if c["type"] == "text":
+            c.setdefault("h", 0.2)
+        if c["type"] == "rect":
+            c.setdefault("w", 1.0)
+            c.setdefault("h", 1.0)
+        shapes.append(c)
+    anim = {k: v for k, v in (overlay.get("anim") or {}).items() if k != "opacity"}
+    return {"duration": overlay["duration"], "size": overlay["size"], "shapes": shapes,
+            "anim": anim}
+
+
+def _measure_times(overlay: dict) -> list[float]:
+    """The instants the effect is held at: its keyframes' times where it is (nearly) fully
+    there — a title sliding in from a faded start is not judged at its first frame, but
+    where it rests and where it ends its hold."""
+    dur = float(overlay["duration"])
+    anim = overlay.get("anim") or {}
+    keys = {0.0, dur / 2, dur} | {float(k[0]) for tr in anim.values() for k in tr}
+    op = anim.get("opacity")
+    if op:
+        peak = max(sample_track(op, t, 1.0) for t in keys)
+        keys = {t for t in keys if sample_track(op, t, 1.0) >= 0.9 * peak - 1e-9}
+    seen, out = set(), []
+    for t in sorted(keys):
+        p = pose_at(overlay, t)
+        sig = tuple(round(float(p[k]), 4) for k in ("scale", "rotate", "dx", "dy"))
+        if sig not in seen and p["scale"] > 0:
+            seen.add(sig)
+            out.append(t)
+    return out or [0.0]
+
+
+def _alpha_box(img, pad: int, mw: int, mh: int):
+    box = img.getchannel("A").point(lambda v: 255 if v >= _ALPHA_MIN else 0).getbbox()
+    if box is None:
+        return None
+    l, t, r, b = box
+    return [round((l - pad) / mw, 4), round((t - pad) / mh, 4),
+            round((r - pad) / mw, 4), round((b - pad) / mh, 4)]
+
+
+def measure(effect: dict, w: int = 1920, h: int = 1080) -> dict | None:
+    """What the effect draws, in fractions of the frame (x across its width, y down its
+    height; a number below 0 or above 1 is off the picture): `{"w", "h", "shapes": [{"i",
+    "type", "text"?}], "views": [{"event", "t", "boxes": {shape index: [x0, y0, x1, y1]},
+    "all": [..]}]}`. One view per event and per held pose; None without an overlay. The
+    pixels are the renderer's own, so a monitor, a proof and an export that agree with
+    the renderer agree with this."""
+    from PIL import Image  # noqa: F401  (the renderer needs it; fail here, not later)
+
+    overlay = effect.get("overlay")
+    if not overlay or not overlay.get("shapes"):
+        return None
+    events = [ev for ev in (effect.get("events") or []) if isinstance(ev, dict)][:4] \
+        or [{"x": 0.5, "y": 0.5}]
+    mw = MEASURE_W
+    mh = max(8, int(round(mw * h / w)))
+    counted = dict(RENDERED)
+    shapes = [{"i": i, "type": s["type"], **({"text": s["text"]} if s["type"] == "text" else {})}
+              for i, s in enumerate(overlay["shapes"])]
+    views = []
+    try:
+        for ei, ev in enumerate(events):
+            for t in _measure_times(overlay):
+                pose = pose_at(overlay, t)
+                half = overlay["size"] * mw * pose["scale"] / 2
+                pad = int(min(4 * mw, math.ceil(half * 2.6 + 3 + abs(pose["dx"]) * mw
+                                                + abs(pose["dy"]) * mw)))
+                anchor = (float(ev["x"]), float(ev["y"]))
+                whole = _REAL_FRAME(_bare(overlay), mw, mh, t, anchor=anchor, pad=pad)
+                view = {"event": ei, "t": round(t, 3), "boxes": {},
+                        "all": _alpha_box(whole, pad, mw, mh)}
+                for i in range(min(len(overlay["shapes"]), _MAX_MEASURED)):
+                    one = _REAL_FRAME(_bare(overlay, only=i), mw, mh, t,
+                                               anchor=anchor, pad=pad)
+                    box = _alpha_box(one, pad, mw, mh)
+                    if box is not None:
+                        view["boxes"][i] = box
+                views.append(view)
+    finally:
+        RENDERED.update(counted)             # the measuring is not a frame of the proof
+    return {"w": w, "h": h, "shapes": shapes, "views": views}
+
+
+def _area(b) -> float:
+    return max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
+
+
+def _inter(a, b) -> float:
+    return _area([max(a[0], b[0]), max(a[1], b[1]), min(a[2], b[2]), min(a[3], b[3])])
+
+
+def _pct(v: float) -> str:
+    return f"{abs(v) * 100:.0f} %"
+
+
+def _say(text: str) -> str:
+    one = " / ".join(str(text).split("\n"))
+    return f"“{one[:40]}{'…' if len(one) > 40 else ''}”"
+
+
+def problems(m: dict | None, safe: float = SAFE_MARGIN) -> list[dict]:
+    """What is wrong with where an effect draws (`measure`'s numbers), worst first, each
+    `{"kind", "shape", "detail"}` with a sentence a designer or a person can act on:
+    `text_outside` (a text leaves the frame or the title-safe area), `shape_outside` (a
+    shape of a title is cut by the frame's edge, and is no wash or band across it),
+    `cuts_text` (a bar, rule or mark crosses the words instead of sitting behind or beside
+    them — the stripe through the "n", the plate shorter than its text) and `text_overlap`
+    (two different texts on each other). Only an effect with text is judged: a marker on
+    a skier at the picture's edge is allowed to be cut by it."""
+    if not m or not m.get("views"):
+        return []
+    kinds = {s["i"]: s for s in m["shapes"]}
+    texts = [i for i, s in kinds.items() if s["type"] == "text"]
+    if not texts:
+        return []
+    found: dict[tuple, dict] = {}
+
+    def add(kind: str, i: int, detail: str, weight: float) -> None:
+        key = (kind, detail if kind != "shape_outside" else i)
+        if key not in found or found[key]["weight"] < weight:
+            found[key] = {"kind": kind, "shape": i, "detail": detail, "weight": weight}
+
+    for view in m["views"]:
+        boxes = view["boxes"]
+        for i in texts:
+            b = boxes.get(i)
+            if not b:
+                continue
+            words = _say(kinds[i]["text"])
+            over = []
+            if b[0] < safe - _TOL:
+                over.append(("left", safe - b[0], b[0] < 0))
+            if b[2] > 1 - safe + _TOL:
+                over.append(("right", b[2] - (1 - safe), b[2] > 1))
+            if b[1] < safe - _TOL:
+                over.append(("top", safe - b[1], b[1] < 0))
+            if b[3] > 1 - safe + _TOL:
+                over.append(("bottom", b[3] - (1 - safe), b[3] > 1))
+            if over:
+                parts = [f"{_pct(v)} past the {side} {'edge of the frame' if out else 'safe line'}"
+                         for side, v, out in over]
+                add("text_outside", i,
+                    f"the text {words} is drawn {_pct(b[2] - b[0])} of the frame wide and "
+                    f"{_pct(b[3] - b[1])} high (the safe area is {_pct(1 - 2 * safe)} each way), "
+                    + ", ".join(parts), max(v for _s, v, _o in over))
+        for j, s in kinds.items():
+            b = boxes.get(j)
+            if not b or s["type"] == "text":
+                continue
+            left, right, top, bottom = b[0] < -_TOL, b[2] > 1 + _TOL, b[1] < -_TOL, b[3] > 1 + _TOL
+            cut = [side for side, bad in (("left", left and not right), ("right", right and not left),
+                                           ("top", top and not bottom), ("bottom", bottom and not top))
+                   if bad]
+            if cut:
+                add("shape_outside", j,
+                    f"the {s['type']} (shape {j + 1}) is cut by the {' and '.join(cut)} edge of the "
+                    "frame — a bar that bleeds off one side is chopped; keep it inside the frame "
+                    "or run it across the whole frame", 0.5)
+            for i in texts:
+                t = boxes.get(i)
+                if not t or _area(t) <= 0:
+                    continue
+                inter = _inter(b, t)
+                part = inter / _area(t)
+                holds = (b[0] <= t[0] + 0.006 and b[1] <= t[1] + 0.006
+                         and b[2] >= t[2] - 0.006 and b[3] >= t[3] - 0.006)
+                # a plate that covers some of the words, or a thin bar (the white stripe
+                # through the "n") that lies mostly on them
+                if not holds and (part > 0.08 or inter > 0.3 * max(_area(b), 1e-9)):
+                    add("cuts_text", j,
+                        f"the {s['type']} (shape {j + 1}) lies across the text "
+                        f"{_say(kinds[i]['text'])} (over {_pct(part)} of it) without covering all of it: a plate must be larger than "
+                        "its words (w and h in box units, the text's own width is its characters × "
+                        "0.65 × h), an accent bar goes beside them, never through them", part)
+        for a_i, a in enumerate(texts):
+            for b_i in texts[a_i + 1:]:
+                ba, bb = boxes.get(a), boxes.get(b_i)
+                if not ba or not bb or kinds[a]["text"] == kinds[b_i]["text"]:
+                    continue
+                part = _inter(ba, bb) / max(1e-9, min(_area(ba), _area(bb)))
+                if part > 0.10:
+                    add("text_overlap", b_i,
+                        f"the text {_say(kinds[a]['text'])} and the text {_say(kinds[b_i]['text'])} "
+                        f"are drawn on each other ({_pct(part)} of the smaller): put them on "
+                        "different lines — one text shape with \\n, or different y", part)
+    return sorted(found.values(), key=lambda p: -p["weight"])
+
+
+def bounds_check(effect: dict, w: int = 1920, h: int = 1080) -> dict | None:
+    """The checklist row for `check_bounds` — `{"key": "bounds", "label", "ok", "detail"}` —
+    or None for an effect with no text. `fxcheck.check` puts it after `in_frame`: "✓ checked"
+    means the words are inside the frame and its title-safe area, measured on the drawn
+    pixels, not that an anchor is."""
+    if not any(sh.get("type") == "text" for sh in (effect.get("overlay") or {}).get("shapes") or []):
+        return None
+    res = check_bounds(effect, w, h)
+    if res["ok"] is None:
+        return {"key": "bounds", "label": "the words are inside the frame and its safe area",
+                "ok": None, "detail": "skipped: " + res.get("error", "it could not be measured")}
+    return {"key": "bounds", "label": "the words are inside the frame and its safe area",
+            "ok": res["ok"],
+            "detail": (f"inside the frame and its {SAFE_MARGIN * 100:.0f} % safe area" if res["ok"]
+                       else "; ".join(p["detail"] for p in res["problems"])[:600])}
+
+
+def check_bounds(effect: dict, w: int = 1920, h: int = 1080, safe: float = SAFE_MARGIN) -> dict:
+    """`{"ok", "safe", "problems": [{kind, shape, detail}], "text": [x0, y0, x1, y1] | None}`:
+    `ok` False when the words (or any shape of a title) are cut by the frame or sit outside
+    its title-safe area, or a shape crosses them. An effect with no text is `ok` (nothing
+    to judge), with `text` None."""
+    try:
+        m = measure(effect, w, h)
+    except Exception as exc:  # noqa: BLE001 — a spec that cannot be drawn is not a spec that fits
+        return {"ok": None, "safe": safe, "problems": [], "text": None,
+                "error": f"{type(exc).__name__}: {exc}"[:200]}
+    probs = problems(m, safe)
+    union = None
+    if m:
+        tx = [v["boxes"][i] for v in m["views"] for i, s in ((s["i"], s) for s in m["shapes"])
+              if s["type"] == "text" and i in v["boxes"]]
+        if tx:
+            union = [min(b[0] for b in tx), min(b[1] for b in tx),
+                     max(b[2] for b in tx), max(b[3] for b in tx)]
+    return {"ok": not probs, "safe": safe,
+            "problems": [{k: p[k] for k in ("kind", "shape", "detail")} for p in probs],
+            "text": union}
+
+
+def fit_to_frame(effect: dict, w: int = 1920, h: int = 1080, safe: float = SAFE_MARGIN) -> dict | None:
+    """The same effect brought inside the safe area with no model: the sprite's size is
+    shrunk until its text fits, then every event moved the least it takes. Returns a
+    copy (validated shape unchanged), or None when it already fits or has no text."""
+    import copy
+
+    e = copy.deepcopy(effect)
+    ov = e.get("overlay")
+    if not ov:
+        return None
+    done = False
+    for _ in range(4):
+        res = check_bounds(e, w, h, safe)
+        u = res["text"]
+        if u is None or not any(p["kind"] in ("text_outside", "shape_outside") for p in res["problems"]):
+            break
+        bw, bh = u[2] - u[0], u[3] - u[1]
+        room = 1 - 2 * safe - 2 * _TOL
+        s = min(1.0, room / bw if bw > 0 else 1.0, room / bh if bh > 0 else 1.0)
+        if s < 1.0:
+            ov["size"] = round(max(MIN_SIZE, ov["size"] * s * 0.99), 4)
+            done = True
+            continue                               # measure again at the new size
+        dx = (safe - u[0]) if u[0] < safe - _TOL else ((1 - safe) - u[2] if u[2] > 1 - safe + _TOL else 0.0)
+        dy = (safe - u[1]) if u[1] < safe - _TOL else ((1 - safe) - u[3] if u[3] > 1 - safe + _TOL else 0.0)
+        if not dx and not dy:
+            break
+        for ev in e.get("events") or []:
+            ev["x"] = round(min(1.0, max(0.0, ev["x"] + dx)), 4)
+            ev["y"] = round(min(1.0, max(0.0, ev["y"] + dy)), 4)
+        done = True
+    return e if done else None
+
+
+
+MAX_REFITS = 2              # the designer is asked again this many times about the frame
+
+
+def refit_note(res: dict, w: int, h: int) -> str:
+    """The revise call's note for a failed bounds check: the measured overflow, as sentences."""
+    return ("THE FRAME CHECK FAILED. The renderer drew this effect on a "
+            f"{w}×{h} frame and measured it: " + " | ".join(p["detail"] for p in res["problems"])
+            + f". The title-safe area is the middle {100 - 2 * res['safe'] * 100:.0f} % of the frame "
+              "each way; every text must sit inside it and no shape may cut across a text. Fix "
+              "exactly that and keep the rest — the words, the timing, the look. A text line is "
+              "about characters × 0.65 × h × size of the frame's width: make h or size smaller, "
+              "move the event's x / y, or split the words over two lines. Keep a plate larger "
+              "than its words and an accent bar beside them.")
+
+
+def refit(effect: dict, segments: list[dict], clips: dict | None = None, *, w: int = 1920,
+          h: int = 1080, tries: int = MAX_REFITS,
+          on_try: Callable[[int, dict], None] | None = None) -> tuple[dict, int, dict]:
+    """The frame check, and — while it fails — the designer asked again with the measured
+    overflow, up to `tries` times, before anybody sees the effect (wave 23, TITLE). Returns
+    `(effect, asked, last check)`; the effect is the last one made (the first when nothing
+    was wrong), its `history` carrying each automatic ask. A designer that cannot fix it
+    leaves a failing check, which is said so, never a "✓"."""
+    res = check_bounds(effect, w, h)
+    asked = 0
+    while res["ok"] is False and asked < tries:
+        asked += 1
+        if on_try:
+            on_try(asked, res)
+        note = refit_note(res, w, h)
+        new = revise(effect, note, segments, clips)
+        new["note"] = effect.get("note") or ""             # the editor's words stay the note
+        hist = list(effect.get("history") or [])
+        hist.append({"note": note[:300], "at": _now(), "auto": "frame check"})
+        new["history"] = hist
+        effect = new
+        res = check_bounds(effect, w, h)
+    return effect, asked, res
+
+
+# ---------------------------------------------------------------- by hand (wave 23, TITLE)
+#
+# The card's own controls: the words, the size, the place, the moment and how long it
+# stays. No model is asked: the effect is changed here, validated like any other, and the
+# frame check reads it again at once (`check_bounds`).
+
+def retime(overlay: dict, seconds: float) -> dict:
+    """The overlay holding for `seconds` instead: the keyframes and shape ends that sit in
+    its closing half (the fade out) move with its end, the rest stay where they are, so a
+    title held a second longer is still faded in the same way. Changes `overlay`."""
+    seconds = max(MIN_DURATION, min(MAX_DURATION, float(seconds)))
+    old = float(overlay["duration"])
+    delta = seconds - old
+    if abs(delta) < 1e-9:
+        return overlay
+    for name, track in (overlay.get("anim") or {}).items():
+        prev = -1.0
+        out = []
+        for t, v in track:
+            t = float(t)
+            if t > old / 2 + 1e-9:
+                t += delta
+            t = min(max(t, prev + 0.001 if prev >= 0 else 0.0), seconds)
+            out.append([round(t, 4), v])
+            prev = t
+        overlay["anim"][name] = out
+    for sh in overlay.get("shapes") or []:
+        if sh.get("end") is not None and float(sh["end"]) > old / 2 + 1e-9:
+            sh["end"] = round(min(seconds, max(float(sh["end"]) + delta, float(sh.get("start", 0.0)) + 0.05)), 4)
+    overlay["duration"] = round(seconds, 4)
+    return overlay
+
+
+def apply_hand(effect: dict, edit: dict, *, w: int = 1920, h: int = 1080,
+               shot: tuple[float, float] | None = None) -> dict:
+    """`effect` with the editor's hand change applied — a copy, not yet validated. `edit`
+    may carry any of: `words` {old text: new text} (every text shape that reads the old
+    text, shadows and all); `size` (the overlay's size, a frame width fraction); `x`, `y`
+    (where the first moment sits, 0..1 of the frame; the others keep their distance);
+    `nudge` {dx, dy} (a step, fractions of the frame); `start` (seconds, in clip time — the
+    first moment's; the others keep their distance) kept inside `shot` = (in, out) when
+    given; `length` (seconds the effect holds; `retime`); `fit` (true: `fit_to_frame`, the
+    size and place the words need to be inside the safe area). Raises ValueError with a
+    sentence for what cannot be done."""
+    import copy
+
+    e = copy.deepcopy(effect)
+    ov = e.get("overlay")
+    if not isinstance(edit, dict) or not edit:
+        raise ValueError("nothing to change")
+    if not ov and any(k in edit for k in ("words", "size", "length", "fit")):
+        raise ValueError("this effect draws nothing to change")
+    events = e.get("events") or []
+    if "words" in edit:
+        words = edit["words"]
+        if not isinstance(words, dict):
+            raise ValueError("words is {old text: new text}")
+        hit = 0
+        for old, new in words.items():
+            new = str(new)
+            if not new.strip():
+                raise ValueError("a title cannot be empty — remove the effect instead")
+            for sh in ov["shapes"]:
+                if sh.get("type") == "text" and sh.get("text") == old:
+                    sh["text"] = new
+                    hit += 1
+        if not hit:
+            raise ValueError("no text reads that (it changed meanwhile?)")
+    if "size" in edit:
+        ov["size"] = _num(edit["size"], "size", MIN_SIZE, MAX_SIZE)
+    if "length" in edit:
+        retime(ov, _num(edit["length"], "length", MIN_DURATION, MAX_DURATION))
+    if events and ("x" in edit or "y" in edit):
+        dx = _num(edit["x"], "x", 0, 1) - events[0]["x"] if "x" in edit else 0.0
+        dy = _num(edit["y"], "y", 0, 1) - events[0]["y"] if "y" in edit else 0.0
+        for ev in events:
+            ev["x"] = round(min(1.0, max(0.0, ev["x"] + dx)), 4)
+            ev["y"] = round(min(1.0, max(0.0, ev["y"] + dy)), 4)
+    if events and isinstance(edit.get("nudge"), dict):
+        dx = _num(edit["nudge"].get("dx", 0.0), "nudge.dx", -1, 1)
+        dy = _num(edit["nudge"].get("dy", 0.0), "nudge.dy", -1, 1)
+        for ev in events:
+            ev["x"] = round(min(1.0, max(0.0, ev["x"] + dx)), 4)
+            ev["y"] = round(min(1.0, max(0.0, ev["y"] + dy)), 4)
+    if events and "start" in edit:
+        t0 = float(edit["start"])
+        if shot is not None:
+            t0 = min(max(t0, float(shot[0])), float(shot[1]) - 0.05)
+        shift = t0 - events[0]["t"]
+        for ev in events:
+            t = ev["t"] + shift
+            if shot is not None:
+                t = min(max(t, float(shot[0])), float(shot[1]))
+            ev["t"] = round(t, 3)
+    if edit.get("fit"):
+        fitted = fit_to_frame(e, w, h)
+        if fitted is None:
+            if not check_bounds(e, w, h)["ok"]:
+                raise ValueError("it cannot be fitted by size and place alone — change the words or ask again")
+        else:
+            e = fitted
+    return e
+
+
+_REMOVE_NOTE = re.compile(r"^\W*(?:please\s+|and\s+|also\s+)*(?:remove|delete|take (?:out|off|away)|get rid of|drop|erase|"
+                          r"undo|clear)\b", re.I)
+_ADDING = re.compile(r"\b(?:add|then|instead|replace|with a|new)\b", re.I)
+
+
+def text_key(effect: dict) -> str | None:
+    """The words an effect's title says, lower-cased and squeezed to letters and digits; two
+    effects with one key are the same title."""
+    texts = [str(s.get("text") or "") for s in ((effect.get("overlay") or {}).get("shapes") or [])
+             if s.get("type") == "text"]
+    if not texts:
+        return None
+    key = re.sub(r"[^0-9a-z\u00c0-\uffff]+", " ", max(texts, key=len).lower()).strip()
+    return key or None
+
+
+def removal_targets(note: str, candidates: list[dict]) -> list[dict] | None:
+    """A note that only asks for an effect to be taken out ("remove the second Copper 2026
+    title on shot 2") is a plain removal, never a design job (wave 23, WORDS-21: its
+    "remove" half was sent to the designer and failed, with nothing on screen saying why).
+    `candidates` are the effects already on that shot. Returns the ones the note names — by
+    their words, or the only text effect there when it names none — `[]` when it is a
+    removal with nothing it could mean (the caller says which are there), None when the note
+    is not a removal (design as usual)."""
+    note = str(note or "")
+    if not _REMOVE_NOTE.search(note) or _ADDING.search(note):
+        return None
+    flat = " " + re.sub(r"[^0-9a-z\u00c0-\uffff]+", " ", note.lower()) + " "
+    named = [c for c in candidates if (k := text_key(c)) and f" {k} " in flat]
+    if named:
+        return named
+    texted = [c for c in candidates if text_key(c)]
+    generic = re.search(r"\b(?:title|lower third|lower-third|end card|caption|text|effect|graphic|it|that|this)\b", note, re.I)
+    if generic and len(texted) == 1:
+        return texted
+    if generic and len(candidates) == 1:
+        return candidates
+    return []
+
+
+_SOUND_ASKED = re.compile(r"\b(?:sounds?|audio|sfx|whoosh|swoosh|tick|click|clatter|typewriter|typing|riser|"
+                          r"thud|bang|ding|beep|noise|music|stinger|sting|boom|jingle|zap|pop|chime|"
+                          r"hit|impact|loud|quiet|heard|hear)s?\b", re.I)
+
+
+def silence_unasked(effect: dict, note: str) -> dict:
+    """A title, a lower third or an end card is silent unless the note asks for a sound:
+    a designer that adds a tick to "a name lower third" gets a check — "✗ the sound is not
+    heard" — on an effect nobody asked to make a noise (wave 23, FINISH-09). Drops `sound`
+    from a text-led effect (text and plates only) whose note names no sound and whose text
+    does not type itself (the typewriter's clatter is its sound)."""
+    shapes = (effect.get("overlay") or {}).get("shapes") or []
+    if not effect.get("sound") or not shapes:
+        return effect
+    if any(s.get("type") != "text" and s.get("type") != "rect" for s in shapes):
+        return effect
+    if not any(s.get("type") == "text" for s in shapes) or any(s.get("reveal") == "typewriter" for s in shapes):
+        return effect
+    if _SOUND_ASKED.search(str(note or "")):
+        return effect
+    return {**effect, "sound": None}
+
+
+def _film_starts_of(segments: list[dict]) -> dict[str, float]:
+    out, t = {}, 0.0
+    for sg in segments:
+        out[str(sg.get("id"))] = t
+        t += editsmod.dur(sg)
+    return out
+
+
+def _clock(t: float) -> str:
+    m, sec = divmod(int(round(max(0.0, t))), 60)
+    return f"{m}:{sec:02d}"
+
+
+def title_notes(effects: list[dict], before: list[dict], after: list[dict]) -> list[str]:
+    """Where each title goes when an edit moves, takes out or reorders the shots it sits on
+    (wave 23, WORDS-19: "Moves shot 5 to the very start" said nothing of the title on shot 5
+    — it moved with its clip, to 0:04 over shot 2, found in the export). One sentence per
+    text effect whose place in the film changes; none for the ones that stay where they
+    are. A title belongs to its shot, so it travels with it; the sentence says where to, and
+    what to ask for to keep it at the start."""
+    if not effects:
+        return []
+    b0, a0 = _film_starts_of(before), _film_starts_of(after)
+    bi = {str(sg.get("id")): i + 1 for i, sg in enumerate(before)}
+    ai = {str(sg.get("id")): i + 1 for i, sg in enumerate(after)}
+    out = []
+    for e in effects:
+        if e.get("status") not in (None, "accepted", "proposed"):
+            continue
+        key = text_key(e)
+        sid = str(e.get("shot"))
+        if not key or sid not in bi:
+            continue
+        words = _say(max((s.get("text") or "" for s in (e.get("overlay") or {}).get("shapes") or []
+                          if s.get("type") == "text"), key=len))
+        if sid not in ai:
+            out.append(f"The title {words} sits on shot {bi[sid]}, which this takes out: the title goes too.")
+            continue
+        was, now = b0[sid], a0[sid]
+        if abs(was - now) < 0.05 and bi[sid] == ai[sid]:
+            continue
+        keep = (" It no longer opens the film: to keep a title at the start, ask for it on the new "
+                "first shot." if was < 0.05 and now >= 0.05 else "")
+        out.append(f"The title {words} stays on shot {bi[sid]}, so it moves with it — now shot {ai[sid]}, "
+                   f"at {_clock(now)} (it was at {_clock(was)}).{keep}")
+    return out
 
 
 # ---- the checks

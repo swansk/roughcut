@@ -360,7 +360,7 @@ def test_verify_looks_at_a_typed_title_once_it_has_typed(tmp_path):
     and tested the block's centre against them. It looks once the text has typed."""
     e = _effect(events=[{"t": 1.0, "x": 0.5, "y": 0.5}], sound=None, overlay={
         "duration": 1.9, "size": 1.6, "shapes": [
-            {"type": "text", "text": "2026 BLIZZARD\nKILLINGTON VT\nWITH THE BOYS", "h": 0.07,
+            {"type": "text", "text": "2026 BLIZZARD\nKILLINGTON VT\nWITH THE BOYS", "h": 0.05,
              "reveal": "typewriter", "cps": 40, "end": 1.9, "fade": 0.2}]})
     # a black slide, as the title's shot is (testsrc2's moving blocks re-encode noisily
     # enough to smear any bbox across the frame)
