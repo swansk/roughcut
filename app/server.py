@@ -10308,8 +10308,35 @@ def eta_from_samples(samples: list[tuple[float, float]], now: float, pct: float,
     return elapsed * (100.0 - pct) / pct
 
 
+class EtaSmoother:
+    """The figure the pill shows (wave 25 MUSIC, FINISH-15: 11 → 16 → 5 → 11 min). The raw
+    estimate is the SLOWER of the recent rate and the run's average (never less than what the
+    measured rate implies), then eased: it falls with the clock (at most half as fast again), and a rise is
+    taken in over ~25 s, so a busy box moves it a little at a time."""
+
+    TAU_S = 25.0
+
+    def __init__(self) -> None:
+        self.shown: float | None = None
+        self.at = 0.0
+
+    def feed(self, raw: float | None, now: float) -> float | None:
+        if raw is None:
+            return self.shown if self.shown is None else max(0.0, self.shown - (now - self.at))
+        if self.shown is None:
+            self.shown, self.at = raw, now
+            return raw
+        dt = max(0.0, now - self.at)
+        expected = max(0.0, self.shown - dt)          # what the clock alone says now
+        alpha = 1.0 - math.exp(-dt / self.TAU_S) if dt > 0 else 0.0
+        self.shown = max(expected + alpha * (raw - expected), expected - 0.5 * dt)
+        self.at = now
+        return self.shown
+
+
 def render_eta_fn() -> Callable:
     samples: list[tuple[float, float]] = []
+    smooth = EtaSmoother()
 
     def eta(j) -> float | None:
         now = time.time()
@@ -10317,9 +10344,13 @@ def render_eta_fn() -> Callable:
         if not samples or now - samples[-1][0] >= 2.0:
             samples.append((now, pct))
             del samples[:-120]
-        left = eta_from_samples(samples, now, pct, j.elapsed())
-        if left is not None:
-            j["eta_source"] = "progress"
+        elapsed = j.elapsed()
+        recent = eta_from_samples(samples, now, pct, elapsed)
+        if recent is None:
+            return smooth.feed(None, now)
+        whole = (elapsed * (100.0 - pct) / pct) if pct > 0 else recent
+        left = smooth.feed(max(recent, whole), now)
+        j["eta_source"] = "progress"
         return left
     return eta
 
@@ -10417,6 +10448,13 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
         # versions list the moment it sees "done" — a render that announces itself
         # before its own metadata exists gets listed as an unlabelled older file.
         meta["duration_s"] = probe_duration(write_to)
+        if export:
+            # what the finished file measures (the limiter's -1 dBTP is a guarantee; this is the proof)
+            lufs, tpk = effects.measure_loudness(write_to)
+            if lufs is not None:
+                meta["lufs"] = round(lufs, 1)
+            if tpk is not None:
+                meta["true_peak_dbtp"] = round(tpk, 1)
         res = probe_resolution(write_to)
         if res:
             meta["width"], meta["height"] = res
@@ -10455,7 +10493,10 @@ def _render_job(job: str, edl_path: Path, out_path: Path, meta: dict) -> None:
             f"{meta.get('duration_s') or 0:.2f} s", frame, rate,
             f"{float(target):g} Mbps target" if target else "",
             f"{mb:.1f} MB" if mb < 10 else f"{mb:.0f} MB",
+            f"{meta['lufs']:g} LUFS" if meta.get("lufs") is not None else "",
+            f"true peak {meta['true_peak_dbtp']:g} dBTP" if meta.get("true_peak_dbtp") is not None else "",
             meta.get("preset_label") or meta.get("profile")) if b))
+        entry["lufs"], entry["true_peak_dbtp"] = meta.get("lufs"), meta.get("true_peak_dbtp")
         return
 
     # The review copy is the last phase of the render, not an errand after it. The
@@ -10634,6 +10675,9 @@ def download_name(meta: dict, path: Path, size: tuple[int, int] | None) -> str:
     `cut_110ecb13.mp4` says nothing on a desktop full of downloads. Karl asked for
     this by name: *"Make it clear how to download the renders."*
     """
+    if meta.get("export"):
+        # an export keeps the name the editor gave it (wave 25 MUSIC, FINISH-11)
+        return path.name
     bits = [STATE["footage"].name]
     # A copy's name too — two cuts of one bin downloaded with the same name is the
     # confusion the name exists to prevent. The bin's first cut stays as it was.
@@ -17692,7 +17736,8 @@ def assist_state(payload: dict | None = None) -> dict:
     payload = payload if payload is not None else project_payload()
     presets = {k: v["label"] for k, v in EXPORT_PRESETS.items()}
     looks = [k for k, v in looks_library().items() if v.get("kind") != "broken"]
-    return actionsmod.state_from(payload, looks=looks, presets=presets)
+    return actionsmod.state_from(payload, looks=looks, presets=presets,
+                                 tracks=list_assets().get("music") or [])
 
 
 def clean_scope(raw) -> dict:

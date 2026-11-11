@@ -293,6 +293,9 @@
           </div>
           <div class="hint" id="musicHint" style="margin-top:6px"></div>
           <div id="musicOpts" style="display:none">
+            <label class="hint" style="display:flex;gap:8px;align-items:center;margin-top:8px">level
+              <input type="number" id="bedLevel" data-testid="bed-level" min="-34" max="6" step="1" value="-8" style="width:58px"
+                title="How loud the music is against the film's own sound, in dB (the film sits at 0). -8 is the default: present in the gaps, never competing with a line."> dB against the film</label>
             <label class="hint" style="display:flex;gap:8px;align-items:center;margin-top:8px">dip under talk
               <select id="duck"><option value="0">off</option><option value="6">a little</option><option value="12" selected>a lot</option></select></label>
             <details style="margin-top:8px"><summary class="hint" style="cursor:pointer">more</summary>

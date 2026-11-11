@@ -27,6 +27,10 @@ MIN_GAIN_DB = -60.0
 # so -24 puts the music about 8 dB under the picture before any ducking — present in
 # the gaps, never competing with a line.
 TARGET_BED_LUFS = -24.0
+# The level the editor sets (wave 25 MUSIC) is `bed_lufs`: the bed's loudness, where a film
+# sits at -16. -34 (18 dB under) to -10 (6 dB over a talking film is as loud as a bed gets).
+MIN_BED_LUFS = -50.0
+MAX_BED_LUFS = -10.0
 
 # Ducking on the film's own amplitude, kept only as a fallback for a film whose speech
 # regions are unknown. Karl, on hearing it: *"the audio is fading in and out quite a bit
@@ -98,6 +102,31 @@ def integrated_lufs(path: Path) -> float | None:
     return None
 
 
+def measure_loudness(path: Path) -> tuple[float | None, float | None]:
+    """The finished file's integrated loudness (LUFS) and true peak (dBTP), from its sound
+    alone: one ebur128 pass, the numbers the export's done screen states (wave 25 MUSIC)."""
+    r = run(["ffmpeg", "-nostdin", "-hide_banner", "-i", str(path), "-vn",
+             "-af", "ebur128=peak=true", "-f", "null", "-"])
+    lufs = peak = None
+    in_peak = False
+    for line in r.stderr.splitlines():
+        t = line.strip()
+        if t.startswith("I:") and "LUFS" in t:
+            try:
+                lufs = float(t[2:].split("LUFS")[0])
+            except ValueError:
+                pass
+        elif t.startswith("True peak"):
+            in_peak = True
+        elif in_peak and t.startswith("Peak:") and "dBFS" in t:
+            try:
+                peak = float(t[5:].split("dBFS")[0])
+            except ValueError:
+                pass
+            in_peak = False
+    return lufs, peak
+
+
 def music_spec(raw: dict) -> dict:
     """Validate a music effect. Strict, for the reason `validate_plan` is strict.
 
@@ -124,12 +153,18 @@ def music_spec(raw: dict) -> dict:
             if not (math.isfinite(v) and v >= low):
                 raise ValueError(f"{key} {raw[key]!r} is not a time")
             clock[key] = v
+    bed_lufs = float(raw.get("bed_lufs", TARGET_BED_LUFS))
+    if not (MIN_BED_LUFS <= bed_lufs <= MAX_BED_LUFS):
+        raise ValueError(f"bed_lufs {bed_lufs} outside {MIN_BED_LUFS}..{MAX_BED_LUFS}")
+    duck_db = float(raw.get("duck_db", SPEECH_DUCK_DB))
+    if not (0.0 <= duck_db <= 30.0):
+        raise ValueError(f"duck_db {duck_db} outside 0..30")
     return {
         "asset": str(raw["asset"]),
         "gain_db": gain,                                # None → measure and compute
-        "bed_lufs": float(raw.get("bed_lufs", TARGET_BED_LUFS)),
+        "bed_lufs": bed_lufs,
         "duck": bool(raw.get("duck", True)),
-        "duck_db": float(raw.get("duck_db", SPEECH_DUCK_DB)),
+        "duck_db": duck_db,
         "fade_in": max(0.0, float(raw.get("fade_in", 1.5))),
         "fade_out": max(0.0, float(raw.get("fade_out", 4.0))),
         "in": clock.get("in"),

@@ -98,6 +98,12 @@ THE OPS (each maps to the human path named after the arrow)
   Designed Effects
     design_effect {id, note}                 → the Designed Effects tool, on that shot, with
                                                  that note: its own proposal and review follow
+  Music
+    music         {track?, level?, duck?, duck_db?, fade_in?, fade_out?, remove?}  → the Audio
+                                                 tab's Music bed: a track from the project's
+                                                 (Add music…) or the repo's, its level in dB
+                                                 against the film, "dip under talk" and its
+                                                 depth, the fades; `remove` takes it off
   Export
     export        {preset, range: all|in_out, name?, size?, fps?, bitrate?}  → the Export
                                                  dialog's Export, its Frame Size / Frame
@@ -137,6 +143,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
     "lumetri": ("curve", "wheel", "look", "match", "vignette"),
     "transitions": ("transition", "fade"),
     "designed_effects": ("design_effect",),
+    "music": ("music",),
     "export": ("export",),
 }
 OPS: tuple[str, ...] = tuple(op for ops in FAMILIES.values() for op in ops)
@@ -222,6 +229,11 @@ EXPORT_SIZES = {"match": "Match Sequence", "2160": "2160p", "1080": "1080p", "72
 EXPORT_RATES = {"match": None, "23.976": "24000/1001", "25": "25", "29.97": "30000/1001",
                 "59.94": "60000/1001"}
 EXPORT_BITRATE_MIN, EXPORT_BITRATE_MAX = 0.5, 200.0
+# the music bed's level, in dB against the film (Audio tab; the film sits at -16 LUFS, so the
+# bed's `bed_lufs` is -16 + level)
+MUSIC_LEVEL_MIN, MUSIC_LEVEL_MAX = -34.0, 6.0
+MUSIC_DUCK_MAX = 30.0
+MUSIC_FADE_MAX = 20.0
 
 
 class Refused(ValueError):
@@ -279,6 +291,8 @@ Transitions
   {{"op":"fade","id","edge":"start"|"end","kind","dur"?}}   one-sided at a shot's first or last frames (a fade from / to black is dip_to_black)
 Designed Effects
   {{"op":"design_effect","id","note"}}           ask the effect designer for a drawn effect on a shot (titles, markers, graphics); its own review follows
+Music
+  {{"op":"music","track"?,"level"?,"duck"?,"duck_db"?,"fade_in"?,"fade_out"?,"remove"?}}   the music bed (Audio tab): `track` is one of the "Music tracks" listed above (omit it to change the bed that is set), `level` its loudness in dB against the film's own sound ({MUSIC_LEVEL_MIN:g}..{MUSIC_LEVEL_MAX:g}; default -8, "keep it quiet" -12, "up a bit" -4), `duck` true to dip it under talking (the default) or false, `duck_db` how far it dips ({MUSIC_DUCK_MAX:g} at most, default 12), `fade_in` / `fade_out` seconds (0..20), `remove` true takes the bed off. "Add music … and keep it under the talking" is `track` plus `duck` true
 Export
   {{"op":"export","preset","range":"all"|"in_out","name"?,"size"?,"fps"?,"bitrate"?}}   render a file (runs only once the editor accepts it). The preset's own frame, rate and quality unless you set them: size {sizes} (the frame height, at the sequence's aspect; "match" is the footage's own frame), fps {rates}, bitrate a target in Mbps ({EXPORT_BITRATE_MIN:g}–{EXPORT_BITRATE_MAX:g}). "A 720p review copy" is quick with "size":"720"
 """
@@ -423,6 +437,9 @@ class _Sim:
         self.presets: dict[str, str] = dict(state.get("presets") or {})
         colour = state.get("colour") if isinstance(state.get("colour"), dict) else {}
         self.reference = colour.get("reference")
+        # the music bed the Audio tab has (None: none), and the tracks it can choose from
+        self.music = dict(state["music"]) if isinstance(state.get("music"), dict) and state["music"].get("asset") else None
+        self.music_tracks = [dict(t) for t in state.get("music_tracks") or [] if isinstance(t, dict) and t.get("asset")]
         self.dead: set[str] = set()        # new:<k> of a creating op that was refused
         self._anon = 0
         # the cut as the editor sees it when the review opens: every line names a shot by
@@ -1383,6 +1400,68 @@ def _c_export(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
     return clean, line
 
 
+def _c_music(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
+    clean: dict = {"op": "music"}
+    if raw.get("remove"):
+        if not sim.music:
+            raise Refused("there is no music bed to remove")
+        sim.music = None
+        return {"op": "music", "remove": True}, "Remove the music bed"
+    bed = dict(sim.music) if sim.music else None
+    name = raw.get("track")
+    if name not in (None, ""):
+        key = str(name).strip().lower()
+        hit = next((t for t in sim.music_tracks if key in (str(t["asset"]).lower(), str(t.get("name", "")).lower(),
+                                                    str(t["asset"]).lower().split("/", 1)[-1])), None)
+        if hit is None:
+            have = ", ".join(t.get("name") or t["asset"] for t in sim.music_tracks) or "none"
+            raise Refused(f"no music track {name!r} (the project has: {have})")
+        clean["track"] = hit["asset"]
+        bed = {**(bed or {}), "asset": hit["asset"]}
+    elif bed is None:
+        if not sim.music_tracks:
+            raise Refused("the project has no music track yet: the editor adds one with Add music… "
+                          "in the Audio tab, then asks again")
+        raise Refused("no music bed is set: name a `track` from the list")
+    bits = []
+    if raw.get("level") is not None:
+        lv = _f(raw["level"])
+        if lv is None or not (MUSIC_LEVEL_MIN <= lv <= MUSIC_LEVEL_MAX):
+            raise Refused(f"`level` is dB against the film, {MUSIC_LEVEL_MIN:g}..{MUSIC_LEVEL_MAX:g} (got {raw['level']!r})")
+        clean["level"] = _r(lv, 1)
+        bed["bed_lufs"] = -16.0 + clean["level"]
+        bits.append(f"{clean['level']:+g} dB against the film")
+    if "duck" in raw and raw["duck"] is not None:
+        d = raw["duck"]
+        on = d if isinstance(d, bool) else str(d).strip().lower() not in ("false", "off", "no", "0")
+        clean["duck"] = bool(on)
+        bed["duck"] = bool(on)
+        bits.append("dips under talking" if on else "does not dip under talking")
+    if raw.get("duck_db") is not None:
+        dd = _f(raw["duck_db"])
+        if dd is None or not (0 <= dd <= MUSIC_DUCK_MAX):
+            raise Refused(f"`duck_db` is 0..{MUSIC_DUCK_MAX:g} dB (got {raw['duck_db']!r})")
+        clean["duck_db"] = _r(dd, 1)
+        bed["duck_db"] = clean["duck_db"]
+        if clean["duck_db"] > 0:
+            clean.setdefault("duck", True)
+        bits.append(f"{clean['duck_db']:g} dB dip")
+    for k, label in (("fade_in", "fade in"), ("fade_out", "fade out")):
+        if raw.get(k) is not None:
+            f = _f(raw[k])
+            if f is None or not (0 <= f <= MUSIC_FADE_MAX):
+                raise Refused(f"`{k}` is 0..{MUSIC_FADE_MAX:g} seconds (got {raw[k]!r})")
+            clean[k] = _r(f, 2)
+            bed[k] = clean[k]
+            bits.append(f"{label} {clean[k]:g} s")
+    if len(clean) == 1:
+        raise Refused("needs a `track`, or a `level`, `duck`, `fade_in`, `fade_out` to change")
+    sim.music = bed
+    what = next((t.get("name") or t["asset"] for t in sim.music_tracks if t["asset"] == bed["asset"]), bed["asset"])
+    head = f"Music bed: {what}" if "track" in clean else "Music bed"
+    return clean, head + (f" — {', '.join(bits)}" if bits else "")
+
+
 CHECK = {
     "insert": _c_insert, "overwrite": _c_insert, "append": _c_append, "move": _c_move,
     "razor": _c_razor, "ripple_delete": _c_ripple_delete, "trim": _c_trim, "roll": _c_roll,
@@ -1391,7 +1470,7 @@ CHECK = {
     "effect": _c_effect,
     "curve": _c_curve, "wheel": _c_wheel, "look": _c_look, "match": _c_match, "vignette": _c_vignette,
     "transition": _c_transition, "fade": _c_fade, "design_effect": _c_design_effect,
-    "export": _c_export,
+    "export": _c_export, "music": _c_music,
 }
 assert set(CHECK) == set(OPS)
 
@@ -1477,7 +1556,8 @@ def check(ops: Any, state: dict) -> dict:
     return out
 
 
-def state_from(payload: dict, *, looks: Iterable[str] = (), presets: dict | None = None) -> dict:
+def state_from(payload: dict, *, looks: Iterable[str] = (), presets: dict | None = None,
+               tracks: Iterable[dict] = ()) -> dict:
     """The validation state from GET /api/project's payload (server.project_payload)."""
     return {
         "segments": payload.get("segments") or [],
@@ -1497,4 +1577,7 @@ def state_from(payload: dict, *, looks: Iterable[str] = (), presets: dict | None
         "colour": payload.get("colour") or {},
         "looks": list(looks),
         "presets": dict(presets or {}),
+        "music": payload.get("music") or None,
+        "music_tracks": [{"asset": t["asset"], "name": t.get("name"), "duration_s": t.get("duration_s"),
+                    "project": bool(t.get("project"))} for t in tracks],
     }
