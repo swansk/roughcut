@@ -1043,3 +1043,28 @@ def test_enter_plays_the_selected_shot_only(page):
     page.wait_for_timeout(300)
     assert page.evaluate("player.idx") == 1
     assert page.evaluate("player.single") is True
+
+
+# ------------------------------------------- the typing guard and one key pressed again and again
+
+def _tap(page, key: str, code: str, n: int) -> None:
+    """n keydowns of one key in a single task: far quicker than the guard's 150 ms gaps."""
+    page.evaluate("""([key, code, n]) => { for (let i = 0; i < n; i++) document.body.dispatchEvent(
+        new KeyboardEvent('keydown', {key, code, bubbles: true, cancelable: true})); }""", [key, code, n])
+
+
+def test_eight_quick_taps_of_one_trim_key_walk_the_edge_and_are_not_typing(page):
+    page.evaluate("tl.select([tl.idAt(0)])")
+    in0 = page.evaluate("segs[0].in")
+    _tap(page, "]", "BracketRight", 8)
+    page.wait_for_timeout(200)
+    assert page.evaluate("segs[0].in") == pytest.approx(in0 + 8 / 24, abs=3e-3), "eight frames, none put back"
+    assert "looked like typing" not in toast_text(page)
+
+
+def test_a_quick_run_of_different_letters_is_still_typing_and_put_back(page):
+    click_shot(page, 0)
+    burst(page, "bnbnbnbnbnbn")                  # two different keys: a word, not one key tapped
+    page.wait_for_timeout(200)
+    assert "looked like typing" in toast_text(page)
+    assert page.evaluate("tl.state.tool") == "select"
