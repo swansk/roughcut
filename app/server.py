@@ -2840,6 +2840,9 @@ async def api_snap(request: Request) -> JSONResponse:
                          "log": r.stdout})
 
 
+ASK_SCOPES: dict[str, procscope.Scope] = {}   # a running Ask's children, for its Stop
+
+
 def _ask_watcher(entry: progress.Job, shots: int):
     """Turn a half-written answer into a bar that moves.
 
@@ -2877,6 +2880,21 @@ def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
     and saved, `originate` asks for a first cut even when there is one, and `new_clips`
     (footage imported since the last pass) asks it to say what it did with each."""
     entry = ASKS[job]
+    scope = ASK_SCOPES.setdefault(job, procscope.Scope(f"ask {job}"))
+    try:
+        with procscope.active(scope):      # Stop kills the `claude -p` writing the cut
+            _ask_run(entry, job, segments, clips, story, note, target, ranked, focus,
+                     locked=locked, finish=finish, originate=originate,
+                     new_clips=new_clips)
+    finally:
+        ASK_SCOPES.pop(job, None)
+
+
+def _ask_run(entry, job: str, segments: list[dict], clips: dict, story: str, note: str,
+             target: tuple[float, float], ranked: list[dict] | None = None,
+             focus: int | None = None, *, locked: list[str] | None = None,
+             finish: Callable[[dict], dict] | None = None,
+             originate: bool = False, new_clips: list[str] | None = None) -> None:
     # Step one is not the edit, it is the estimate. Karl: *"the first step the AI must
     # complete is an estimate of how long it will take to apply the changes. This will
     # (when estimate is complete) start a progress bar."* It is one cheap call on the
@@ -2902,6 +2920,8 @@ def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
         entry["estimate"] = {"source": est.source, "eta_s": est.eta_s,
                              "shots": shots, "why": est.detail,
                              "usage": est.usage}
+    if entry.get("cancel"):
+        return
     entry["state"] = "running"
     grade = ask_colour_context(segments) if segments else None
     try:
@@ -2936,19 +2956,27 @@ def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
                                     on_partial=watcher,
                                     **({"new_clips": new_clips} if new_clips else {}))
     except inference.BudgetExceeded as exc:
+        if entry.get("cancel"):
+            return
         entry.update(code=429)
         entry.finish("failed", detail=str(exc))
         return
     except (inference.InferenceError, ValueError) as exc:
+        if entry.get("cancel"):
+            return              # the Stop killed the call: it is `cancelled`, not failed
         entry.update(code=502)
         entry.finish("failed", detail=str(exc))
         return
     except Exception as exc:  # noqa: BLE001 — deliberately total
+        if entry.get("cancel"):
+            return
         # Anything else that escapes the call must still end the job. A thread that
         # dies with the job still `running` is a zombie: every board polling /api/jobs
         # sees an ask in flight forever and disables its own Ask button to match.
         entry.update(code=500)
         entry.finish("failed", detail=f"{type(exc).__name__}: {exc}"[:300])
+        return
+    if entry.get("cancel"):
         return
     entry.complete("notes", detail="snapping cut points to speech")
     # cut points on the sequence's frames, the cut's Effect Controls kept (the journey).
@@ -2978,11 +3006,22 @@ def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
     # exactly what happened on the first Killington ask: the model answered, the
     # browser never showed it, and the plan was only recoverable from the CLI's own
     # session transcript.
+    if entry.get("cancel"):
+        return                  # Stop pressed while the call ran: nothing of it is kept
+    plan["job"] = job
+    # `waits`: this proposal stays waiting until the editor answers it or a newer one
+    # replaces it; `cut`: the cut it was made against, which it waits for (wave 23 SAFE)
     record = {"job": job, "created": time.time(), "note": note, "story": story,
-              "plan": plan}
+              "plan": plan, "waits": True, "cut": str(STATE["edl"])}
     path = STATE["asks"] / f"{job}.json"
+    # The one that was waiting is kept, marked replaced: the Assistant lists it
+    bumped = ask_replace_waiting(job)
+    if bumped:
+        record["replaces"] = bumped
     path.write_text(json.dumps(record, indent=1), encoding="utf-8")
     entry["plan"] = plan
+    if bumped:
+        entry["replaced"] = bumped
     entry.complete("polish")
     entry.finish("done", detail="a colour change proposed, the cut as it is"
                  if plan.get("unchanged") else f"{len(plan['segments'])} shots proposed")
@@ -3144,7 +3183,7 @@ def api_ask_status(job: str) -> JSONResponse:
 
 @app.get("/api/asks/latest")
 def api_ask_latest() -> JSONResponse:
-    """The most recent proposal this project produced, from disk.
+    """The proposal this project is waiting on, from disk — else the most recent one.
 
     So a reload, a closed tab or a dropped connection costs a click rather than
     another two-minute call.
@@ -3153,15 +3192,168 @@ def api_ask_latest() -> JSONResponse:
                    key=lambda p: p.stat().st_mtime, reverse=True)
     if not files:
         return JSONResponse({"record": None, "pending": False})
-    record = json.loads(files[0].read_text(encoding="utf-8"))
     # Whether it still waits for an answer — the flow's own rule (I16.0 l): the board
     # offers "last proposal · show it" only then, never a 40-day-old answered one
     try:
         waiting = ask_pending(STATE["edl"].stat().st_mtime)
     except OSError:
         waiting = None
-    return JSONResponse({"record": record,
-                         "pending": bool(waiting) and waiting.get("job") == record.get("job")})
+    path = STATE["asks"] / f"{waiting['job']}.json" if waiting else files[0]
+    record = json.loads(path.read_text(encoding="utf-8"))
+    return JSONResponse({"record": record, "pending": bool(waiting)})
+
+
+@app.get("/api/asks/recent")
+def api_asks_recent() -> JSONResponse:
+    """The last few proposals and where each stands (waiting, accepted, discarded,
+    replaced): the Assistant's list. Any of them opens again with POST /api/asks/reopen."""
+    return JSONResponse({"proposals": asks_recent(), "cut": cut_name_of(read_edl(), STATE["edl"])})
+
+
+@app.get("/api/asks/{job}")
+def api_asks_one(job: str) -> JSONResponse:
+    """One proposal's record, whole, from disk (the memory of a job is gone after a restart)."""
+    return JSONResponse({"record": ask_record(job)[1]})
+
+
+@app.post("/api/asks/reopen")
+async def api_asks_reopen(request: Request) -> JSONResponse:
+    """Open a proposal again: waiting, as it was made, whether it was discarded, accepted or
+    replaced. The one waiting now is kept (marked replaced by this one). A proposal made for
+    another cut is refused: accepting it here would write that cut's shots over this one."""
+    body = await request.json()
+    return JSONResponse(reopen_ask(str((body or {}).get("job") or "")))
+
+
+# ---------------------------------------------------------------- Stop, for every AI job
+#
+# Wave 23 SAFE (CLUMSY-13): a short question had a Stop and the first pass had an ×, but a
+# whole-film re-cut (an Ask job), a model search or a deep look had nothing that stopped
+# it — "Close" only hid the card. One endpoint stops any job by its id, kills the call's
+# processes, drops what it returns (never a proposal, never a record) and says in a line
+# what the Stop did.
+
+def stop_job(job: str) -> dict:
+    registries = (("ask", ASKS), ("find", FINDS), ("deep", DEEPS))
+    for kind, reg in registries:
+        entry = reg.get(job)
+        if entry is None:
+            continue
+        if entry["state"] in progress.TERMINAL:
+            return {"ok": True, "job": job, "state": entry["state"], "stopped": False,
+                    "said": f"it had already {entry['state'].replace('done', 'finished')}"}
+        if kind == "ask" and entry.get("firstpass") and _fp_live() is not None:
+            r = api_firstpass_cancel()
+            return {"ok": True, "job": job, "state": "cancelled", "stopped": True,
+                    "said": "Stopped the first pass — what finished is kept, "
+                            "and no proposal will be offered."}
+        entry["cancel"] = True
+        what = {"ask": "the cut stays as it was, and no proposal was kept",
+                "find": "no matches were kept",
+                "deep": "nothing it read was kept"}[kind]
+        billed = config.charges_money()
+        said = (f"Stopped — {what}"
+                + ("; the call already sent still ends and is billed to the API key" if billed
+                   else "") + ".")
+        entry.finish("cancelled", detail=said)
+        scope = ASK_SCOPES.get(job)
+        if scope is not None:
+            threading.Thread(target=scope.kill, daemon=True, name=f"stop-{job}").start()
+        return {"ok": True, "job": job, "state": "cancelled", "stopped": True, "said": said}
+    if job in FX:
+        out = _fx_cancel(job)
+        return {**out, "stopped": out.get("state") == "cancelled",
+                "said": out.get("said") or "Stopped."}
+    if job in RENDERS:
+        r = json.loads(api_render_cancel(job).body)
+        return {"ok": True, "job": job, "state": r.get("state"), "stopped": True,
+                "said": "Stopped the export — nothing is written."}
+    raise HTTPException(404, "no such job")
+
+
+@app.post("/api/jobs/{job}/stop")
+async def api_job_stop(job: str) -> JSONResponse:
+    """Stop any running job by its id (the Stop on the AI edit card, the × on the header's
+    pill). Answers `said`, the line that tells what the Stop did."""
+    return JSONResponse(await asyncio.to_thread(stop_job, job))
+
+
+# ---------------------------------------------------------------- undo that survives a reload
+#
+# Wave 23 SAFE (CLUMSY-06/-17, HANDS-07, WORDS-14, FINISH-10): the undo and redo stacks
+# lived in the page, so a reload or a switch to another bin and back emptied them. The
+# entries are snapshots of the cut, so they can be kept: one file per cut, beside the
+# proposals. `head` is the page's snapshot of the cut when it wrote them; the page takes
+# the stacks back only when the cut it loaded is that one (an edit made elsewhere, a
+# design accepted on the server, a restored backup: then the entries describe a cut that
+# is not on screen, and putting one back would overwrite the change).
+
+UNDO_MAX_BYTES = 6_000_000
+
+
+def undo_path() -> Path:
+    stem = STATE["edl"].name.removesuffix(CUT_SUFFIX).removesuffix(".json")
+    return STATE["work"] / "undo" / STATE["footage"].name / f"{cut_slug(stem) or 'cut'}.json"
+
+
+@app.get("/api/undo")
+def api_undo_get() -> JSONResponse:
+    rec = _ask_load(undo_path()) if undo_path().is_file() else None
+    return JSONResponse(rec or {"head": None, "undo": [], "redo": []})
+
+
+@app.put("/api/undo")
+async def api_undo_put(request: Request) -> JSONResponse:
+    raw = await request.body()
+    if len(raw) > UNDO_MAX_BYTES:
+        raise HTTPException(413, "undo history too large to keep")
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        raise HTTPException(400, "not json")
+    if not isinstance(body, dict):
+        raise HTTPException(400, "an object")
+    # A page that is going away writes as the server is pointed somewhere else (the switcher
+    # POSTs the switch, then reloads): its history belongs to the cut it named, never to
+    # whichever cut the server holds by now.
+    named = body.get("cut")
+    if isinstance(named, str) and Path(named).resolve() != STATE["edl"].resolve():
+        return JSONResponse({"ok": False, "why": "the board is on another cut now"}, status_code=409)
+
+    def entries(key: str) -> list[dict]:
+        out = []
+        for e in body.get(key) or []:
+            if (isinstance(e, dict) and isinstance(e.get("label"), str)
+                    and isinstance(e.get("before"), str) and isinstance(e.get("after"), str)):
+                out.append({k: e[k] for k in ("label", "before", "after", "tag") if k in e})
+        return out
+
+    rec = {"head": body.get("head") if isinstance(body.get("head"), str) else None,
+           "undo": entries("undo"), "redo": entries("redo"), "saved": time.time()}
+    path = undo_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(rec), encoding="utf-8")
+    tmp.replace(path)
+    return JSONResponse({"ok": True, "undo": len(rec["undo"]), "redo": len(rec["redo"])})
+
+
+def reopen_ask(job: str) -> dict:
+    path, rec = ask_record(job)
+    if not _ask_for_this_cut(rec):
+        raise HTTPException(409, f"that proposal was made for the cut "
+                                 f"“{Path(rec['cut']).name.removesuffix(CUT_SUFFIX)}” — "
+                                 "open that cut first")
+    if not isinstance((rec.get("plan") or {}).get("segments"), list):
+        raise HTTPException(409, "that proposal has no shots to open")
+    replaced = ask_replace_waiting(job)
+    rec.pop("answered", None)
+    rec.pop("replaced", None)
+    rec["waits"] = True
+    rec.setdefault("cut", str(STATE["edl"]))
+    rec["reopened"] = time.time()
+    _ask_save(path, rec)
+    return {"ok": True, "job": job, "record": rec, "replaced": replaced}
 
 
 # ---------------------------------------------------------------- find a moment
@@ -3215,7 +3407,15 @@ def _match_rows(matches: list[dict]) -> list[dict]:
 
 def _find_job(job: str, query: str, clips: dict, ranked: list[dict]) -> None:
     entry = FINDS[job]
+    scope = ASK_SCOPES.setdefault(job, procscope.Scope(f"find {job}"))
+    try:
+        with procscope.active(scope):
+            _find_run(entry, job, query, clips, ranked)
+    finally:
+        ASK_SCOPES.pop(job, None)
 
+
+def _find_run(entry, job: str, query: str, clips: dict, ranked: list[dict]) -> None:
     def on_partial(kind: str, text: str) -> None:
         if kind == "thinking":
             entry.complete("read")
@@ -3229,12 +3429,18 @@ def _find_job(job: str, query: str, clips: dict, ranked: list[dict]) -> None:
     try:
         found = find.find(query, clips, ranked, on_partial=on_partial)
     except inference.BudgetExceeded as exc:
+        if entry.get("cancel"):
+            return
         entry.update(code=429)
         entry.finish("failed", detail=str(exc))
         return
     except (inference.InferenceError, ValueError) as exc:
+        if entry.get("cancel"):
+            return
         entry.update(code=502)
         entry.finish("failed", detail=str(exc))
+        return
+    if entry.get("cancel"):
         return
     entry["found"] = {"matches": _match_rows(found["matches"]),
                       "notes": found.get("notes", ""),
@@ -3253,12 +3459,18 @@ def _rerank_job(job: str, query: str, rows: list[dict]) -> None:
         entry.note("looking at the top candidates")
         got = find.rerank(query, rows, thumbs)
     except inference.BudgetExceeded as exc:
+        if entry.get("cancel"):
+            return
         entry.update(code=429)
         entry.finish("failed", detail=str(exc))
         return
     except (inference.InferenceError, ValueError) as exc:
+        if entry.get("cancel"):
+            return
         entry.update(code=502)
         entry.finish("failed", detail=str(exc))
+        return
+    if entry.get("cancel"):
         return
     entry["found"] = {"matches": _match_rows(got["matches"]), "notes": got.get("notes", ""),
                       "usage": got.get("usage", {})}
@@ -4015,23 +4227,163 @@ def look_intervals(stems: set[str]) -> dict[str, int]:
     return out
 
 
-def ask_pending(edl_mtime: float) -> dict | None:
-    """The newest Ask proposal, when nobody has answered it: not marked answered (the
-    board's Discard marks it, `POST /api/asks/answer`) and newer than the cut on disk
-    (an Accept saves the cut, which answers it)."""
-    files = sorted(STATE["asks"].glob("*.json"), key=lambda p: p.stat().st_mtime,
-                   reverse=True)
-    if not files:
-        return None
+def _ask_load(path: Path) -> dict | None:
     try:
-        rec = json.loads(files[0].read_text(encoding="utf-8"))
+        rec = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if rec.get("answered") or float(rec.get("created") or 0) <= edl_mtime:
-        return None
+    return rec if isinstance(rec, dict) else None
+
+
+def _ask_save(path: Path, rec: dict, *, keep_mtime: bool = False) -> None:
+    """A record, atomically. `keep_mtime`: marking an old proposal replaced is not a new
+    event — the order the records are read in (newest first) stays as it was."""
+    stamp = None
+    if keep_mtime:
+        try:
+            st = path.stat()
+            stamp = (st.st_atime, st.st_mtime)
+        except OSError:
+            stamp = None
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(rec, indent=1), encoding="utf-8")
+    tmp.replace(path)
+    if stamp:
+        os.utime(path, stamp)
+
+
+def ask_status(rec: dict, saved: list[dict] | None = None) -> str:
+    """Where one proposal stands: waiting | accepted | discarded | replaced.
+
+    A record made since proposals were kept (`waits`) waits until it is ANSWERED or
+    REPLACED, whatever else happens to the cut (a save, a saved copy, an index run: wave 23
+    SAFE, CLUMSY-09, FINDER-20). The one inference: a cut on disk that is exactly the
+    proposal's shots is that proposal accepted (an Accept whose answer never landed).
+    A record from before that is read by the old rule, in `ask_pending`."""
+    ans = rec.get("answered")
+    if isinstance(ans, dict) and ans.get("answer"):
+        return "accepted" if ans["answer"] == "accept" else "discarded"
+    if rec.get("replaced"):
+        return "replaced"
     plan = rec.get("plan") or {}
-    return {"job": rec.get("job"), "shots": len(plan.get("segments") or []),
-            "colour_only": bool(plan.get("unchanged"))}
+    if saved is not None and not plan.get("unchanged") and fpmod.is_accept(
+            saved, plan.get("segments") or []):
+        return "accepted"
+    return "waiting"
+
+
+def _ask_for_this_cut(rec: dict) -> bool:
+    """A proposal belongs to the cut it was made against; it waits for that cut."""
+    cut = rec.get("cut")
+    return not cut or cut == str(STATE["edl"])
+
+
+def ask_pending(edl_mtime: float) -> dict | None:
+    """The proposal waiting for this cut, when nobody has answered it. Records made by
+    this version wait until answered or replaced (`ask_status`). A record from before
+    (no `waits`) is the old rule: the newest one only, not answered and newer than the
+    cut on disk (an Accept saves the cut, which answers it)."""
+    files = sorted(STATE["asks"].glob("*.json"), key=lambda p: p.stat().st_mtime,
+                   reverse=True)
+    saved = None
+    for i, path in enumerate(files):
+        rec = _ask_load(path)
+        if rec is None:
+            continue
+        if rec.get("waits"):
+            if not _ask_for_this_cut(rec):
+                continue
+            if saved is None:
+                try:
+                    saved = fpmod._segments(read_edl())
+                except (OSError, ValueError):
+                    saved = []
+            if ask_status(rec, saved) != "waiting":
+                continue
+        else:
+            if i or rec.get("answered") or float(rec.get("created") or 0) <= edl_mtime:
+                continue
+        plan = rec.get("plan") or {}
+        return {"job": rec.get("job"), "shots": len(plan.get("segments") or []),
+                "colour_only": bool(plan.get("unchanged"))}
+    return None
+
+
+ASK_RECENT_N = 8
+
+
+def asks_recent(n: int = ASK_RECENT_N) -> list[dict]:
+    """The last few proposals of this bin, newest first, with where each stands: the
+    Assistant's list (any of them can be reopened). No plans: those are one fetch away."""
+    try:
+        saved = fpmod._segments(read_edl())
+    except (OSError, ValueError):
+        saved = []
+    rows = []
+    pend = ask_pending(_edl_mtime())
+    for path in sorted(STATE["asks"].glob("*.json"), key=lambda p: p.stat().st_mtime,
+                       reverse=True):
+        rec = _ask_load(path)
+        plan = (rec or {}).get("plan")
+        if not rec or not isinstance(plan, dict) or not isinstance(plan.get("segments"), list):
+            continue
+        if rec.get("waits"):
+            # another cut's proposal is read without the inference (its cut is not this one)
+            status = ask_status(rec, saved if _ask_for_this_cut(rec) else None)
+        else:
+            ans = rec.get("answered")
+            status = ("accepted" if isinstance(ans, dict) and ans.get("answer") == "accept"
+                      else "discarded" if isinstance(ans, dict) and ans.get("answer")
+                      else "waiting" if rec.get("job") == (pend or {}).get("job")
+                      else "replaced")
+        cut = rec.get("cut")
+        rows.append({
+            "job": rec.get("job"), "created": rec.get("created"),
+            "note": str(rec.get("note") or "")[:160],
+            "shots": len(plan["segments"]), "colour_only": bool(plan.get("unchanged")),
+            "status": status, "cut": Path(cut).name.removesuffix(CUT_SUFFIX) if cut else None,
+            "this_cut": _ask_for_this_cut(rec),
+            "replaced_by": (rec.get("replaced") or {}).get("by"),
+            "partial": bool(((rec.get("answered") or {}).get("partial")))})
+        if len(rows) >= n:
+            break
+    return rows
+
+
+def _edl_mtime() -> float:
+    try:
+        return STATE["edl"].stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def ask_record(job: str) -> tuple[Path, dict]:
+    if not re.fullmatch(r"[0-9a-f]{4,16}", job or ""):
+        raise HTTPException(400, "job: which proposal")
+    path = STATE["asks"] / f"{job}.json"
+    rec = _ask_load(path)
+    if rec is None:
+        raise HTTPException(404, "no such proposal")
+    return path, rec
+
+
+def ask_replace_waiting(by: str) -> list[str]:
+    """A proposal arrived (or was reopened): the one that was waiting for this cut is kept,
+    marked replaced by it — never dropped without a word. Returns the jobs replaced."""
+    out = []
+    try:
+        saved = fpmod._segments(read_edl())
+    except (OSError, ValueError):
+        saved = []
+    for path in STATE["asks"].glob("*.json"):
+        rec = _ask_load(path)
+        if not rec or rec.get("job") == by or not rec.get("waits"):
+            continue
+        if _ask_for_this_cut(rec) and ask_status(rec, saved) == "waiting":
+            rec["replaced"] = {"by": by, "at": time.time()}
+            _ask_save(path, rec, keep_mtime=True)
+            out.append(rec.get("job"))
+    return out
 
 
 def _same_shots(a: list[dict] | None, b: list[dict]) -> bool:
@@ -4599,6 +4951,14 @@ def answer_ask(body: dict) -> dict:
         raise HTTPException(400, "answer must be accept or discard")
     files = sorted(STATE["asks"].glob("*.json"), key=lambda p: p.stat().st_mtime,
                    reverse=True)
+    job = str(body.get("job") or "")
+    if job:                             # the board names the proposal it is answering
+        named = STATE["asks"] / f"{job}.json"
+        files = [named] if named.is_file() else []
+    elif files:                         # else the one waiting, else the newest (as before)
+        waiting = ask_pending(_edl_mtime())
+        if waiting and (STATE["asks"] / f"{waiting['job']}.json").is_file():
+            files = [STATE["asks"] / f"{waiting['job']}.json"]
     if not files:
         return {"ok": True, "job": None}
     rec = json.loads(files[0].read_text(encoding="utf-8"))
@@ -6522,6 +6882,15 @@ def _deep_job(job: str, clip: str, start: float, end: float) -> None:
             entry.complete(key)
         entry.note(detail)
 
+    scope = ASK_SCOPES.setdefault(job, procscope.Scope(f"deep {job}"))
+    try:
+        with procscope.active(scope):
+            _deep_run(entry, job, clip, stem, proxy, start, end, on_step)
+    finally:
+        ASK_SCOPES.pop(job, None)
+
+
+def _deep_run(entry, job, clip, stem, proxy, start, end, on_step) -> None:
     try:
         motion = events.motion_cache(STATE["visual"], stem)
         if not motion:
@@ -6534,13 +6903,19 @@ def _deep_job(job: str, clip: str, start: float, end: float) -> None:
             hz=events.MOTION_HZ, may_follow_up=lambda usd: not _over_budget(usd),
             on_step=on_step)
     except inference.BudgetExceeded as exc:
+        if entry.get("cancel"):
+            return
         entry.update(code=429)
         entry.finish("failed", detail=str(exc))
         return
     except (inference.InferenceError, RuntimeError, ValueError, OSError) as exc:
+        if entry.get("cancel"):
+            return
         entry.update(code=502)
         entry.finish("failed", detail=f"the deep look failed: {str(exc)[:300]}")
         return
+    if entry.get("cancel"):
+        return                  # stopped: what it read is dropped, nothing is stored
     deepmod.store(STATE["visual"], stem, clip, record)
     entry["record"] = {"start": record["start"], "end": record["end"]}
     entry.note("ranking what was seen")
