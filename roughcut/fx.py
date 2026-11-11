@@ -1131,7 +1131,12 @@ def part_graph(effects: list[tuple[dict, list[dict]]], w: int, h: int, fps: floa
                 extra += ["-i", str(mov)]
             lab = f"{tag}fxv{idx}"
             nxt = f"{tag}fxo{idx}"
-            vparts.append(f"[{idx}:v]setpts=PTS-STARTPTS+{t0:.4f}/TB[{lab}]")
+            # The sprite is RGBA; the film is limited-range BT.709 YUV. Left to `overlay`, the
+            # RGB -> YUV step is swscale's default matrix (BT.601): a green title came out
+            # [39 181 46] for #33cc33, 23 levels short, in a file tagged 709. State the matrix.
+            vparts.append(f"[{idx}:v]setpts=PTS-STARTPTS+{t0:.4f}/TB,"
+                          f"scale=out_color_matrix=bt709:out_range=tv:flags=accurate_rnd,"
+                          f"format=yuva420p[{lab}]")
             vparts.append(f"[{cur}][{lab}]overlay=0:0:eof_action=pass"
                           f":enable='between(t,{t0:.4f},{t0 + overlay['duration']:.4f})'[{nxt}]")
             cur = nxt
