@@ -114,7 +114,7 @@
   function costWords(usd, t) {
     t = t || terms;
     if (usd != null && isFinite(usd) && window.rcCost) return rcCost.note(Number(usd), t);
-    return isFree(t) ? 'free on your Claude plan — one model call'
+    return isFree(t) ? 'free on your plan'
       : 'one model call, billed to the API key — its price shows on the button before it runs';
   }
   // a price already written into a control's own hover ("… about $0.27 …"), when it has one
@@ -454,11 +454,15 @@
    * it only ever opens things. */
   const LOOP = [
     {
-      key: 'import', title: 'Bring in footage',
-      body: () => 'Your clips live in the Project panel. Add more with File › Import… or <kbd>Ctrl+I</kbd>,'
-        + ' or drop files or a folder onto the panel.',
+      key: 'import', title: 'Start with your footage',
+      // wave 24 START (COLD-02): the first thing a newcomer needs is how to start a film of
+      // their own; the clips of this film are in the Project panel
+      body: () => 'To start a film from your own footage, use'
+        + ' <button type="button" class="ix-open-link" data-rc-newfilm data-testid="tour-newfilm-link">File › New film from a folder…</button>'
+        + ' and pick the folder that holds your clips. This film’s clips are in the Project panel;'
+        + ' add more with File › Import… or <kbd>Ctrl+I</kbd>, or drop files or a folder onto it.',
       anchor: ['#pProject'], fallback: () => menuTop('file'),
-      show: showImport,
+      show: showNewFilm,
     },
     {
       key: 'firstpass', title: 'Run the first pass',
@@ -563,13 +567,22 @@
     {
       key: 'cost', title: 'What it costs',
       body: () => (isFree(terms)
-        ? 'On your Claude plan every AI action is free; the API-equivalent estimate is in each hover.'
+        ? 'On your Claude plan every AI action is free: its button says “free on your plan”.'
         : 'Each AI action is billed to your API key, and its price is on its button before you click.')
-        + ' Hover any AI control to see what it does, what it costs and what it changes.',
+        + ' Hover any AI control to see what it does and what it changes.',
       anchor: ['#firstpass .fp-btn'], fallback: () => menuTop('ai'),
     },
   ];
 
+  /* "Show me" on step 1: the New film dialog (nothing starts until Make the film). */
+  function showNewFilm() {
+    // the dialog is a modal like Import's: the callout docks beside it, Esc closes it, and
+    // nothing starts until "Make the film" is pressed
+    if (window.rcNewFilm && typeof rcNewFilm.open === 'function') { rcNewFilm.open(); return; }
+    openMenu('file');
+    T.point = $('[data-testid="menu-new-film"]');
+    place();
+  }
   function showImport() {
     if (window.rcImport && typeof rcImport.open === 'function') rcImport.open();
     // no dialog came up (Import not built here): File › Import… itself, opened and pointed at
@@ -631,6 +644,7 @@
       else if (b.classList.contains('rt-show')) showMe();
       else if (b.dataset.dot != null) go(Number(b.dataset.dot));
       else if (b.hasAttribute('data-rc-index')) openIndex();
+      else if (b.hasAttribute('data-rc-newfilm')) { if (window.rcNewFilm) window.rcNewFilm.open(); }
     });
     const ring = document.createElement('div');
     ring.className = 'rc-tour-ring';
@@ -926,10 +940,22 @@
     if (seen() != null) return;
     const t0 = performance.now();
     const ready = () => !!(window.tl && $('#tl') && $('#tl').childElementCount && fpState());
+    // wave 24 START (FINISH-01, COLD-02): a beginner's walk-through teaches starting a film;
+    // it does not pop up over a project that already has a cut, a first pass behind it, or a
+    // menu the person is already in. It waits for the menu, and stays away from a worked project.
+    const worked = () => {
+      const fp = fpState();
+      return appSegs().length > 0 || !!(fp && fp.state && fp.state !== 'never-run');
+    };
+    const busyNow = () => !!document.querySelector('#menubar .menu.open, dialog[open]');
     const wait = () => {
       if (seen() != null || window.rcTour.active) return;
       if (ready() || performance.now() - t0 > 12000) {
-        setTimeout(() => { if (seen() == null && !window.rcTour.active) start(); }, 600);
+        setTimeout(() => {
+          if (seen() != null || window.rcTour.active || worked()) return;
+          if (busyNow() && performance.now() - t0 < 30000) { setTimeout(wait, 1000); return; }
+          start();
+        }, 600);
       } else setTimeout(wait, 250);
     };
     wait();
@@ -946,6 +972,13 @@
     const scrolled = () => { if (hover.el && card && !card.hidden) hideCard(); };
     document.addEventListener('wheel', scrolled, { capture: true, passive: true });
     window.addEventListener('scroll', scrolled, true);
+    // the walk-through's "File › New film from a folder…" (newfilm.js)
+    document.addEventListener('click', (e) => {
+      const b = e.target.closest && e.target.closest('[data-rc-newfilm]');
+      if (!b) return;
+      e.preventDefault();
+      if (window.rcNewFilm) window.rcNewFilm.open();
+    });
     // the empty states' Import (app.js emptyState, the Program's line, the Source's)
     document.addEventListener('click', (e) => {
       const b = e.target.closest && e.target.closest('[data-rc-import]');

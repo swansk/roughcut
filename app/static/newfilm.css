@@ -1,0 +1,52 @@
+/* newfilm.css: the New film dialog and the length menu (newfilm.js, wave 24 START). */
+dialog.nf { width: 560px; max-width: calc(100vw - 24px); max-height: calc(100vh - 40px); padding: 0;
+            background: #202023; color: var(--text, #dcdcdf); border: 1px solid var(--line-hi, #46464c);
+            border-radius: 8px; box-shadow: 0 16px 48px rgba(0,0,0,.65); font-size: 12px; }
+dialog.nf::backdrop { background: rgba(0,0,0,.5); }
+.nf-form { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px 12px; max-height: calc(100vh - 44px);
+           box-sizing: border-box; }
+.nf-form h2 { margin: 0; font-size: 15px; }
+.nf-lead { margin: 0; color: var(--dim, #94949c); line-height: 1.45; }
+.nf-pathrow { display: flex; gap: 6px; }
+.nf-path { flex: 1 1 auto; min-width: 0; padding: 6px 8px; font-size: 12px; }
+.nf-here { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 6px; color: var(--dim, #94949c); }
+.nf-places { color: var(--faint, #66666e); }
+.nf-place { border: 0; background: transparent; color: var(--accent, #4a9df8); padding: 0 4px; font: inherit; cursor: pointer; }
+.nf-place:hover { background: transparent; text-decoration: underline; }
+.nf-where { flex-basis: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nf-where b { color: var(--text, #dcdcdf); }
+.nf-list { flex: 1 1 auto; min-height: 160px; max-height: 40vh; overflow-y: auto; border: 1px solid var(--line, #333337);
+           border-radius: 6px; background: #19191b; }
+.nf-row { display: flex; align-items: baseline; gap: 8px; padding: 6px 10px; cursor: pointer;
+          border-bottom: 1px solid #232326; }
+.nf-row:last-child { border-bottom: 0; }
+.nf-row:hover, .nf-row:focus { background: var(--card-hi, #313135); outline: none; }
+.nf-row b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nf-row .nf-ico { color: var(--faint, #66666e); width: 12px; flex: none; }
+.nf-row .nf-n { margin-left: auto; color: var(--faint, #66666e); white-space: nowrap; }
+.nf-row.has .nf-n { color: var(--good, #5fcf86); }
+.nf-row.now { box-shadow: inset 2px 0 var(--accent, #4a9df8); }
+.nf-up b { color: var(--dim, #94949c); }
+.nf-empty { padding: 10px; color: var(--dim, #94949c); }
+.nf-msg { min-height: 16px; color: var(--dim, #94949c); line-height: 1.4; }
+.nf-msg.bad, .nf-len-err.bad { color: var(--bad, #e46a6a); }
+.nf-foot { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-top: 8px;
+           border-top: 1px solid var(--line, #333337); }
+.nf-make { padding: 5px 14px; font-weight: 600; }
+.nf-make:disabled { opacity: .5; }
+.nf-hint { color: var(--faint, #66666e); font-size: 11px; flex-basis: 100%; }
+
+/* "aims for 2–3 min" is a button: it opens the length menu */
+.aims-btn, [data-aims] { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+[data-aims]:hover { color: var(--text, #dcdcdf); }
+.nf-len { position: fixed; z-index: 90; width: 258px; background: #202023; border: 1px solid var(--line-hi, #46464c);
+          border-radius: 6px; box-shadow: 0 12px 32px rgba(0,0,0,.6); padding: 10px 12px; font-size: 12px;
+          color: var(--text, #dcdcdf); display: flex; flex-direction: column; gap: 6px; }
+.nf-len-q { font-weight: 600; }
+.nf-len-chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.nf-len-chips button { padding: 3px 11px; border-radius: 12px; }
+.nf-len-type { display: flex; gap: 6px; }
+.nf-len-type input { flex: 1; min-width: 0; padding: 3px 7px; font-size: 12px; }
+.nf-len-err { min-height: 0; }
+.nf-len-err:empty { display: none; }
+.nf-len-note { color: var(--faint, #66666e); font-size: 11px; }

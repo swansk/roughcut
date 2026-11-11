@@ -201,7 +201,8 @@ def test_the_first_run_opens_step_one_on_the_workspace_and_only_once(live, bins,
     pg.wait_for_selector(TOUR, timeout=15000)
     info = pg.evaluate(STEP_JS)
     assert (info["step"], info["key"], info["which"], info["n"]) == ("1", "import", "loop", 6), info
-    assert info["title"] == "Bring in footage" and "Import" in info["body"], info
+    assert info["title"] == "Start with your footage" and "Import" in info["body"], info
+    assert "New film from a folder" in info["body"], info             # wave 24 START (COLD-02)
     assert pg.evaluate("rcTour.active") is True
     assert pg.evaluate("localStorage.getItem('roughcut.tour')") == "shown"
     # never a modal: small, and the workspace answers under it (a tab, the ruler)
@@ -454,8 +455,8 @@ def test_show_me_opens_things_and_never_asks_a_model(live, bins, tmp_path, brows
         return route.continue_()
 
     pg.route(PRICED, spy)
-    pg.evaluate("(() => { window.__imports = 0; const o = rcImport.open.bind(rcImport);"
-                " rcImport.open = () => { window.__imports++; return o(); }; })()")
+    pg.evaluate("(() => { window.__imports = 0; const o = rcNewFilm.open.bind(rcNewFilm);"
+                " rcNewFilm.open = () => { window.__imports++; return o(); }; })()")
     pg.wait_for_timeout(600)
     pg.evaluate(f"rcTour.start({'undefined' if which == 'loop' else repr(which)})")
     pg.wait_for_selector(TOUR, timeout=3000)
@@ -470,7 +471,7 @@ def test_show_me_opens_things_and_never_asks_a_model(live, bins, tmp_path, brows
             showed.append(key)
             if which == "loop" and key == "import":
                 assert pg.evaluate("window.__imports") == 1
-                # Import's dialog, or (no Import module) File › Import… opened and pointed at
+                # the New film dialog (wave 24 START: step 1 teaches starting a film), or the File menu pointed at it
                 assert pg.evaluate("""(() => { const d = document.querySelector('[data-testid=import-dialog]');
                     return !!document.querySelector('dialog[open]') || !!(d && d.getClientRects().length)
                       || (document.querySelector('#menubar .menu[data-menu=file]').classList.contains('open')
@@ -529,12 +530,12 @@ def test_show_me_keeps_the_callout_above_the_dialog_it_opened(live, bins, tmp_pa
     pg.evaluate("rcTour.start()")
     pg.wait_for_selector(TOUR, timeout=3000)
     pg.locator('[data-testid="tour-show"]').click()
-    pg.wait_for_selector('[data-testid="import-dialog"][open]', timeout=5000)
+    pg.wait_for_selector('[data-testid="newfilm-dialog"][open]', timeout=5000)
     pg.wait_for_function("document.querySelector('[data-testid=tour]').dataset.anchor === 'dialog'",
                          timeout=3000)
     pg.wait_for_timeout(300)
     d = pg.evaluate(DIALOG_JS)
-    assert d["dialog"] == "importDialog" and d["inDialog"], d
+    assert d["dialog"] == "newFilm" and d["inDialog"], d
     assert all(d["hits"]), f"the dialog covers the callout: {d}"
     assert _on_screen(d["callout"], d["vw"], d["vh"]), d
     # docked to its edge, beside it: none of the dialog's list, path bar or buttons under it
@@ -547,12 +548,12 @@ def test_show_me_keeps_the_callout_above_the_dialog_it_opened(live, bins, tmp_pa
     # its buttons answer while the dialog is up: Next moves the walk-through on
     pg.locator('[data-testid="tour-next"]').click()
     pg.wait_for_function("document.querySelector('[data-testid=tour]').dataset.step === '2'", timeout=3000)
-    assert pg.locator('[data-testid="import-dialog"][open]').count() == 1
+    assert pg.locator('[data-testid="newfilm-dialog"][open]').count() == 1
     pg.locator('[data-testid="tour-back"]').click()
     pg.wait_for_function("document.querySelector('[data-testid=tour]').dataset.step === '1'", timeout=3000)
     # Esc closes the dialog only; the callout is back on the workspace, beside its anchor
     pg.keyboard.press("Escape")
-    pg.wait_for_selector('[data-testid="import-dialog"]', state="hidden", timeout=3000)
+    pg.wait_for_selector('[data-testid="newfilm-dialog"]', state="hidden", timeout=3000)
     pg.wait_for_function("(() => { const t = document.querySelector('[data-testid=tour]');"
                          " return t && t.parentElement === document.body && t.dataset.anchor !== 'dialog'; })()",
                          timeout=3000)
@@ -596,9 +597,7 @@ def _says_section_s(card) -> None:
     cost = card["cost"]
     assert not re.search(r"\bspent\b", cost, re.I), cost
     if cost != "none — no model call":
-        assert cost.startswith("free on your Claude plan"), cost
-    if "$" in cost:
-        assert "if using the API" in cost, cost
+        assert cost == "free on your plan", cost       # wave 24 START: one wording, no figure in a hover
     assert card["what"].strip() and card["change"].strip(), card
     b = card["box"]
     assert b["l"] >= 0 and b["t"] >= 0 and b["r"] <= card["vw"] and b["b"] <= card["vh"], card
@@ -619,7 +618,7 @@ def test_every_ai_control_has_a_hover_card(live, bins, tmp_path, browser):
     pg.wait_for_function("(() => { const c = document.querySelector('[data-testid=ai-hover]');"
                          " return c && !c.hidden; })()", timeout=2000)
     cards["firstpass"] = pg.evaluate(CARD_JS)
-    assert "free on your Claude plan — about $" in cards["firstpass"]["cost"], cards["firstpass"]
+    assert cards["firstpass"]["cost"] == "free on your plan", cards["firstpass"]     # one wording (wave 24 START)
     # it goes when the pointer leaves
     pg.mouse.move(2, 890)
     pg.wait_for_function("document.querySelector('[data-testid=ai-hover]').hidden", timeout=2000)
@@ -704,7 +703,7 @@ def test_the_ai_context_menu_items_have_hover_cards(live, bins, tmp_path, browse
     assert ask["name"].strip() == "Ask AI about this" and ask["for"] == "ai-ctx-ask", ask
     _says_section_s(ask)
     assert "until you accept" in ask["change"], ask
-    assert ask["cost"].startswith("free on your Claude plan — about $"), ask   # the assist's own price
+    assert ask["cost"] == "free on your plan", ask   # the assist's own price, said once
     deep = _card(pg, '[data-testid="ai-ctx-deep"]')
     assert deep["name"].strip() == "Look deeper" and deep["for"] == "ai-ctx-deep", deep
     _says_section_s(deep)
