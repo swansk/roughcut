@@ -565,6 +565,8 @@ def test_a_kept_row_or_a_find_result_dropped_on_v1_inserts_there(page, project):
     # the row flipped to "in the cut" and is still draggable: past the end → appended
     page.wait_for_function(
         "document.querySelector('#library .keep a.use') !== null", timeout=8000)
+    page.evaluate("tl.fit()")        # the zoom no longer re-fits itself after a change of length (wave 25): fit by hand
+    page.wait_for_timeout(400)
     ruler = page.locator("#tl .tl-ruler").bounding_box()
     drag_to(page, "#library .keep", view_x(page, page.evaluate("tl.total()")) + 30,
             ruler["y"] + ruler["height"] / 2)

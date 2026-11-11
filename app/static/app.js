@@ -831,13 +831,20 @@ function renderTransitionPanel(box, info) {
     const key = info.key;
     el.querySelector('.trdur').addEventListener('change', (ev) => {
       const v = parseFloat(ev.target.value);
-      if (Number.isFinite(v) && v > 0) tl.setTransitionDur(key, v);
+      if (Number.isFinite(v) && v > 0) {
+        const got = tl.setTransitionDur(key, v);
+        const r = tl.transitionInfo(key) ? tl.transitionInfo(key).rate : 24;
+        if (got != null && Math.abs(got - v) > 0.5 / r) toast(`limited to ${Math.round(got * r)} frames: ${Math.round(v * r)} would run past the footage the shots have at this cut`);
+      }
       renderInspector();
     });
     el.querySelector('.trframes').addEventListener('change', (ev) => {
       const f = parseFloat(ev.target.value);
       const cur = tl.transitionInfo(key);
-      if (Number.isFinite(f) && f >= 1 && cur) tl.setTransitionDur(key, f / cur.rate);
+      if (Number.isFinite(f) && f >= 1 && cur) {
+        const got = tl.setTransitionDur(key, f / cur.rate);
+        if (got != null && Math.abs(got - f / cur.rate) > 0.5 / cur.rate) toast(`limited to ${Math.round(got * cur.rate)} frames: ${Math.round(f)} would run past the footage the shots have at this cut`);
+      }
       renderInspector();
     });
     el.querySelectorAll('input').forEach((i) => i.addEventListener('keydown', (ev) => {
@@ -2334,7 +2341,7 @@ function v2At(t) {
   const list = window.tl && typeof tl.overlays === 'function' ? tl.overlays() : [];
   for (const o of list) {
     const end = o.at + (o.out - o.in) / (Number(o.speed) || 1);
-    if (t >= o.at - 1e-6 && t < end) at = o;
+    if (t >= o.at - 1e-6 && t < end - 1e-3) at = o;     // the frame AT the end is the shot under it (R2-06: a rounding showed the cutaway one frame long)
     else if (o.at > t && (!next || o.at < next.at)) next = o;
   }
   return { at, next };
@@ -7252,13 +7259,17 @@ document.addEventListener('keydown', (e) => {
   else if (k === 'k') { sel = Math.max(0, sel - 1); paint(); scrollSel(); }
   // no plain `u`: on the pass U is "later" (I16.0 n); undo is ⌘Z, the foundation's
   else if (k === 'x') { pushUndo('remove'); segs.splice(sel, 1); render(); }
-  // the trims by key — the strip has no in/out buttons (INTAKE M16 decision 5) — and
-  // only on a selected shot: nothing is selected at start
-  else if ('[]{}'.includes(k) && (tl.state.anchor == null || !segs[sel])) return;
-  else if (k === '[') { pushUndo('trim'); nudge(sel, 'in', -step); render(); }
-  else if (k === ']') { pushUndo('trim'); nudge(sel, 'in', step); render(); }
-  else if (k === '{') { pushUndo('trim'); nudge(sel, 'out', -step); render(); }
-  else if (k === '}') { pushUndo('trim'); nudge(sel, 'out', step); render(); }
+  // the trims by key (HANDS round 3, R2-20): one FRAME a press, Shift five; [ ] move the in-point,
+  // Alt+[ Alt+] the out-point. By the physical key (e.code): on a US keyboard Shift+] types `}`, and
+  // that used to trim the OUT point by a second when the sheet said Shift made the in-point step bigger.
+  // Only on a selected shot: nothing is selected at start.
+  else if (e.code === 'BracketLeft' || e.code === 'BracketRight') {
+    const at = tl.state.anchor == null ? -1 : tl.indexOf(tl.state.anchor);     // the SELECTED shot, not the one under the playhead
+    if (at < 0 || !segs[at] || e.metaKey || e.ctrlKey) return;
+    const d = (e.code === 'BracketLeft' ? -1 : 1) * (e.shiftKey ? 5 : 1) * tl.frame();
+    e.preventDefault();
+    pushUndo('trim'); nudge(at, e.altKey ? 'out' : 'in', d); render();
+  }
   else if (k === ' ') { e.preventDefault(); revealMonitor(); toggleCut(); }
   else if (k === 'Enter') {
     e.preventDefault(); revealMonitor(); playFrom(sel, { single: true });

@@ -418,7 +418,8 @@
     export: () => open('out'),
     cut: () => { if (window.tlKeys) tlKeys.cutKey(); },
     copy: () => { if (window.tlKeys) tlKeys.copyKey(); },
-    paste: () => { if (window.tlKeys) tlKeys.pasteKey(); },
+    paste: () => { if (window.tlKeys) tlKeys.pasteKey('insert'); },
+    pasteover: () => { if (window.tlKeys) tlKeys.pasteKey('overwrite'); },
     gototc: () => { if (window.rcHands) setTimeout(() => rcHands.editTimecode('timeline'), 0); },
     savenote: () => { if (window.tlKeys) tlKeys.saveKey(); },
     deftrans: () => { if (window.tl && typeof tl.applyTransition === 'function') tl.applyTransition('video'); },
@@ -2195,13 +2196,33 @@
     }
     await loadClips();
     window.dispatchEvent(new CustomEvent('rc:clips-changed', { detail: {} }));
+    // One step on the board's own undo stack (R2-15: Ctrl+Z undid an edit, not the rotation): the entry
+    // carries a tag, and the change event of its undo / redo turns the clip back / again.
+    let tag = null;
+    if (!undo && window.tl && typeof tl.mark === 'function' && d && d.previous !== mode) {
+      tag = `rotate:${++rotSeq}`;
+      rotLog[tag] = { name, from: d.previous || 'sensor', to: mode };
+      tl.mark(`rotate ${name}`, tag);
+    }
     if (!undo && typeof window.toast === 'function') {
       const label = (ROT_ITEMS.find((x) => x[0] === mode) || [0, mode])[1];
-      window.toast(`${name}: ${label.toLowerCase()}`, 6000, {
-        action: { label: 'Undo', run: () => rotateClip(name, d.previous || 'sensor', true) } });
+      window.toast(`${name}: ${label.toLowerCase()} — Ctrl+Z turns it back`, 6000, {
+        action: { label: 'Undo', run: () => {
+          const top = window.tl && tl.nextUndo ? tl.nextUndo() : null;
+          if (tag && top && top.tag === tag) tl.undo(); else rotateClip(name, d.previous || 'sensor', true);
+        } } });
     }
     return d;
   }
+  const rotLog = {};
+  let rotSeq = 0;
+  function onRotUndo(ev) {
+    const tag = ev && typeof ev.tag === 'string' ? ev.tag : '';
+    const r = rotLog[tag];
+    if (!r || (ev.kind !== 'undo' && ev.kind !== 'redo')) return;
+    rotateClip(r.name, ev.kind === 'undo' ? r.from : r.to, true);
+  }
+  setTimeout(function hook() { if (window.tl && tl.on) tl.on('change', onRotUndo); else setTimeout(hook, 300); }, 0);
   function rotMenu(x, y, name) {
     let m = $('#rotMenu');
     if (!m) {
@@ -2360,9 +2381,38 @@
       this.shRate = 0;
       v.playbackRate = 1;
       if (!v.paused) { v.pause(); return; }
-      const [, b] = this.marksFor(this.clip);
-      if (v.currentTime >= b - 0.05) v.currentTime = this.marksFor(this.clip)[0];
+      const end = v.duration || this.clip.duration || 0;
+      if (end && v.currentTime >= end - 0.05) v.currentTime = this.marksFor(this.clip)[0];   // at the very end: again from the In
       v.play().catch(() => { /* the monitor shows its wait; nothing to shout */ });
+    },
+    /* Play In to Out (Premiere's Ctrl+Shift+Space): from the In, stopping on the Out. */
+    playRange() {
+      const v = this.v;
+      if (!v || !this.clip) return;
+      this.shuttle(0);
+      const [a, b] = this.marksFor(this.clip);
+      if (v.currentTime < a || v.currentTime >= b - 0.05) v.currentTime = a;
+      this.toOut = true;
+      v.play().catch(() => { /* the monitor shows its wait */ });
+    },
+    /* A typed time in the Source's own frames (the timeline's grammar, `tl.parseTime`): returns the
+     * line to say, or null when it was not understood (the field stays open). */
+    goTo(text) {
+      const v = this.v, c = this.clip;
+      if (!v || !c) return { ok: false, why: 'pick a clip in the Project panel first' };
+      const r = this.rate(c) || this.fps();
+      const p = window.tl && tl.parseTime ? tl.parseTime(text, r) : { ok: false, why: 'the timeline is not ready' };
+      if (!p.ok) return p;
+      const secs = p.frames / r;
+      const dur = Number(c.duration) || v.duration || 0;
+      let t = p.rel ? v.currentTime + p.rel * secs : secs;
+      let note = '';
+      if (t > dur) { t = dur; note = ' — past the end of the clip, went to its end'; }
+      if (t < 0) { t = 0; note = ' — before the start, went to the first frame'; }
+      this.shuttle(0);
+      v.currentTime = t;
+      this.paint();
+      return { ok: true, said: `${tcode(t, c.fps)}${note}` };
     },
     step(n) {
       const v = this.v;
@@ -2437,7 +2487,8 @@
         const c = this.clip;
         if (!c || v.paused) return;
         const m = this.marks[c.clip] || [];
-        if (Number.isFinite(m[1]) && v.currentTime >= m[1]) { v.pause(); v.currentTime = m[1]; }
+        // marks never stop J K L or Play (R2-01); only "play In to Out" (Ctrl+Shift+Space) stops there
+        if (this.toOut && Number.isFinite(m[1]) && v.currentTime >= m[1]) { v.pause(); v.currentTime = m[1]; this.toOut = false; }
       });
       v.addEventListener('play', () => this.paint());
       v.addEventListener('pause', () => this.paint());
@@ -2537,8 +2588,7 @@
     ['space', 'play / pause the cut from here', 'play'],
     ['↵', 'play this shot only', 'play'],
     ['G', 'the grade on / off — "ungraded" shows on the picture while it is off', 'play'],
-    ['[ ]', 'trim the in-point (Shift: a second)', 'trim'],
-    ['{ }', 'trim the out-point (Shift: a second)', 'trim'],
+    ['[ ]', 'trim the selected shot’s in-point one frame (Shift: five) — Alt+[ Alt+] the out-point', 'trim'],
     ['click', 'a keep selects it', 'bin'],
     ['↵', 'adds the selected keep at the playhead', 'bin'],
     ['space', 'plays the selected keep in the bin', 'bin'],
@@ -2546,14 +2596,15 @@
     ['I O', 'mark In / Out (Source focused)', 'source'],
     ['space', 'play / stop the source clip (Source focused)', 'source'],
     ['← →', 'step a frame (Source focused)', 'source'],
-    ['J K L', 'shuttle the source clip: L forward (again 2× 4× 8×), J back, K stop (Source focused)', 'source'],
-    ['Home End', 'the source clip’s first / last frame (Source focused)', 'source'],
+    ['J K L Home End', 'shuttle the source clip (L again 2× 4× 8×), K stop, its first / last frame (Source focused)', 'source'],
+    ['⌘⇧Space', 'play the source clip In to Out and stop there (marks never stop J K L)', 'source'],
   ];
   function keyTable() {
     const box = $('#keyTable');
     if (!box) return;
     const tlk = (window.tlKeys && Array.isArray(window.tlKeys.KEYS)) ? window.tlKeys.KEYS : [];
-    const rows = BOARD_KEYS.map(([k, what, g]) => ({ k, what, g }));
+    const kl = (k) => (window.tl && typeof tl.keyLabel === 'function' ? tl.keyLabel(k) : k);
+    const rows = BOARD_KEYS.map(([k, what, g]) => ({ k: kl(k), what, g }));
     const seen = new Set(rows.map((r) => `${r.k}|${r.what}`));
     // a timeline row carries its group as its 4th field (lane KEYS)
     tlk.forEach((row) => {
@@ -2653,6 +2704,13 @@
       }
       // The Source monitor's keys, while it is the focused panel (Premiere's rule: a key
       // acts on the panel with the blue outline).
+      if (focusedName() === 'source' && e.code === 'Space' && e.shiftKey && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault(); e.stopImmediatePropagation(); source.playRange(); return;
+      }
+      // Enter with the Source focused starts nothing (it played "this shot only" on the sequence: R2-05)
+      if (focusedName() === 'source' && e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault(); e.stopImmediatePropagation(); return;
+      }
       if (focusedName() === 'source' && !e.metaKey && !e.ctrlKey && !e.altKey) {
         const k = e.key.toLowerCase();
         const act = k === 'i' ? () => source.mark('in') : k === 'o' ? () => source.mark('out')

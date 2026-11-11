@@ -100,8 +100,8 @@
     ['X ⇧Del', 'ripple delete the selection (⌫ Del: only a shot you chose)', '', 'trim'],
     ['⌘Z ⌘⇧Z', 'undo / redo', 'foundation', 'trim'],
     ['⌘A ⌘⌥D Esc', 'select all · duplicate · clear the selection and marks', '', 'trim'],
-    ['⌘C ⌘X ⌘V', 'copy · cut · paste shots: paste inserts at the playhead (ripple, as , does) on the targeted track', '', 'trim'],
-    ['⌘G', 'go to a timecode: type 40. (seconds), 1:05, 00:00:40:00, +2. or -10 (frames), then ↵', '', 'move'],
+    ['⌘C ⌘X ⌘V ⌘⇧V', 'copy · cut · paste shots: ⌘V inserts at the playhead (ripple, as , does), ⌘⇧V overwrites (as . does), on the targeted track', '', 'trim'],
+    ['⌘G', 'go to a time (the Source’s when it has the focus): 40. · 0.5s · 12f · 1:00 · 00:00:40:00 · +/- from here, then ↵', '', 'move'],
     ['⌘S', 'save: Roughcut saves as you go, this only says so', '', 'move'],
     ['⌘D ⇧D ⌘⇧D', 'the default video · audio · both transitions, 1 s at the selected edit', '', 'trim'],
     ['M ⇧M ⌘⇧M', 'marker (M on one: edit it) · next · previous (⌘⌥M clears)', '', 'move'],
@@ -310,8 +310,7 @@
 
   function goTo(t, id) {
     settle();
-    tl.seek(clamp(t, 0, tl.total()));
-    if (id != null) tl.select([id]);
+    tl.seek(clamp(t, 0, tl.total()));     // the playhead moves; the selection stays the editor's
     return true;
   }
 
@@ -571,15 +570,35 @@
     return true;
   }
 
+  /* A selected transition: Delete takes it off, one undo step, and says which. */
+  function removeSelTransition() {
+    const info = tl.transitionInfo ? tl.transitionInfo() : null;
+    if (!info || !tl.tsel) return false;
+    tl.removeTransition(tl.tsel);
+    say(`removed ${info.name}${info.align === 'center' ? ` between shot ${info.shotA} and shot ${info.shotB}`
+      : info.align === 'start' ? ` from the head of shot ${info.shotB}` : ` from the tail of shot ${info.shotA}`}`
+      + ` (${info.dur.toFixed(2)} s) — ${L('⌘Z')} brings it back`);
+    return true;
+  }
+
+  /* Delete, ⇧Delete, ⌫ and X act on the selection and nothing else: a selected transition, an edit
+   * point, a clip on V2, or the shots. Nothing selected: they say so and do nothing. The playhead is
+   * not a selection (R2-09 / R2-18). */
   function rippleDelete() {
     if (removeOverlaySel()) return true;
+    if (!tl.state.sel.size && removeSelTransition()) return true;
     if (!tl.state.sel.size && deleteAtEdit()) return true;
     const ids = [...tl.state.sel];
-    if (!ids.length) { say('nothing selected'); return true; }
+    if (!ids.length) { say('nothing selected — click a shot, an edit point or a transition first'); return true; }
     const what = namedShots(ids);
-    tl.remove(ids);                  // the foundation selects the shot that takes the place
-    chosen = false;                  // …which nobody chose
-    say(`removed ${what} — ${L('⌘Z')} brings ${ids.length > 1 ? 'them' : 'it'} back`);
+    const extra = allSel ? unlockedOverlays() : [];
+    allSel = false;
+    tl.batch('remove', () => {
+      extra.forEach((o) => tl.removeOverlay(o.id));
+      tl.remove(ids);
+    });
+    chosen = false;
+    say(`removed ${what}${extra.length ? ` and ${extra.length} clip${extra.length > 1 ? 's' : ''} on ${[...new Set(extra.map((o) => o.track))].join(', ')}` : ''} — ${L('⌘Z')} brings ${ids.length + extra.length > 1 ? 'them' : 'it'} back`);
     return true;
   }
 
@@ -601,18 +620,28 @@
   }
 
   function backspace() {
-    if (removeOverlaySel()) return true;
-    if (!tl.state.sel.size && deleteAtEdit()) return true;
+    if (!tl.state.sel.size) return rippleDelete();
     if (chosen) return rippleDelete();
-    say(tl.state.sel.size ? 'click a shot to choose it — ⌫ takes out only a shot you selected'
-      : 'nothing selected');
+    say('click a shot to choose it — Delete takes out only a shot you selected (Next picked this one)');
     return true;
   }
 
+  /* Select all is everything on unlocked tracks (R2-14: the V2 cutaway was left behind): the shots, and
+   * the clips on V2 and up. The shots show as selected; the clips go with them on Delete. */
+  let allSel = false, selfSelecting = false;
+  function unlockedOverlays() {
+    const tr = tl.tracks ? tl.tracks() : {};
+    return (tl.overlays ? tl.overlays() : []).filter((o) => !(tr[o.track] && tr[o.track].lock));
+  }
   function selectAll() {
     const list = segs();
     if (!list.length) return true;
+    selfSelecting = true;
     tl.select(list.map((s) => s.id));
+    selfSelecting = false;
+    const ov = unlockedOverlays();
+    allSel = ov.length > 0;
+    if (ov.length) say(`selected all: ${list.length} shot${list.length > 1 ? 's' : ''} and ${ov.length} clip${ov.length > 1 ? 's' : ''} on ${[...new Set(ov.map((o) => o.track))].join(', ')}`);
     return true;
   }
 
@@ -871,18 +900,19 @@
     return true;
   }
 
-  function pasteKey() {
+  function pasteKey(mode) {
     if (!clip.shots.length && !clip.over) {
       say(`nothing to paste — select shots and press ${L('⌘C')} (or ${L('⌘X')}) first`);
       return true;
     }
-    return pasteAt(segs().length ? clamp(tl.state.playhead, 0, tl.total()) : 0, false);
+    return pasteAt(segs().length ? clamp(tl.state.playhead, 0, tl.total()) : 0, false, mode || 'insert');
   }
 
   /* Paste at film time `at`. Inside a shot it splits it (an insert, as Premiere's) and the toast says
    * where it went and offers the next cut instead, one click (round 2 CLUMSY-06: a click on an empty
    * track had moved the playhead and the editor did not know). */
-  function pasteAt(at, again) {
+  function pasteAt(at, again, mode) {
+    mode = mode || 'insert';
     settle();
     if (clip.over) {
       const o = clip.over;
@@ -903,7 +933,7 @@
       const h = tl.shotAt(at);
       if (h && !upper) {
         const st = tl.filmStart(h.id), en = st + tl.dur(tl.byId(h.id)), fr = tl.frame();
-        if (at - st > fr / 2 && en - at > fr / 2) split = { n: h.index + 1, start: st, end: en };
+        if (mode === 'insert' && at - st > fr / 2 && en - at > fr / 2) split = { n: h.index + 1, start: st, end: en };
       }
     }
     tl.batch(`paste ${clip.shots.length > 1 ? clip.shots.length + ' shots' : 'a shot'}`, () => {
@@ -915,7 +945,9 @@
           made.push(oid);
           end += tl.dur(seg);
         } else {
-          const id = made.length ? tl.insert(seg, made[made.length - 1]) : tl.insertAt(seg, end);
+          const id = mode === 'overwrite' ? tl.overwrite(seg, end)
+            : made.length ? tl.insert(seg, made[made.length - 1]) : tl.insertAt(seg, end);
+          if (id != null && mode === 'overwrite') end += tl.dur(tl.byId(id));
           if (id == null) break;
           made.push(id);
         }
@@ -932,7 +964,7 @@
     tl.setPlayhead(clamp(end, 0, tl.total()));
     const n = `${made.length} shot${made.length > 1 ? 's' : ''}`;
     const home = split ? { start: split.start, end: split.end } : null;
-    const msg = `pasted ${n} ${upper ? `on ${upper} ` : ''}at ${tl.tc(at)}${split ? `, inside shot ${split.n} (split)` : ''} — ${L('⌘Z')} takes ${made.length > 1 ? 'them' : 'it'} back`;
+    const msg = `${mode === 'overwrite' ? 'pasted over' : 'pasted'} ${n} ${upper ? `on ${upper} ` : ''}at ${tl.tc(at)}${split ? `, inside shot ${split.n} (split)` : ''} — ${L('⌘Z')} takes ${made.length > 1 ? 'them' : 'it'} back`;
     if (split && !upper && !again && typeof window.toast === 'function') {
       window.toast(msg, 8000, { action: { label: 'at the next cut instead', run: () => {
         tl.undo();
@@ -950,56 +982,16 @@
   }
 
   /* ------------------------------------------------------------ a typed timecode */
-  /* What the timecode fields accept (HANDS-08, CLUMSY-19, FINISH-12), at the SEQUENCE's rate
-   * (`tl.frame()`, nominal 24 for 23.976, as `tl.tc` writes it):
-   *   00:00:40:00   HH:MM:SS:FF — also 0:40:00 style short forms with 4 fields
-   *   40.  40.5     seconds
-   *   1:05  1:02:03 m:ss and h:mm:ss (two or three fields)
-   *   5108          digits only: Premiere's, filled from the right, 5108 = 00:00:51:08
-   *   +2.  -10  +1:05   relative to the playhead: a number with a point or colons is seconds
-   *                 (or m:ss), plain digits are frames, as in Premiere
-   * Returns {ok, t, why, relative}; t is film seconds on the frame grid, not yet clamped. */
+  /* What the timecode fields accept: the one grammar of `tl.parseTime` (timeline.js), at the SEQUENCE's
+   * rate, with + and - relative to the playhead. Returns {ok, t, why, relative}; t is film seconds on
+   * the frame grid, not yet clamped. */
   function parseTimecode(text, from) {
-    const raw = String(text == null ? '' : text).trim().replace(/;/g, ':');
-    if (!raw) return { ok: false, why: 'type a timecode' };
-    const rel = /^[+-]/.test(raw) ? (raw[0] === '-' ? -1 : 1) : 0;
-    const body = rel ? raw.slice(1).trim() : raw;
+    const p = tl.parseTime(text);
+    if (!p.ok) return p;
     const rate = 1 / tl.frame();
-    const nominal = Math.max(1, Math.round(rate));
-    const snap = (t) => Math.round(t * rate) / rate;
-    let secs = null, frames = null;
-    if (/^\d*\.\d*$/.test(body) && /\d/.test(body)) {
-      secs = parseFloat(body);                                   // 40.  40.5  .5
-    } else if (/^\d+(:\d+){1,3}$/.test(body)) {
-      const f = body.split(':').map(Number);
-      if (f.length === 4) {
-        if (f[3] >= nominal) return { ok: false, why: `frames go 0–${nominal - 1} at ${nominal} fps` };
-        if (f[2] >= 60 || f[1] >= 60) return { ok: false, why: 'minutes and seconds go 0–59' };
-        frames = ((f[0] * 60 + f[1]) * 60 + f[2]) * nominal + f[3];
-      } else {
-        if (f.length === 3 && (f[1] >= 60 || f[2] >= 60)) return { ok: false, why: 'minutes and seconds go 0–59' };
-        if (f.length === 2 && f[1] >= 60) return { ok: false, why: 'seconds go 0–59' };
-        secs = f.length === 3 ? f[0] * 3600 + f[1] * 60 + f[2] : f[0] * 60 + f[1];
-      }
-    } else if (/^\d+$/.test(body)) {
-      if (rel) frames = parseInt(body, 10);                      // +12: twelve frames
-      else {
-        if (body.length > 8) return { ok: false, why: 'too many digits for HH:MM:SS:FF' };
-        const d = body.padStart(8, '0');
-        const f = [d.slice(0, 2), d.slice(2, 4), d.slice(4, 6), d.slice(6, 8)].map(Number);
-        if (f[3] >= nominal) return { ok: false, why: `frames go 0–${nominal - 1} at ${nominal} fps` };
-        if (f[2] >= 60 || f[1] >= 60) return { ok: false, why: 'minutes and seconds go 0–59' };
-        frames = ((f[0] * 60 + f[1]) * 60 + f[2]) * nominal + f[3];
-      }
-    } else {
-      return { ok: false, why: `"${raw}" is not a timecode — try 40. or 1:05 or 00:00:40:00 or +2.` };
-    }
-    // typed seconds are timecode seconds: 40. is 00:00:40:00 (960 frames at 23.976, 40.04 s of
-    // film), as the field shows it, not 959 frames
-    if (secs != null) frames = Math.round(secs * nominal);
-    let t = frames / rate;
-    if (rel) t = (from == null ? tl.state.playhead || 0 : from) + rel * t;
-    return { ok: true, t: snap(t), relative: !!rel };
+    let t = p.frames / rate;
+    if (p.rel) t = (from == null ? tl.state.playhead || 0 : from) + p.rel * t;
+    return { ok: true, t: Math.round(t * rate) / rate, relative: !!p.rel };
   }
 
   /* Park the playhead (and the Program) at a typed timecode; past either end it goes to the
@@ -1012,15 +1004,14 @@
     if (!list.length) { say('nothing on the timeline to go to'); return { ok: false, why: 'empty' }; }
     settle();
     pauseMon();
-    const last = Math.max(0, total - tl.frame());          // the last frame
+    // the playhead can park ON the end (the frame after the last), as in Premiere: an overwrite or an
+    // insert there appends instead of eating the last frame
     let t = r.t, note = '';
-    if (t > total + tl.frame() / 2) { t = last; note = ` — past the end of the film (${tl.tc(total)}), went to its last frame`; }
+    if (t > total + tl.frame() / 2) { t = total; note = ` — past the end of the film, went to its end`; }
     else if (t < -tl.frame() / 2) { t = 0; note = ' — before the start, went to the first frame'; }
-    t = clamp(t, 0, last);
-    const at = tl.shotAt(t);
+    t = clamp(t, 0, total);
     tl.seek(t);
     tl.setPlayhead(t);
-    if (at) tl.select([at.id]);
     say(`${tl.tc(t)}${note}`);
     return { ok: true, at: t, note: note || null };
   }
@@ -1093,7 +1084,7 @@
       else if (k === 'a' && !e.shiftKey) handled = selectAll();
       else if (k === 'c' && !e.shiftKey) handled = textSelected() ? false : copyKey();
       else if (k === 'x' && !e.shiftKey) handled = textSelected() ? false : cutKey();
-      else if (k === 'v' && !e.shiftKey) handled = pasteKey();
+      else if (k === 'v') handled = pasteKey(e.shiftKey ? 'overwrite' : 'insert');
       else if (k === 's' && !e.shiftKey) handled = saveKey();
       else if (k === 'g' && !e.shiftKey) handled = openTimecode();
       else if (k === 'd') handled = transition(e.shiftKey ? 'both' : 'video');
@@ -1130,7 +1121,7 @@
         case 'x': handled = rippleDelete(); break;
         case 'd': handled = e.shiftKey ? transition('audio') : false; break;
         case 'Delete': case 'Backspace':
-          handled = tl.tsel && tl.removeTransition ? (tl.removeTransition(tl.tsel), true) : backspace();
+          handled = backspace();
           break;
         case 'Escape':                     // the switcher's picker and a trim drag in progress come first
           handled = (pickerOpen() || (window.tl && tl.trim && tl.trim.dragging)) ? false : clearAll();
@@ -1169,7 +1160,7 @@
     // delete ('heir' — tl.remove, whoever removed); a click on a block that is already
     // selected changes nothing, so it emits nothing
     const BOARDS = new Set(['app', 'land', 'heir']);
-    tl.on('select', (ev) => { chosen = !BOARDS.has(ev.source); });
+    tl.on('select', (ev) => { chosen = !BOARDS.has(ev.source); if (!selfSelecting) allSel = false; });
     const lane = $('#tl');
     if (lane) {
       lane.addEventListener('click', (e) => {
@@ -1199,11 +1190,12 @@
 
   /* ⌘G: the timeline's timecode field (hands.js draws it) */
   function openTimecode() {
-    if (window.rcHands && typeof window.rcHands.editTimecode === 'function') window.rcHands.editTimecode('timeline');
+    const src = window.dock && typeof dock.focused === 'function' && dock.focused() === 'source';
+    if (window.rcHands && typeof window.rcHands.editTimecode === 'function') window.rcHands.editTimecode(src ? 'source' : 'timeline');
     else say('click the timecode to type one');
     return true;
   }
 
-  window.tlKeys = { saveKey, insertFromSource: () => editFromSource('insert'), overwriteFromSource: () => editFromSource('overwrite'), parseTimecode, goToTimecode, copyKey, cutKey, pasteKey, clipboard: clip, KEYS, marks, shuttle: sh, renderMap, clearMarks, sourceShot,
+  window.tlKeys = { rippleDelete, saveKey, insertFromSource: () => editFromSource('insert'), overwriteFromSource: () => editFromSource('overwrite'), parseTimecode, goToTimecode, copyKey, cutKey, pasteKey, clipboard: clip, KEYS, marks, shuttle: sh, renderMap, clearMarks, sourceShot,
                     get lastPanel() { return lastPanel; } };
 })();

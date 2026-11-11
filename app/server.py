@@ -18985,7 +18985,9 @@ def _cut_row(path: Path) -> dict | None:
     meta = edl.get("cut") if isinstance(edl.get("cut"), dict) else {}
     segs = [s for s in (edl.get("segments") or []) if isinstance(s, dict)]
     try:
-        duration = round(sum(float(s["out"]) - float(s["in"]) for s in segs), 2)
+        # a shot at ½× lasts twice its source range: the length is the film's, as the timeline reads it
+        duration = round(sum((float(s["out"]) - float(s["in"])) / (float(s.get("speed") or 1) or 1)
+                             for s in segs), 2)
     except (KeyError, TypeError, ValueError):
         duration = 0.0
     try:
