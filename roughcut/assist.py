@@ -355,6 +355,17 @@ def sequence_block(state: dict) -> str:
     tr = state.get("tracks") or {}
     extra_tracks = sorted(n for n in tr if n not in ("V1", "V2", "A1", "A2"))
     lines.append("Tracks: V1 V2 A1 A2" + (" " + " ".join(extra_tracks) if extra_tracks else ""))
+    bed = state.get("music") or {}
+    tr_m = state.get("music_tracks") or []
+    lines.append("Music bed (A2): " + (
+        f"{bed['asset']} at {float(bed.get('bed_lufs', -24.0)) + 16:+g} dB against the film, "
+        + (f"dips {float(bed.get('duck_db', 12.0)):g} dB under talking" if bed.get("duck", True) else "no dip under talking")
+        + f", fade in {float(bed.get('fade_in', 1.5)):g} s, out {float(bed.get('fade_out', 4.0)):g} s"
+        if bed.get("asset") else "none set"))
+    lines.append("Music tracks: " + ("; ".join(
+        f"{t.get('name') or t['asset']}" + (f" ({float(t['duration_s']):.0f} s)" if t.get("duration_s") else "")
+        + (" — added to this project" if t.get("project") else "") for t in tr_m[:12])
+        if tr_m else "none: the project has no music; Add music… in the Audio tab brings one in"))
     ov = state.get("overlays") or []
     if ov:
         lines.append("Clips over the cut: " + "; ".join(
@@ -708,6 +719,10 @@ Export presets: {presets}
   the export is a named marker. Never a design_effect for a marker.
 - a title, a graphic, hit markers, an arrow → design_effect with a note saying what and where
   (only what no tool above draws).
+- music under the film ("add music that fits", "turn the music down 4 dB", "keep it under the
+  talking", "no music") → one music op: a `track` from "Music tracks", `level` in dB against the
+  film, `duck`; with none listed, answer that the project has no music and the editor adds a
+  track with Add music… in the Audio tab. Never a volume_db on shots for the bed.
 - a review copy, a file to upload, the final file → export with quick, youtube or master.
 - a vertical / phone / Instagram / TikTok / Reels / Shorts / square version, or a shorter cut
   "for" a place → a SECOND DELIVERABLE: the first op is `new_cut` (a saved copy, named from the

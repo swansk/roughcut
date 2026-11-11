@@ -67,7 +67,7 @@ def test_every_family_of_the_pro_tools_has_its_ops():
             "overlay"}
     assert need <= set(actions.OPS)
     assert set(actions.FAMILIES) == {"timeline", "effect_controls", "lumetri", "transitions",
-                                     "designed_effects", "export", "history"}
+                                     "designed_effects", "music", "export", "history"}
     for p in ("posx", "posy", "scale", "rotation", "opacity", "volume_db", "temperature",
               "tint", "exposure", "contrast", "highlights", "shadows", "whites", "blacks",
               "saturation", "hsl_hue", "hsl_shift", "hsl_saturation"):
