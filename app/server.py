@@ -1410,7 +1410,7 @@ def load_visual(clip: str) -> dict:
     stem = Path(clip).stem
     p: Path = STATE["visual"] / f"{stem}.visual.json"
     deep = deepmod.load(STATE["visual"], stem)
-    if not p.exists() and not deep:
+    if not p.exists() and not deep and load_description_mine(stem) is None:
         return {}
     d = read_json_file(p) if p.exists() else {}
     fine = load_fine(stem)
@@ -1423,9 +1423,36 @@ def load_visual(clip: str) -> dict:
     # to the planner or the board (roughcut/verify.py).
     moments, held = verifymod.demote(events.merge_moments(d.get("moments", []), fine, deep),
                                      clip, verify_state())
+    # What the clip is, in words (wave 23 DESCRIBE): the editor's own correction when they
+    # made one (a sticky file beside the sidecar, never overwritten by a re-look), else the
+    # look's `description` (prompt_version 4+), else the old `summary` (a sidecar from
+    # before: its words are verdicts, but they are still what was said). `summary` carries
+    # the same text so every older reader (the Project column, the Ask) keeps reading.
+    mine = load_description_mine(stem)
+    text = mine["text"] if mine else str(d.get("description") or d.get("summary") or "")
     return {"moments": moments, "unsupported": held,
             "unusable": d.get("unusable", []) + fine.get("unusable", []),
-            "summary": d.get("summary", "")}
+            "summary": text, "description": text,
+            "description_by": "editor" if mine else ("model" if text else ""),
+            "prompt_version": int((d.get("params") or {}).get("prompt_version") or 1)}
+
+
+def _mine_path(stem: str) -> Path:
+    return STATE["visual"] / f"{stem}.mine.json"
+
+
+def load_description_mine(stem: str) -> dict | None:
+    """The editor's own description of a clip, `{text, at}`, or None. Lives beside the
+    visual sidecar under its own name so that looking again can never replace it."""
+    p = _mine_path(stem)
+    if not p.exists():
+        return None
+    try:
+        d = read_json_file(p)
+    except (OSError, ValueError):
+        return None
+    text = str(d.get("text") or "").strip() if isinstance(d, dict) else ""
+    return {"text": text, "at": d.get("at")} if text else None
 
 
 def load_fine(stem: str) -> dict:
@@ -3703,6 +3730,88 @@ def _rerank_job(job: str, query: str, rows: list[dict]) -> None:
     entry.finish("done", detail="reranked")
 
 
+# ---------------------------------------------------------------- what the index found
+#
+# Wave 23 DESCRIBE: the Index panel said what ran ("83 words"), never what was found.
+# These two endpoints are the clip's record in the editor's terms: the transcript with its
+# times, the description, the moments the look and the sensors found. Free: they read files.
+
+DESCRIPTION_MAX = 1500
+
+
+def found_payload(clip: str) -> dict:
+    stem = Path(clip).stem
+    sc = STATE["sidecars"] / f"{stem}.audio.json"
+    audio = read_json_file(sc) if sc.exists() else {}
+    transcript = [{"start": round(float(u.get("start", 0.0)), 2), "end": round(float(u.get("end", 0.0)), 2),
+                   "text": str(u.get("text", "")).strip(), "speaker": u.get("speaker")}
+                  for u in (audio.get("transcript") or []) if str(u.get("text", "")).strip()]
+    vis = load_visual(clip)
+    # which frames the description rests on (FINDER-06: "the describer saw a sample, not the
+    # clip, and the screen does not say which frames")
+    vp = STATE["visual"] / f"{stem}.visual.json"
+    basis = None
+    if vp.exists():
+        try:
+            side = read_json_file(vp)
+            fr = [f for f in (side.get("frames_sampled") or []) if isinstance(f, (int, float))]
+            basis = {"frames": len(fr), "first": fr[0] if fr else None, "last": fr[-1] if fr else None,
+                     "interval_s": (side.get("params") or {}).get("interval_s"),
+                     "model": (side.get("params") or {}).get("model")}
+        except (OSError, ValueError, AttributeError):
+            basis = None
+    seen = [{"start": m["start"], "end": m["end"], "kind": m.get("kind", ""), "what": m.get("what", ""),
+             "notable": bool(m.get("notable")), "source": "seen"} for m in vis.get("moments", [])]
+    try:
+        felt = [{"start": m["start"], "end": m["end"], "kind": m.get("kind", ""), "what": m.get("what", ""),
+                 "notable": bool(m.get("notable")), "source": "felt"}
+                for m in telemetry_events.felt_words(clip)]
+    except Exception:                                   # noqa: BLE001  no telemetry is not an error
+        felt = []
+    # a claim nothing has checked (verify.py holds it back from the board) is still something
+    # the look saw: listed, marked, so the editor can go and look
+    held = [{"start": m["start"], "end": m["end"], "kind": m.get("kind", ""), "what": m.get("what", ""),
+             "notable": False, "source": "seen", "unchecked": True} for m in vis.get("unsupported", [])]
+    moments = sorted(seen + held + felt, key=lambda m: (m["start"], m["end"]))
+    return {"clip": clip, "heard": bool(audio), "transcript": transcript,
+            "n_words": sum(len(u["text"].split()) for u in transcript),
+            "looked": bool(vis), "basis": basis, "description": vis.get("description", ""),
+            "description_by": vis.get("description_by", ""), "moments": moments,
+            "events": [m for m in moments if m["kind"] in ("jump", "fall", "crash") and m["notable"]],
+            "unchecked": [m for m in held if m["kind"] in ("jump", "fall", "crash")],
+            "unusable": vis.get("unusable", [])}
+
+
+@app.get("/api/found/{clip}")
+def api_found(clip: str) -> JSONResponse:
+    """A clip's record in words: transcript (with times), description, moments."""
+    if clip not in footage_clips():
+        raise HTTPException(404, f"no clip {clip}")
+    return JSONResponse(found_payload(clip))
+
+
+@app.put("/api/found/{clip}/description")
+async def api_found_description(clip: str, request: Request) -> JSONResponse:
+    """The editor's own words for a clip. They replace the look's description everywhere it
+    is read (the Project column, the Ask, Find), are marked as theirs, and survive a
+    re-look. An empty text gives the look's description back."""
+    if clip not in footage_clips():
+        raise HTTPException(404, f"no clip {clip}")
+    body = await request.json()
+    text = str((body or {}).get("text") or "").strip()
+    if len(text) > DESCRIPTION_MAX:
+        raise HTTPException(400, f"too long ({len(text)} characters, the limit is {DESCRIPTION_MAX})")
+    p = _mine_path(Path(clip).stem)
+    if not text:
+        p.unlink(missing_ok=True)
+    else:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_name(p.name + f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps({"clip": clip, "text": text, "at": time.time()}), encoding="utf-8")
+        os.replace(tmp, p)
+    return JSONResponse(found_payload(clip))
+
+
 @app.get("/api/find/price")
 def api_find_price() -> JSONResponse:
     """What *Ask the model* costs on this bin, before anything is typed (INTAKE I16.0f:
@@ -3744,9 +3853,11 @@ async def api_find(request: Request) -> JSONResponse:
     ctx = local_context()
     found = await asyncio.to_thread(
         find.search, query, clips, local=body.get("local", True) is not False,
-        local_search=lambda t, k=3, **_: localvlm.search_ex(t, k, ctx=ctx))
+        local_search=lambda t, k=3, **_: localvlm.search_ex(t, k, ctx=ctx),
+        weak=bool(body.get("weak")))
     policy = find.rerank_policy(verify_state()["mode"])
     resp: dict = {"matches": _match_rows(found["matches"]), "job": None, "local": found["local"],
+                  "floor": found.get("floor", {}),
                   "deep_projected_usd": find.projected_usd(clips),
                   "rerank": {**policy, "usd": find.rerank_projected_usd()}, **config.cost_terms()}
     if body.get("rerank") and body.get("deep"):

@@ -127,3 +127,22 @@ table.ixt .rotign { margin-left: 6px; color: var(--dim); font-size: 10px; border
 .ix-dl.ix-rot { grid-column: 1 / -1; white-space: normal; }
 .ix-dl.ix-rot .v { overflow: visible; }
 .ix-rotsel { font-size: 11px; margin-left: 6px; }
+/* what the index found for the focused clip (wave 23): description, moments, transcript */
+.ix-found { grid-column: 1 / -1; margin-top: 4px; border-top: 1px solid #0f0f10; padding-top: 3px; }
+.ixf-desc { line-height: 15px; white-space: normal; }
+.ixf-by { color: #8be0a8; font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+.ixf-edit { margin-left: 6px; padding: 0 7px; font-size: 10px; line-height: 16px; }
+.ixf-ta { width: 100%; box-sizing: border-box; min-height: 48px; font: inherit; font-size: 11px; resize: vertical;
+          background: #101012; color: var(--text); border: 1px solid #333; padding: 3px 5px; }
+.ixf-btns { display: flex; gap: 4px; margin-top: 3px; }
+.ixf-btns button { padding: 1px 9px; line-height: 16px; font-size: 11px; }
+.ixf-h { margin-top: 5px; color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: .05em; }
+.ixf-list { max-height: 118px; overflow: auto; }
+.ixf-row { display: flex; gap: 7px; line-height: 15px; cursor: pointer; padding: 0 2px; }
+.ixf-row:hover { background: var(--card-hi); }
+.ixf-row .tc { flex: none; width: 34px; color: var(--dim); font-variant-numeric: tabular-nums; }
+.ixf-row .kd { flex: none; width: 58px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; }
+.ixf-row .tx { min-width: 0; white-space: normal; }
+.ixf-row.hot .kd { color: #e8c25a; }
+.ixf-row i { color: var(--dim); font-style: normal; }
+.ixf-basis { font-size: 10px; line-height: 13px; margin: 1px 0 0; }

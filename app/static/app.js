@@ -4584,7 +4584,11 @@ function keepRow(s, cols) {
   // the quote, ellipsized; no thumbnail (the list view's, not the icon view's).
   const cell = (k) => {
     if (k === 'name') {
-      return `<td class="name"><span class="n">${who}${s.whole ? '' : certSlot(s.clip, s.start, s.end)}<span class="w${s.note ? ' note' : ''}">${
+      // the Clip column needs 740 px; narrower, the name carries the clip (FINDER-01: "Oh" and
+      // "Steady." in a row with no clip name anywhere)
+      const cn = !s.whole && !cols.some((c) => c.k === 'clip')
+        ? `<span class="clipname" data-testid="keep-clip">${escapeHtml(stem(s.clip))}</span> ` : '';
+      return `<td class="name"><span class="n">${who}${s.whole ? '' : certSlot(s.clip, s.start, s.end)}${cn}<span class="w${s.note ? ' note' : ''}">${
         s.hero ? '<span class="hero">★</span> ' : ''}${escapeHtml(keepLabel(s))}</span>${pv}</span></td>`;
     }
     if (k === 'clip') return `<td>${escapeHtml(stem(s.clip))}</td>`;
@@ -6394,33 +6398,71 @@ async function fetchFindPrice() {
   }
 }
 
-function renderFindResults(rows, note) {
+function renderFindResults(rows, note, meta) {
   const box = $('#findResults');
   box.innerHTML = '';
   $('#findDeep').hidden = false;          // under any find: the priced search, plain
   if (note) box.insertAdjacentHTML('beforeend', `<div class="hint" style="padding:4px 0">${escapeHtml(note)}</div>`);
   if (!rows.length) {
+    // wave 23: an honest "no", not a shrug. Weak guesses sit under a floor chosen from the
+    // finder's real and absent queries (roughcut/find.py FLOOR); they can still be shown.
+    const hidden = (meta && meta.hidden) || 0;
+    const q = ($('#findQ').value || '').trim();
     box.insertAdjacentHTML('beforeend',
-      '<div class="hint">nothing found — try other words, or Ask the model</div>');
+      `<div class="hint" data-testid="find-nothing">Nothing like ${q ? `“${escapeHtml(q)}”` : 'that'} in this footage.`
+      + `${hidden ? ` <a href="#" id="findWeak" data-testid="find-weak">Show the ${hidden} weak guess${hidden === 1 ? '' : 'es'}</a>` : ''}`
+      + ' Try other words, or Ask the model.</div>');
+    const weak = $('#findWeak');
+    if (weak) weak.onclick = (e) => { e.preventDefault(); doFind(false, true); };
     return;
   }
   rows.forEach((m) => {
     const d = document.createElement('div');
     d.className = 'cand';
-    // what was said or seen, the picture at the moment and where in its clip it is, and
-    // how long — as the keep cards have a picture: the same line found in three clips
-    // read as three identical rows. The clip's name and why it matched are the tooltip's
-    // (INTAKE M16).
+    d.dataset.clip = m.clip;
+    d.dataset.start = m.start;
+    // what was said or seen, the picture at the moment, WHICH CLIP and where in it, and how
+    // long (wave 23: a hit named no clip). The clip is the first thing on the second line.
     d.title = `${stem(m.clip)} ${fmt(m.start)}–${fmt(m.end)}${m.why ? ` · ${m.why}` : ''}`;
     const poster = (P.clips[m.clip] || {}).poster;
     const still = poster ? `${poster}${poster.includes('?') ? '&' : '?'}t=${Math.max(0, m.start).toFixed(2)}` : '';
     d.innerHTML = `${still ? `<img class="still" loading="lazy" decoding="async" draggable="false" alt="" src="${escapeHtml(still)}">`
                             : '<div class="still"></div>'}
       <div class="body"><span class="w">${escapeHtml(m.what || '')}</span>
-      <span class="t">at ${clock(m.start)} · ${Math.max(0, m.end - m.start).toFixed(1)} s</span></div>`;
-    d.onclick = () => showFindMatch(m);
+      <span class="t"><b class="fclip" data-testid="find-clip">${escapeHtml(stem(m.clip))}</b> · at ${clock(m.start)} · ${Math.max(0, m.end - m.start).toFixed(1)} s${m.label ? ` · ${escapeHtml(m.label)}` : ''}</span></div>`;
+    d.onclick = () => openFindMatch(m, d);
     box.appendChild(d);
   });
+}
+
+/* A Find hit opens in the Source monitor, the clip loaded with the match as its In and Out and
+ * the playhead on the moment (wave 23; it used to load a preview under the list, off the screen
+ * in a short panel). The row stays marked and carries its "+ add to cut". */
+function openFindMatch(m, row) {
+  findSel = m;
+  document.querySelectorAll('#findResults .cand.sel').forEach((r) => {
+    r.classList.remove('sel');
+    const b = r.querySelector('.findadd');
+    if (b) b.remove();
+  });
+  if (row) {
+    row.classList.add('sel');
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'findadd';
+    add.dataset.testid = 'find-add';
+    add.textContent = '+ add to cut';
+    add.onclick = (e) => { e.stopPropagation(); addFindMatch(); };
+    row.querySelector('.body').appendChild(add);
+  }
+  if (window.dock && dock.source && dock.source.v && openPickInSource(m)) {
+    const src = dock.source;
+    const go = () => { try { src.v.currentTime = Math.max(0, m.start); } catch (e) { /* not loaded yet */ } src.paint(); };
+    if (src.v.readyState >= 1) go(); else src.v.addEventListener('loadedmetadata', go, { once: true });
+    if (typeof dock.open === 'function') { try { dock.open('source'); } catch (e) { /* no such tab */ } }
+    return;
+  }
+  showFindMatch(m);                       // no Source monitor (a page without the workspace)
 }
 
 function showFindMatch(m) {
@@ -6477,17 +6519,24 @@ function followFind(job) {
   }, 1000);
 }
 
-async function doFind(deep = false) {
+async function doFind(deep = false, weak = false) {
   const q = $('#findQ').value.trim();
   if (!q) return toast('describe the moment you are looking for');
   if (deep && !findPriced) return toast('the model search has no price yet — not asking');
   finding = true;
   $('#findDeep').disabled = true;
-  $('#findState').textContent = deep ? 'asking the model…' : 'searching…';
+  // A running search says so: what it is doing and for how long, and the list holds a
+  // placeholder instead of the last search's answers (wave 23; it said "searching…" and nothing else).
+  const t0 = Date.now();
+  const what = deep ? 'asking the model' : 'searching the words, the notes and the picture';
+  const tick = () => { $('#findState').textContent = `${what}… ${Math.round((Date.now() - t0) / 1000)} s`; };
+  tick();
+  const ticker = setInterval(tick, 1000);
+  $('#findResults').innerHTML = `<div class="hint findrunning" data-testid="find-running"><span class="spin"></span>${escapeHtml(what)} for “${escapeHtml(q)}”…</div>`;
   try {
     const r = await fetch('/api/find', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ query: q, deep }),
+      body: JSON.stringify({ query: q, deep, weak }),
     });
     if (!r.ok) {
       const d = await r.json().catch(() => ({}));
@@ -6495,10 +6544,10 @@ async function doFind(deep = false) {
     }
     const data = await r.json();
     paintFindDeepPrice(data.deep_projected_usd, data);
-    renderFindResults(data.matches);
+    renderFindResults(data.matches, '', { hidden: (data.floor || {}).hidden || 0 });
     $('#findState').textContent = data.matches.length
-      ? `${data.matches.length} match${data.matches.length > 1 ? 'es' : ''} in the words and the frames`
-      : 'no word match — the model may still find it';
+      ? `${data.matches.length} match${data.matches.length > 1 ? 'es' : ''} in the words and the frames${weak ? ' (weak ones shown)' : ''}`
+      : 'nothing like that here — the model may still find it';
     if (data.job) {
       strip.owned.add(data.job);    // this page is following it; the strip must not double up
       followFind(data.job);
@@ -6506,7 +6555,10 @@ async function doFind(deep = false) {
     }
   } catch (e) {
     $('#findState').textContent = '';
+    $('#findResults').innerHTML = '';
     toast(`find failed: ${e.message}`, 6000);
+  } finally {
+    clearInterval(ticker);
   }
   finding = false;
   $('#findDeep').disabled = !findPriced;

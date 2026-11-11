@@ -321,7 +321,8 @@ def test_enter_finds_and_the_priced_search_sits_under_any_find(page):
     assert deep.inner_text().startswith("Not it? Ask the model · ")
     assert "primary" not in (deep.get_attribute("class") or "")
     row = page.locator("#findResults .cand").first
-    assert "goodbye" in row.inner_text() and "CLIP_" not in row.inner_text()
+    # wave 23: every hit names its clip (it used to be in the tooltip only)
+    assert "goodbye" in row.inner_text() and "CLIP_" in row.inner_text()
 
 
 def test_a_find_says_one_count_and_its_rows_can_be_told_apart(page):
@@ -342,7 +343,7 @@ def test_a_find_says_one_count_and_its_rows_can_be_told_apart(page):
     assert rows.count() == 3, rows.count()
     srcs = [rows.nth(i).locator("img.still").get_attribute("src") for i in range(3)]
     assert len(set(srcs)) == 3 and all("t=" in s for s in srcs), srcs     # a picture each
-    assert re.fullmatch(r"at \d+:\d\d · \d+\.\d s", rows.first.locator(".t").inner_text())
+    assert re.fullmatch(r"CLIP_[ABC] · at \d+:\d\d · \d+\.\d s( · .+)?", rows.first.locator(".t").inner_text())
     assert page.locator("#libHint").inner_text() == ""                 # not "0 of 2"
     assert page.locator("#library .hint").inner_text() == "no keep matches — clear the words above"
     page.evaluate("binChip = 'tag:crash'; renderLibrary()")

@@ -647,19 +647,19 @@ def test_find_a_moment_lists_matches_and_plays_the_whole_clip(page):
     assert "goodbye" in rows.first.inner_text()
 
     rows.first.click()
-    page.wait_for_selector("#findPlayer:visible")
-    page.wait_for_function(
-        "document.querySelector('#findVideo').readyState >= 1", timeout=15000)
-    src = page.evaluate("document.querySelector('#findVideo').src")
-    assert "/media/proxy/" in src and "#t=" in src
-    # seeked to the match, not the top of the file — the full clip stays scrubbable.
-    # It may already be playing (that is the point), so a range rather than a spot.
-    t = page.evaluate("document.querySelector('#findVideo').currentTime")
-    assert 4.4 <= t <= 6.05, f"expected playback at the match (~4.5s), got {t}"
+    # wave 23: the hit opens in the Source monitor (the clip with the match as its In / Out and
+    # the playhead on the moment), not in a preview under the list
+    clip = rows.first.get_attribute("data-clip")
+    page.wait_for_function("(c) => window.rcSource && rcSource.clip === c", arg=clip, timeout=8000)
+    page.wait_for_function("document.querySelector('#srcVideo').readyState >= 1", timeout=15000)
+    assert "/media/proxy/" in page.evaluate("document.querySelector('#srcVideo').src")
+    t = page.evaluate("document.querySelector('#srcVideo').currentTime")
+    assert 4.4 <= t <= 6.05, f"expected the monitor at the match (~4.5s), got {t}"
+    assert not page.locator("#findPlayer").is_visible()
 
     before = page.locator("#tl .blk").count()
     page.evaluate("tl.seek(1.5)")      # adding lands at the playhead (INTAKE M11): the cut nearest 1.5 s is 2.0
-    page.locator("#findAdd").click()
+    page.locator('#findResults .cand.sel [data-testid="find-add"]').click()
     assert page.locator("#tl .blk").count() == before + 1
     # inserted at the playhead's cut, selected, and in the inspector with its line
     assert page.evaluate("sel") == 1

@@ -452,6 +452,7 @@ def test_i_o_and_enter_on_a_playing_clip_insert_the_marked_range(page):
     page.locator("#findQ").press("Enter")      # Enter finds (the Find button went, M16)
     page.wait_for_selector("#findResults .cand", timeout=15000)
     page.locator("#findResults .cand").first.click()     # the source panel was clicked last
+    page.evaluate("showFindMatch(findSel); document.querySelector('#findVideo').pause()")    # the whole-clip player the board's I / O read (Find itself opens the Source monitor, wave 23)
     page.wait_for_selector("#findPlayer:visible")
     page.wait_for_function(
         "document.querySelector('#findVideo').readyState >= 1", timeout=15000)

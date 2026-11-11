@@ -68,6 +68,7 @@
     rep: null, sig: '', sel: new Set(), anchor: null, focus: null, what: 'look', interval: null,
     quote: null, quoteKey: '', busy: false, err: '', timer: 0, qtimer: 0, mounted: false, job: null,
     lastJob: null, mode: null, modeErr: '', modeBusy: false,
+    found: new Map(), foundBusy: new Set(), editing: null, draft: '',
   };
 
   const $ = (s, r) => (r || document).querySelector(s);
@@ -299,6 +300,23 @@
       const tr = e.target.closest('tr[data-clip]');
       if (tr && window.dock && dock.project && typeof dock.project.select === 'function') dock.project.select(tr.dataset.clip);
     });
+    $('.ix-detail', sec).addEventListener('click', (e) => {
+      const box = e.target.closest('.ix-found');
+      if (!box) return;
+      const clip = box.dataset.clip;
+      const btn = e.target.closest('button[data-act]');
+      if (btn) {
+        const act = btn.dataset.act;
+        const f = (IX.found.get(clip) || {}).data || {};
+        if (act === 'edit') { IX.editing = clip; IX.draft = f.description || ''; paint(); const ta = $('.ixf-ta', sec); if (ta) ta.focus(); }
+        else if (act === 'cancel') { IX.editing = null; paint(); }
+        else if (act === 'save') { const ta = $('.ixf-ta', sec); saveDescription(clip, ta ? ta.value : IX.draft); }
+        else if (act === 'revert') saveDescription(clip, '');
+        return;
+      }
+      const row = e.target.closest('.ixf-row');
+      if (row) cueFound(clip, row.dataset.s, row.dataset.e);
+    });
     $('.ix-list', sec).addEventListener('click', (e) => {
       if (!e.target.closest('tr[data-clip]') && !e.target.closest('thead')) { IX.sel.clear(); IX.focus = null; paint(); requote(); }
     });
@@ -464,7 +482,8 @@
         + opt('sensor', 'let the sensor decide', cur === 'sensor') + opt('auto', 'use the file\'s flag', cur === 'auto')
         + opt('none', 'ignore the flag', cur === 'none') + '</select></span></div>';
     }
-    el.innerHTML = head + lines + rotLine;
+    el.innerHTML = head + lines + rotLine + '<div class="ix-found" data-testid="index-found"></div>';
+    paintFound(el, r);
   }
 
   async function setRotation(clip, mode) {
@@ -474,6 +493,111 @@
     } catch (e) { IX.err = `the rotation was not changed: ${e.message}`; }
     window.dispatchEvent(new CustomEvent('rc:clips-changed', { detail: {} }));
     refresh();
+  }
+
+  /* ------------------------------------------------------------ what it found (wave 23)
+   * The panel said what ran ("83 words"), not what came of it. The focused clip's record,
+   * read from GET /api/found/<clip> (free: it reads files): what the clip is (the look's
+   * description, or the editor's own words, marked as theirs and kept through a re-look),
+   * the moments the look and the sensors found, and the transcript with its times. A
+   * click on a time or a line cues the clip in the Source monitor there. */
+
+  const mmss = (t) => {
+    t = Math.max(0, Number(t) || 0);
+    return `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+  };
+  const foundKey = (r) => [r.clip, ...['asr', 'look', 'close', 'telemetry'].map((k) => (r.stages[k] || {}).at || '')].join('|');
+
+  async function loadFound(r, force) {
+    const key = foundKey(r);
+    const have = IX.found.get(r.clip);
+    if (!force && have && have.key === key) return have.data;
+    if (IX.foundBusy.has(r.clip)) return have ? have.data : null;
+    IX.foundBusy.add(r.clip);
+    try {
+      const data = await getJSON(`/api/found/${encodeURIComponent(r.clip)}`);
+      IX.found.set(r.clip, { key, data });
+      return data;
+    } catch (e) {
+      IX.found.set(r.clip, { key, data: { error: e.message } });
+      return null;
+    } finally {
+      IX.foundBusy.delete(r.clip);
+    }
+  }
+
+  function foundHtml(r, f) {
+    if (!f) return '<div class="hint">reading what the index found…</div>';
+    if (f.error) return `<div class="hint bad">could not read it: ${esc(f.error)}</div>`;
+    const editing = IX.editing === r.clip;
+    const mine = f.description_by === 'editor';
+    const desc = editing
+      ? `<textarea class="ixf-ta" data-testid="index-found-text" rows="3" maxlength="1500">${esc(IX.draft)}</textarea>
+         <div class="ixf-btns"><button type="button" data-act="save" data-testid="index-found-save">Save</button>
+         <button type="button" data-act="cancel">Cancel</button>
+         ${mine ? '<button type="button" data-act="revert" title="forget what you wrote; the look\'s own description comes back">Use the look\'s</button>' : ''}</div>`
+      : `<div class="ixf-desc" data-testid="index-found-desc">${f.description
+          ? `${mine ? '<span class="ixf-by" title="written by you: a re-look does not replace it">yours</span> ' : ''}${esc(f.description)}`
+          : `<span class="hint">${f.looked ? 'the look wrote no description' : 'not looked at yet'}</span>`}
+         <button type="button" class="ixf-edit" data-act="edit" data-testid="index-found-edit" title="say what this clip is in your own words: it sticks, and Find and the AI read it">${f.description ? 'Edit' : 'Describe'}</button></div>`;
+    const b = f.basis;
+    const basis = b && b.frames
+      ? `<div class="hint ixf-basis" data-testid="index-found-basis">read from ${plural(b.frames, 'frame')}${b.interval_s ? `, one every ${Number(b.interval_s)} s` : ''} (${mmss(b.first)}–${mmss(b.last)}): a sample, not the whole clip</div>` : '';
+    const moments = (f.moments || []).filter((m) => m.what);
+    const mHtml = moments.length
+      ? moments.map((m) => `<div class="ixf-row ixf-m${m.notable ? ' hot' : ''}" data-s="${m.start}" data-e="${m.end}" data-testid="index-found-moment" title="cue ${esc(r.clip)} at ${mmss(m.start)}">
+          <span class="tc">${mmss(m.start)}</span><span class="kd" ${m.unchecked ? 'title="the look saw this, nothing has checked it yet"' : ''}>${esc(m.kind || m.source)}${m.unchecked ? '?' : ''}</span><span class="tx">${esc(m.what)}</span></div>`).join('')
+      : `<div class="hint">${f.looked ? 'no moments found' : 'no look yet, so no moments'}</div>`;
+    const lines = f.transcript || [];
+    const tHtml = lines.length
+      ? lines.map((u) => `<div class="ixf-row ixf-u" data-s="${u.start}" data-e="${u.end}" data-testid="index-transcript-line" title="cue ${esc(r.clip)} at ${mmss(u.start)}">
+          <span class="tc">${mmss(u.start)}</span><span class="tx">${u.speaker ? `<i>${esc(u.speaker)}</i> ` : ''}${esc(u.text)}</span></div>`).join('')
+      : `<div class="hint">${f.heard ? 'nobody says anything in this clip' : 'not heard yet'}</div>`;
+    return `${desc}${basis}
+      <div class="ixf-h">Found${moments.length ? ` · ${plural(moments.length, 'moment')}` : ''}</div><div class="ixf-list" data-testid="index-found-moments">${mHtml}</div>
+      <div class="ixf-h">Said${lines.length ? ` · ${plural(f.n_words || 0, 'word')}` : ''}</div><div class="ixf-list" data-testid="index-transcript">${tHtml}</div>`;
+  }
+
+  function paintFound(el, r) {
+    const box = $('.ix-found', el);
+    if (!box) return;
+    const cached = IX.found.get(r.clip);
+    const draw = () => {
+      if (IX.focus !== r.clip) return;
+      const b = $('.ix-found', $('.ix-detail', $('#projBody > section[data-tool=index]')) || el) || box;
+      const cur = IX.found.get(r.clip);
+      b.innerHTML = foundHtml(r, cur ? cur.data : null);
+      b.dataset.clip = r.clip;
+      if (IX.editing === r.clip) { const ta = $('.ixf-ta', b); if (ta) { ta.addEventListener('input', () => { IX.draft = ta.value; }); } }
+    };
+    draw();
+    if (!cached || cached.key !== foundKey(r)) loadFound(r).then(draw);
+  }
+
+  function cueFound(clip, start, end) {
+    if (typeof window.openPickInSource !== 'function') return false;
+    const ok = window.openPickInSource({ clip, start: Number(start), end: Math.max(Number(end), Number(start) + 0.1) });
+    const src = window.dock && dock.source;
+    if (ok && src && src.v) {
+      const go = () => { try { src.v.currentTime = Number(start); } catch (e) { /* not loaded yet */ } };
+      if (src.v.readyState >= 1) go(); else src.v.addEventListener('loadedmetadata', go, { once: true });
+    }
+    return ok;
+  }
+
+  async function saveDescription(clip, text) {
+    try {
+      const data = await getJSON(`/api/found/${encodeURIComponent(clip)}/description`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ text }) });
+      const r = rows().find((x) => x.clip === clip);
+      IX.found.set(clip, { key: r ? foundKey(r) : '', data });
+      IX.editing = null;
+      if (window.dock && dock.project && typeof dock.project.reload === 'function') dock.project.reload();
+      say(text ? 'Saved: your words are kept, and Find and the AI read them' : 'Back to the look\'s own description');
+    } catch (e) {
+      say(`could not save: ${e.message}`, 5000);
+    }
+    paint();
   }
 
   function paintFoot() {
@@ -604,7 +728,9 @@
       rep.job_label ? `now: ${rep.job_label}` : ''].filter(Boolean).join('\n') : '';
     paintHead(sec);
     paintMode(sec);
-    const sig = JSON.stringify([rep && rep.rows, [...IX.sel], IX.focus, rep && rep.local]);
+    const fd = (IX.found.get(IX.focus) || {}).data || {};
+    const sig = JSON.stringify([rep && rep.rows, [...IX.sel], IX.focus, rep && rep.local, IX.editing,
+      fd.description_by || '', fd.description || '', (fd.transcript || []).length]);
     if (sig !== IX.sig) {
       IX.sig = sig;
       const list = $('.ix-list', sec);
@@ -819,11 +945,23 @@
     };
   }
 
-  window.rcIndex = { open, rerun, state, refresh, select: (c) => { select(c); paint(); requote(); },
+  window.rcIndex = { open, rerun, state, refresh, found: (c) => (IX.found.get(c) || {}).data || null, loadFound: (c) => { const r = rows().find((x) => x.clip === c); return r ? loadFound(r, true) : Promise.resolve(null); }, select: (c) => { select(c); paint(); requote(); },
     /* Run's hover card's words now (what / cost / changes): for the suite */
     runCard: () => ({ name: runName(), what: runWhat(), change: runChanges(), price: runPrice() }) };
 
+  /* The Source monitor's way in: its clip's record (the Transcript button in the monitor's
+   * head opens this panel on the clip it holds). */
+  function wireSource() {
+    const b = document.getElementById('srcFound');
+    if (!b) return;
+    const sync = () => { b.disabled = !(window.rcSource && window.rcSource.clip); };
+    b.addEventListener('click', () => { if (window.rcSource && window.rcSource.clip) open([window.rcSource.clip]); });
+    window.addEventListener('rcsource', sync);
+    sync();
+  }
+
   function init() {
+    wireSource();
     if (!registerCard()) window.addEventListener('load', registerCard, { once: true });
     const sec = mount();
     // the tab shown, whichever way (its click, Window › Index, dock.open('index'), a tab

@@ -86,7 +86,9 @@ def test_the_prompt_names_the_camera_the_frames_and_the_rules(vp):
                          stamps="0, 4, 8")
     for phrase in ("frames", "glove", "pov-gear", "airborne", "appears", "nothing notable"):
         assert phrase.lower() in p.lower(), phrase
-    assert "helmet" in vp.SYSTEM and "never in frame" in vp.SYSTEM
+    # wave 23: the camera is named as one of several, not assumed ("worn on the skier's helmet")
+    assert "helmet" in vp.SYSTEM and "never assume" in vp.SYSTEM
+    assert "action camera worn on the skier" not in vp.SYSTEM
     assert vp.PROMPT_VERSION >= 2
 
 
