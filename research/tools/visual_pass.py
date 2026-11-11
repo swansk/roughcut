@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -50,18 +51,27 @@ from roughcut import config, inference   # noqa: E402  (after sys.path)
 HERE = Path(__file__).resolve().parent
 VIDEO_SUFFIXES = {".mp4", ".mov", ".mkv", ".avi", ".m4v", ".mts", ".webm"}
 
-PROMPT_VERSION = 3   # bumped whenever the prompts or the validation rules change
+PROMPT_VERSION = 4   # bumped whenever the prompts or the validation rules change
+# 4 (wave 23, DESCRIBE): no camera assumption; a `description` (who / where / what
+# happens / what is said on screen) is written first and an `events` list is derived beside
+# the unchanged `moments`. `summary` is still written (it is a copy of `description`) so
+# every reader of the old field keeps working. A sidecar with prompt_version < 4 has only
+# `summary`, a verdict-shaped one: `description_of()` reads either.
 
 SYSTEM = (
     "You are a video assistant looking at a contact sheet: frames sampled from one "
-    "clip at a fixed interval, in reading order, each labelled with its timestamp in "
-    "the clip. The clip is from an action camera worn on the skier's helmet or chest, "
-    "pointing where they look. The wearer is never in frame; their gloves, poles, ski "
-    "tips and bindings are, often close to the lens and often filling it, and the "
-    "horizon tilts and rolls with their head. None of that is an event. Other people "
-    "appear small and far unless they are standing next to the wearer. You report what "
-    "is visibly happening and when, naming the frames that show it. You are conservative: "
-    "an ordinary frame is the normal answer, and \"nothing notable\" is a good one."
+    "clip at a fixed interval, in reading order, each labelled with its timestamp. "
+    "You write the log line a film editor's assistant would write for the clip: who is "
+    "there, where, what happens. You do not know what kind of camera made it: it may be "
+    "hand-held, planted on the ground or a pole, on a tripod, worn on a helmet or chest, "
+    "or a phone, and the clip may be anything (a skiing run, a lift ride, a car park, an "
+    "airport, a lodge, friends talking). Work out from the frames which it is; never "
+    "assume. Where the camera is worn on the body, the wearer is rarely in frame, their "
+    "gloves, poles, ski tips and bindings are, often close to the lens, and the horizon "
+    "tilts and rolls with their head; none of that is an event. You report what is "
+    "visibly happening and when, naming the frames that show it. Every clip is worth "
+    "describing, quiet ones as much as busy ones. You are conservative only about "
+    "events (a jump, a fall, a crash): for those you claim what the frames plainly show."
 )
 
 # Words that mark a guess. A notable claim written with one of these is not a claim.
@@ -89,35 +99,50 @@ SCHEMA = {
                  "confidence": "high | medium | low",
                  "notable": True}],
     "unusable": [{"start": 0.0, "end": 4.0, "why": "black / lens covered / unreadable"}],
-    "summary": "two sentences on what this clip is, as footage",
+    "description": "two to four sentences, in this order: who is there, where, what "
+                   "happens, what is written or shown on screen. No verdicts.",
+    "summary": "same text as description (kept for older readers)",
 }
 
 PROMPT = """This contact sheet is {n} frames from {clip}, sampled every {interval:g}s, \
 covering {start:.0f}s to {end:.0f}s of the clip. Frames read left to right, top to \
 bottom, and each is labelled with its timestamp. The frame timestamps are: {stamps}.
 
-Report what happens, as moments with start and end times in **clip seconds**, and for
+First write the `description` of what this sheet shows: **who** is there (by what they
+wear or carry, or by name if a sign or caption gives one), **where** (a lift, a car park,
+an airport, a run, a lodge; read signs and text), **what happens**, and what is written
+or shown on screen. Two to four plain sentences about what is IN the frames. Name the
+objects, clothes and props a viewer would remember, and anything that looks like a running
+joke. Do not write verdicts about the clip: never "nothing notable", "unusable", "not
+ski footage", "no events", "no jumps, falls or crashes", "ordinary". Do not say how long
+the clip is or that it is "a single frame": you see samples, not the whole. You cannot
+hear it, so do not guess what is said; say only what is shown, including someone
+visibly talking to the lens.
+
+Report what happens as `moments` with start and end times in **clip seconds**, and for
 every moment the `frames` — the labelled timestamps of the frames that show it. A moment
 you cannot point at a frame for does not exist. Start and end are frame timestamps; there
 is nothing between two frames that you can see.
 
-What matters most, in order:
-1. **Events** — someone falling, crashing, jumping, going into water, losing gear. These
+Moments, in this order of priority:
+1. **Events** - someone falling, crashing, jumping, going into water, losing gear. These
    are the moments a transcript cannot see. But read the rules below before claiming one.
-2. **People and reactions** — faces, someone filming someone else, a group together.
-3. **Sustained action** — a continuous run or ride, worth keeping whole.
+2. **People and reactions** - faces, someone filming someone else, a group together,
+   friends laughing, a lift ride, a walk through a terminal, anyone doing something.
+3. **Sustained action** - a continuous run or ride, worth keeping whole.
 
 The rules for an event (`jump`, `fall`, `crash`):
 - It needs **another person** visibly in the air, or visibly down on the snow, in a frame
   you name — or the wearer's own ski tips clearly off the snow with the ground far below.
   A tilted or sky-filled frame is the wearer's head moving, not anyone airborne.
-- **On a helmet or chest mount the camera rolls, not the rider.** The horizon often sits
-  at 40-45°, trees hang from the top of frame and sky fills the bottom. Before calling a
-  jump, a flip or anything inverted, find the snow: if it is still beneath the skis
-  relative to the frame, nobody is upside down. A tilted horizon alone is camera roll.
-  If you are unsure, it is `action`, not `jump`.
-- **Dark shapes close to the lens are the wearer's glove, pole, ski or binding.** Call
-  them `pov-gear`, never a person, never `inverted`, never `airborne`.
+- **On a helmet or chest mount the camera rolls, not the rider.** (If the camera is
+  planted or hand-held this does not apply: a person in the air is in the air.) The
+  horizon often sits at 40-45°, trees hang from the top of frame and sky fills the
+  bottom. Before calling a jump, a flip or anything inverted, find the snow: if it is
+  still beneath the skis relative to the frame, nobody is upside down. A tilted horizon
+  alone is camera roll. If you are unsure, it is `action`, not `jump`.
+- **On a worn camera, dark shapes close to the lens are the wearer's glove, pole, ski or
+  binding.** Call them `pov-gear`, never a person, never `inverted`, never `airborne`.
 - A jump is in the air for under two seconds and a fall is over in a few, so at this
   interval a real one shows in one frame, at most two. A person "airborne across several
   consecutive frames" is standing on a slope shot from below. Do not claim it.
@@ -133,7 +158,8 @@ is for events and for people; scenery and pov-gear are never notable.
 Also flag anything **unusable**: black frames, a lens covered by a glove, a shot so
 blurred or close that nothing reads.
 
-A sheet of ordinary skiing with nothing notable is a correct answer. Say so."""
+A sheet with no event is the normal answer for events: leave jump / fall / crash out of
+`moments`. Say nothing about their absence in the `description`; describe what is there."""
 
 # The close look. Same schema, same conservatism, different question: the coarse pass
 # has already said "something is happening around here" and the only thing worth
@@ -157,10 +183,10 @@ boring ones:
    wearer's ski tips clearly off the snow with the ground far below). Give it the
    tightest start and end the frames support, and say in `what` which frame shows the
    peak of it (the highest point, the impact). On a helmet or chest mount the camera
-   rolls, not the rider: before calling a jump, a flip or anything inverted, check that
+   rolls, not the rider (a planted or hand-held camera does not roll): before calling a jump, a flip or anything inverted, check that
    the snow is no longer beneath the skis relative to the frame. A horizon at 45° alone
    is camera roll. If you are unsure, it is `action`, not `jump`.
-2. **A camera artefact** — a whip pan, a lens wipe, the wearer's glove, pole, ski or
+2. **A camera artefact** — a whip pan, a lens wipe, a worn camera's glove, pole, ski or
    binding across the lens (`pov-gear`), a whiteout, the camera being picked up or put
    down. Mark these `junk` or `pov-gear` and list the stretch as unusable. A window that
    turns out to be nothing is a useful answer, not a failed one. A tilted or sky-filled
@@ -170,6 +196,9 @@ boring ones:
 
 Write claims as what the frame shows, never as a guess: *appears*, *seems*, *suggests*,
 *possibly* or *or* make a moment `confidence: "low"` and not notable.
+
+`description` is one or two plain sentences on what this window shows (who, where, what
+happens), with no verdict such as "nothing notable" in it.
 
 Do not report a moment outside {start:.0f}-{end:.0f}s; you cannot see outside it."""
 
@@ -296,8 +325,48 @@ def validate(payload, lo: float, hi: float, times: list[float] | None = None) ->
     unusable = [{"start": float(u["start"]), "end": float(u["end"]),
                  "why": str(u.get("why", ""))[:120]}
                 for u in payload.get("unusable", []) if isinstance(u, dict)]
-    return {"moments": clean, "unusable": unusable,
-            "summary": str(payload.get("summary", ""))[:600]}
+    raw = str(payload.get("description") or payload.get("summary") or "")
+    description, dropped = strip_verdicts(raw)
+    out = {"moments": clean, "unusable": unusable, "description": description[:600],
+           "summary": description[:600],
+           "events": [m for m in clean if m["kind"] in EVENT_KINDS and m["notable"]]}
+    if dropped:
+        out["verdicts_dropped"] = dropped
+    return out
+
+
+# A verdict is the clip being judged by the absence of action; a description is what is in
+# it. The prompt forbids these, and this is the net under it: a sentence that is one is
+# dropped (the count is kept, so the measurement sees how often the model still wrote one).
+VERDICT = re.compile(
+    r"nothing (notable|of note|of interest|significant|special|happens|to see)"
+    r"|\bno (notable |visible |significant )?(events?|action)\b"
+    r"|\bno (jumps?|falls?|crash(es)?|tricks?)\b"
+    r"|\bnot (a )?(ski|skiing|action|snow)\b[^.]{0,20}(footage|clip|content)"
+    r"|\bunusable\b|\bnothing (is )?happening\b"
+    r"|\bno skiing\b|\bnot skiing\b|\bwithout (any )?(action|events?)\b",
+    re.IGNORECASE)
+
+
+# A sentence that says only that nothing is written on screen: the prompt asks for text on
+# screen, and the model answers the question when there is none. It is not a verdict, just noise.
+NO_TEXT = re.compile(r"^(there is |there's )?no (readable |legible |visible |on-screen |onscreen )*"
+                     r"(text|writing|captions?|graphics|signs?)\b[^.]{0,60}\.?$", re.IGNORECASE)
+
+
+def strip_verdicts(text: str) -> tuple[str, int]:
+    """(`text` without its verdict sentences, how many verdicts were dropped). A bare
+    "No text is readable." is dropped too, uncounted."""
+    parts = [p for p in re.split(r"(?<=[.!?])\s+", str(text or "").strip()) if p]
+    keep = [p for p in parts if not VERDICT.search(p) and not NO_TEXT.match(p.strip())]
+    noise = len([p for p in parts if NO_TEXT.match(p.strip()) and not VERDICT.search(p)])
+    return " ".join(keep).strip(), len(parts) - len(keep) - noise
+
+
+def description_of(sidecar: dict) -> str:
+    """What a clip's sidecar says it is: `description` (prompt_version 4+), else the old
+    `summary`. Every reader goes through here, so an old sidecar still reads."""
+    return str((sidecar or {}).get("description") or (sidecar or {}).get("summary") or "")
 
 
 def analyse(video: Path, out_dir: Path, interval: float, cols: int, rows: int,
@@ -322,6 +391,7 @@ def analyse(video: Path, out_dir: Path, interval: float, cols: int, rows: int,
             sheets = build_sheets(video, Path(tmp), interval, cols, rows, orient, width)
         print(f"{video.name}: {len(sheets)} sheet(s)", flush=True)
         moments, unusable, summaries, failed, spend = [], [], [], [], 0.0
+        dropped = 0
         read: list[list[float]] = []
         sampled: list[float] = []
         models: set[str] = set()
@@ -346,13 +416,17 @@ def analyse(video: Path, out_dir: Path, interval: float, cols: int, rows: int,
             unusable += got["unusable"]
             sampled += got.get("frames_sampled", [])
             models.add(got["usage"]["model"])
-            summaries.append(got["summary"])
+            summaries.append(got["description"])
+            dropped += got.get("verdicts_dropped", 0)
             spend += got["usage"]["projected_usd"]
             print(f"  {s['path'].name}: {len(got['moments'])} moments "
                   f"(${got['usage']['projected_usd']:.4f})", flush=True)
     moments.sort(key=lambda m: m["start"])
+    text = " ".join(x for x in summaries if x)[:1200]
     out = {"clip": video.name, "moments": moments, "unusable": unusable,
-           "summary": " ".join(summaries)[:1200], "projected_usd": round(spend, 4),
+           "description": text, "summary": text,
+           "events": [m for m in moments if m["kind"] in EVENT_KINDS and m["notable"]],
+           "verdicts_dropped": dropped, "projected_usd": round(spend, 4),
            "failed_sheets": failed,
            "sheets_read": len(sheets) - len(failed), "sheets_total": len(sheets),
            "frames_sampled": sorted(set(sampled)),
@@ -382,8 +456,11 @@ def merge_fine(previous: dict, fresh: dict) -> dict:
         return fresh
     moments = list(previous.get("moments", [])) + list(fresh.get("moments", []))
     moments.sort(key=lambda m: m["start"])
+    joined = " ".join(x for x in (description_of(previous), description_of(fresh)) if x)[:1200]
     return {**fresh,
             "moments": moments,
+            "description": joined,
+            "events": [m for m in moments if m["kind"] in EVENT_KINDS and m["notable"]],
             "unusable": previous.get("unusable", []) + fresh.get("unusable", []),
             "summary": " ".join(x for x in (previous.get("summary", ""),
                                             fresh.get("summary", "")) if x)[:1200],

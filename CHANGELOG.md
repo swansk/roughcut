@@ -10,6 +10,7 @@ same commit. Releases move entries into a dated version section.
 ## [Unreleased]
 
 ### Fixed
+- DESCRIBE (wave 23): the look no longer assumes "an action camera worn on the skier's helmet or chest" or ranks "nothing notable" a good answer. `research/tools/visual_pass.py` (prompt version 4) asks first for a `description` (who, where, what happens, what is shown on screen) with no verdict words, then the same `moments` under the same strict event rules (another person visibly in the air, camera roll only on a worn camera, at most two frames, no hedges); the sidecar gains `description` and an `events` list beside `moments`, keeps `summary` (a copy of `description`) for older readers, and verdict sentences ("nothing notable", "not ski footage", "no jumps, falls or crashes") are dropped and counted. On Copper's 26 clips the old descriptions were verdict-framed in 25; the new ones in none; Killington's event recall (coarse 4 s and close 1 s windows) is unchanged. Nothing re-indexes by itself: an old sidecar still reads, a re-look is the editor's choice.
 - Wave 23 gains a sixth lane, DESCRIBE (the look prompt, a readable transcript, Find that names the clip and can say nothing).
 - The editor-trial kit takes its trial folder (RC_ROOT) and the code under test (RC_SNAP) from the environment and launches a software-WebGL browser by default; screenshot numbering no longer counts temporary looks.
 - Wave 23 planned from the Copper editor trial (judge/WAVE23.md): five lanes on the top areas, with the editors sent back in as the check.
