@@ -445,9 +445,9 @@ def test_an_empty_timeline_offers_a_first_cut_and_gets_one(page):
     inference.set_backend(Scripted())
     inference.reset_spend()
     try:
-        select_shot(page, 0)
-        page.keyboard.press("x")
-        page.keyboard.press("x")
+        for _ in range(2):         # a delete leaves nothing selected (HANDS round 3): select the next one
+            select_shot(page, 0)
+            page.keyboard.press("x")
         page.wait_for_selector("#tlEmpty .empty")
         assert page.locator("#tl .blk").count() == 0
         assert "No cut yet" in page.locator(".empty").inner_text()
@@ -1859,9 +1859,9 @@ def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
         # fixed note is the app's words and must not become the story
         page.fill("#story", "")
         page.evaluate("document.activeElement.blur()")
-        select_shot(page, 0)
-        page.keyboard.press("x")
-        page.keyboard.press("x")
+        for _ in range(2):         # a delete leaves nothing selected (HANDS round 3): select the next one
+            select_shot(page, 0)
+            page.keyboard.press("x")
         page.wait_for_selector("#tlEmpty .empty")
         assert not page.locator("#askPanel").is_visible()
         assert page.locator(".empty button:not(.fp-empty-btn):not(.fp-newfilm)").count() == 1   # (wave 24 START: "New film" is not an AI action)
