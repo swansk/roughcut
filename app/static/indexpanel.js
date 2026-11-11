@@ -254,13 +254,15 @@
     if (q.looks) parts.push(`${plural(q.looks, 'look')} · ${plural(q.sheets, 'sheet')}`);
     if (q.close) parts.push(plural(q.close, 'close look'));
     const what = parts.join(' + ');
+    // a finer-than-a-second look is long: say how long and what it reads, in the price itself
+    const long = q.fine && q.look_words ? ` · ${q.look_words}` : '';
     if (!(q.usd > 0)) {
-      return { text: 'free', title: 'runs on this machine: no model call'
+      return { text: 'free' + long, title: 'runs on this machine: no model call'
         + (q.notes && q.notes.length ? ` — ${q.notes.join('; ')}` : '') };
     }
     const tag = window.rcCost ? rcCost.tag(q.usd, terms()) : `~${dollars(q.usd)}`;
     const note = window.rcCost ? rcCost.note(q.usd, terms()) : `about ${dollars(q.usd)}`;
-    return { text: tag, title: `${what}: ${note}` + (q.notes && q.notes.length ? ` — ${q.notes.join('; ')}` : '') };
+    return { text: tag + long, title: `${what}: ${note}` + (q.notes && q.notes.length ? ` — ${q.notes.join('; ')}` : '') };
   }
 
   /* ------------------------------------------------------------ painting */
@@ -366,7 +368,7 @@
     } else if (st === 'done') {
       text = k === 'look' ? `✓ ${Number(v.interval_s || 4)} s` : '✓';
       title += `done ${when(v.at, true)}`;
-      if (k === 'look') title += ` · one frame every ${Number(v.interval_s || 4)} s${v.sheets ? ` · ${plural(v.sheets, 'sheet')}` : ''}`;
+      if (k === 'look') title += ` · ${r.got || `one frame every ${Number(v.interval_s || 4)} s`}${v.sheets ? ` · ${plural(v.sheets, 'sheet')}` : ''}`;
       if (k === 'close' && v.windows) title += ` · ${plural(v.windows, 'window')}`;
       if (k === 'asr' && r.words != null) title += ` · ${plural(r.words, 'word')}`;
       if (k === 'local') title += ` · free, on this machine${v.checked != null ? ` · ${plural(v.checked, 'window')} checked` : ''}${v.frames ? ` · ${plural(v.frames, 'frame')}` : ''}`;
@@ -459,7 +461,8 @@
     el.hidden = false;
     const dur = r.duration != null ? clock(r.duration) : '';
     const head = `<div class="ix-dh"><b>${esc(stem(r.clip))}</b>${dur ? `<span>${dur}</span>` : ''}`
-      + `<span title="the interval its next look reads at">next look: every ${Number(r.interval_s)} s${r.tuned ? ' (tuned)' : ''}</span></div>`;
+      + `<span title="the interval its next look reads at">next look: every ${Number(r.interval_s)} s${r.tuned ? ' (tuned)' : ''}</span>`
+      + (r.got ? `<span class="ix-got" data-testid="index-got" title="what this clip has been looked at">got: ${esc(r.got)}</span>` : '') + `</div>`;
     const lines = cols().map(([k]) => {
       const v = r.stages[k] || {};
       const st = v.state || 'not run';

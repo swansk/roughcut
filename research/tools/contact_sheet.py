@@ -163,7 +163,9 @@ def extract_frames(video: Path, workdir: Path, interval: float, width: int,
         # caller adds the window's start back when it labels the cells.
         cmd += ["-ss", f"{window[0]:.3f}",
                 "-t", f"{max(0.0, window[1] - window[0]):.3f}"]
-    cmd += ["-i", str(video), "-vf", f"fps=1/{interval},scale={width}:-2",
+    # eof_action=pass: a sample that falls inside the last frame's span is taken, so the tail of
+    # a clip that ends between two samples is not dropped (5.09 s at 0.25 s read 4.75 s, not 5.0)
+    cmd += ["-i", str(video), "-vf", f"fps=1/{interval:g}:eof_action=pass,scale={width}:-2",
             "-q:v", "3", pattern]
     r = run(cmd)
     if r.returncode != 0:
@@ -182,10 +184,21 @@ def load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-def hms(t: float) -> str:
-    m, s = divmod(int(t), 60)
+def hms(t: float, interval: float = 1.0) -> str:
+    """A cell's time label. Finer than a second the label carries the decimals the
+    interval needs (0.25 s: `00:01.25`; 0.1 s: `00:01.3`), so two neighbouring cells never
+    read the same."""
+    if interval >= 1.0:
+        m, s = divmod(int(t), 60)
+        h, m = divmod(m, 60)
+        return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+    dec = 1 if interval >= 0.1 - 1e-9 and round(interval * 10, 6) == int(round(interval * 10)) else 2
+    t = round(t, dec)
+    whole = int(t)
+    m, s = divmod(whole, 60)
     h, m = divmod(m, 60)
-    return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
+    frac = f"{t - whole:.{dec}f}"[1:]
+    return (f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}") + frac
 
 
 @dataclass
@@ -245,7 +258,7 @@ def build_sheets(video: Path, out_dir: Path, interval: float, cols: int, rows: i
                 r, c = divmod(k, cols)
                 x, y = c * cell_w + PAD, r * cell_h + PAD
                 canvas.paste(Image.open(frame_path), (x, y))
-                draw.text((x + 3, y + thumb_h + 3), f"{gi:03d}  {hms(t)}",
+                draw.text((x + 3, y + thumb_h + 3), f"{gi:03d}  {hms(t, interval)}",
                           fill=(240, 240, 240), font=font)
                 cells.append(Cell(index=gi, t=round(t, 2), row=r, col=c))
 
