@@ -170,6 +170,8 @@ def test_an_open_menu_swallows_editing_keys_and_arrows_walk_it(page):
     assert page.evaluate("segs.length") == n
     assert page.evaluate("tl.state.markers ? tl.state.markers.length : 0") == 0
     page.keyboard.press("ArrowDown")
+    assert "New film" in page.evaluate("document.activeElement.textContent")    # (wave 24 START: File's first item)
+    page.keyboard.press("ArrowDown")
     assert "Import" in page.evaluate("document.activeElement.textContent")
     page.keyboard.press("ArrowRight")               # the next menu opens
     assert page.evaluate("document.querySelector('#menubar .menu.open').dataset.menu") == "edit"

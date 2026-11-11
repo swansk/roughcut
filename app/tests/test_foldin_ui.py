@@ -561,7 +561,7 @@ def test_a_cap_from_the_environment_disables_the_choice(browser, live, fold, mon
         assert pg.locator("[data-testid=ps-cap-none]").is_disabled() and pg.locator("[data-testid=ps-cap-on]").is_checked()
         about = pg.locator("#psCapAbout").inner_text()
         assert "ROUGHCUT_BUDGET_USD" in about and "wins" in about, about
-        assert "of $7.50 cap" in pg.locator("[data-testid=ps-spent]").inner_text()
+        assert "cap $7.50" in pg.locator("[data-testid=ps-spent]").inner_text()      # (wave 24 START: "free on your plan · cap $7.50 (API-equivalent)")
         pg.locator("#psWorkers .ps-step[data-stage=probe] button[data-d='1']").click()
         pg.locator("[data-testid=ps-ok]").click()
         pg.wait_for_function("document.querySelector('#toast').textContent.includes('probe workers')", timeout=5000)
