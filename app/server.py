@@ -79,6 +79,7 @@ from roughcut import junk as junkmod  # noqa: E402
 from roughcut import flow as flowmod  # noqa: E402
 from roughcut import deep as deepmod  # noqa: E402
 from roughcut import firstpass as fpmod  # noqa: E402
+from roughcut import startwords  # noqa: E402     # wave 24 START: length, time, plain words
 from roughcut import procscope  # noqa: E402
 from roughcut import telemetry_events  # noqa: E402
 from roughcut import fxcheck  # noqa: E402
@@ -1569,6 +1570,7 @@ def project_payload() -> dict:
         "reading": edl.get("reading", ""),
         "story": edl.get("story", ""),
         "target": edl.get("target_s", [120, 180]),
+        "target_want_s": edl.get("target_want_s"),     # "about 1 min" (wave 24 START)
         "segments": segments,
         "clips": clips,
         # The bin's events in priority order — one list, not one per clip, because the
@@ -4661,6 +4663,22 @@ def firstpass_path() -> Path:
     return fpmod.record_path(STATE["work"], STATE["footage"].name)
 
 
+def fp_history_path() -> Path:
+    """Every finished first pass on this machine, one line each, across bins: what the time
+    estimate is learned from (wave 24 START). Beside the per-bin records, not in one."""
+    return STATE["work"] / "firstpass" / "history.jsonl"
+
+
+def fp_history_add(row: dict) -> None:
+    try:
+        p = fp_history_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({**row, "bin": STATE["footage"].name, "at": time.time()}) + "\n")
+    except OSError:
+        pass                                 # a history that cannot be written costs the estimate only
+
+
 def _fp_record() -> dict | None:
     try:
         rec = json.loads(firstpass_path().read_text(encoding="utf-8"))
@@ -4852,7 +4870,23 @@ def firstpass_plan(mode: str | None = None, keep=None, *, facts: dict | None = N
         {"key": "cut", "name": "Rough cut", "needed": True, "will": will_cut,
          "originate": originate, "cost": fpmod.cost_words(cut_usd)},
     ]
+    # wave 24 START: what it does in a newcomer's words, how long it will take, the length it
+    # aims for. The models and pipeline terms stay in the steps and lines (Details).
+    to_index = max(0, n - min(counts["listened"], counts["looked"])) if index_needed else 0
+    try:
+        known = [clip_duration_known(c) for c in footage_clips()]
+        minutes = sum(d for d in known if d) / 60.0
+    except Exception:  # noqa: BLE001 — a length not known yet is not an error here
+        minutes = None
+    want = edl.get("target_want_s")
+    plain = startwords.plain(clips=n, minutes=minutes, to_index=to_index,
+                             look_s=look_interval(), target=edl.get("target_s") or [120, 180],
+                             want_s=want, will_replace=len(replace_rows) if segments else 0)
+    when = startwords.estimate(startwords.load_history(fp_history_path()), to_index)
     return {"mode": mode, "steps": steps, "keep": keep_rows, "replace": replace_rows,
+            "plain": plain, "time": when,
+            "target": edl.get("target_s") or [120, 180], "target_want_s": want,
+            "has_cut": bool(segments),
             "locked": locked, "cost": fpmod.cost_words(ix_usd + cut_usd),
             # wave 20 VERIFY: the Claude checks on the events the cut uses, priced first
             "verify": verifymod.first_pass_price(verify_state()["mode"], footage_clips(),
@@ -5473,9 +5507,19 @@ async def api_firstpass_post(request: Request) -> JSONResponse:
         raise HTTPException(400, "expected a JSON object")
     if not footage_clips():
         raise HTTPException(400, "no footage in this folder — nothing to pass over")
+    # wave 24 START: the length the editor asked for is the project's target before the cut is
+    # written, so the cut-writer is told it (a note in the sentence was never enough)
+    want = body.get("length_s")
+    if want is not None:
+        try:
+            startwords.target_for(want)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(400, f"length_s: {exc}")
     with FIRSTPASS_LOCK:
         if _fp_live():
             raise HTTPException(409, "the first pass is already running")
+        if want is not None:
+            set_target(want_s=float(want))
         try:
             would = firstpass_plan(body.get("mode"), body.get("keep"))
         except ValueError as exc:
@@ -5491,7 +5535,8 @@ async def api_firstpass_post(request: Request) -> JSONResponse:
             "scope": procscope.Scope(f"first pass {job}"), "index_job": None}
     threading.Thread(target=_firstpass_job, args=(job,), daemon=True).start()
     return JSONResponse({"job": job, "mode": would["mode"], "keep": would["locked"],
-                         "would": would})
+                         "would": would, "target": would.get("target"),
+                         "target_want_s": would.get("target_want_s")})
 
 
 @app.post("/api/firstpass/cancel")
@@ -5712,6 +5757,9 @@ def _firstpass_walk(job: str, fp: dict) -> None:
         _fp_step(fp, "index", "running")
         stages = {s["key"]: s for s in flowmod.compute(flow_facts())["stages"]}
         counts = _fp_index_counts(stages["index"])
+        # wave 24 START: what the time estimate learns from — the clips this pass had to hear
+        # and look at, and when the index was over
+        fp["to_index"] = max(0, counts["clips"] - min(counts["listened"], counts["looked"]))
         if stages["index"]["state"] != "done" or counts["proxied"] < counts["clips"]:
             ix_job = firstpass_index(fp)
             _fp_check(fp)
@@ -5726,6 +5774,7 @@ def _firstpass_walk(job: str, fp: dict) -> None:
             _fp_step(fp, "index", "skipped", why="already complete", counts=counts)
         if not counts["listened"]:
             raise RuntimeError("no clip has been heard, so there is nothing to cut from")
+        fp["index_done_at"] = time.time()
 
         # 2 · picks — the ranked events, then the floor's picks from them
         _fp_step(fp, "picks", "running")
@@ -5843,6 +5892,11 @@ def _firstpass_walk(job: str, fp: dict) -> None:
                                          "length_s": round(sum(edits.dur(s) for s in
                                                                plan.get("segments") or []), 2)}})
             fp["state"] = "done"
+            done_at = time.time()
+            fp_history_add(startwords.history_row(
+                clips=rec.get("clips") or 0, indexed=fp.get("to_index") or 0,
+                index_s=(fp.get("index_done_at") or done_at) - fp["started"],
+                total_s=done_at - fp["started"]))
             _fp_save(rec)
     except _FpCancelled:
         pass
@@ -13406,7 +13460,9 @@ MODULE_FILES = {"firstpass.js", "firstpass.css", "export.js", "export.css", "met
                 "import.js", "import.css", "actions.js", "actions.css", "aiprompt.js", "aiprompt.css",
                 "tour.js", "tour.css",
                 # wave 17 (K4): the Index panel
-                "indexpanel.js", "indexpanel.css"}
+                "indexpanel.js", "indexpanel.css",
+                # wave 24 START: New film from a folder…
+                "newfilm.js", "newfilm.css"}
 
 
 @app.get("/modules/{name}")
@@ -17077,11 +17133,17 @@ async def api_projects_open(request: Request) -> JSONResponse:
     raw = body.get("footage") if isinstance(body, dict) else None
     if not isinstance(raw, str) or not raw.strip():
         raise HTTPException(400, "footage: a folder path is required")
-    folder = Path(raw).expanduser()
+    folder = Path(raw.strip()).expanduser()
+    if folder.is_file():
+        raise HTTPException(400, f"that is a file, not a folder — give the folder that holds "
+                                 f"your clips: {folder}")
     if not folder.is_dir():
-        raise HTTPException(400, f"no such folder: {folder}")
+        raise HTTPException(400, f"no such folder: {folder} — check the spelling, or pick it "
+                                 "in the folder browser")
     if not _count_videos(folder):
-        raise HTTPException(400, f"no video in {folder}")
+        raise HTTPException(400, f"no video files in {folder} — pick the folder that holds your "
+                                 "clips ("
+                                 + " ".join(sorted(VIDEO_SUFFIXES)) + ")")
     _refuse_while_running("switching bins")
     folder = folder.resolve()
     # Which cut to land on: the one asked for (it must be one of the bin's), else the
@@ -17103,6 +17165,147 @@ async def api_projects_open(request: Request) -> JSONResponse:
               proxies=STATE.get("proxies_enabled", True), orient="auto")
     return JSONResponse({**list_projects()["current"],
                          "edl_created": STATE["edl_created"]})
+
+
+# ---------------------------------------------------------------- the folder browser
+#
+# wave 24 START (COLD-01, -04): a newcomer starts a film from a folder of footage, and a
+# folder is something you pick, not type. The browser lists DIRECTORIES under the places the
+# board already reads (the parent of the current footage folder, the user's home, /mnt),
+# each with how many video files it holds (one level, cached by the folder's mtime), and
+# never anything else: no file names, no contents, no path that resolves outside those
+# places (a symlink out is outside). The board has no login and is bound to localhost; this
+# is a listing of folder names and counts and nothing more, and a typed path is still just
+# the open endpoint's.
+
+FOLDER_LIST_MAX = 300
+_FOLDER_COUNTS: dict = {}
+
+
+def folder_roots() -> list[Path]:
+    out: list[Path] = []
+    here = STATE["footage"]
+    for r in (here.parent, Path.home(), Path("/mnt")):
+        try:
+            rr = r.expanduser().resolve()
+        except (OSError, RuntimeError):
+            continue
+        if rr.is_dir() and len(rr.parts) > 1 and rr not in out:      # never "/"
+            out.append(rr)
+    return out
+
+
+def _inside(p: Path, roots: list[Path]) -> bool:
+    return any(p == r or r in p.parents for r in roots)
+
+
+def _folder_videos(p: Path) -> int:
+    """Video files directly in `p`, cached by its modification time."""
+    try:
+        key = p.stat().st_mtime_ns
+    except OSError:
+        return 0
+    hit = _FOLDER_COUNTS.get(str(p))
+    if hit and hit[0] == key:
+        return hit[1]
+    n = _count_videos(p)
+    if len(_FOLDER_COUNTS) > 4000:
+        _FOLDER_COUNTS.clear()
+    _FOLDER_COUNTS[str(p)] = (key, n)
+    return n
+
+
+@app.get("/api/folders")
+def api_folders(path: str | None = None) -> JSONResponse:
+    """The folders under `path` (default: the folder next to the current footage), with each
+    one's count of video files. 400 for a file or a missing folder (the words say which),
+    403 for a place the browser does not go."""
+    roots = folder_roots()
+    start = STATE["footage"].parent
+    raw = (path or "").strip()
+    target = Path(raw).expanduser() if raw else start
+    if target.is_file():
+        raise HTTPException(400, f"that is a file, not a folder — give the folder that holds "
+                                 f"your clips: {target}")
+    if not target.is_dir():
+        raise HTTPException(404, f"no such folder: {target}")
+    try:
+        here = target.resolve()
+    except (OSError, RuntimeError):
+        raise HTTPException(404, f"no such folder: {target}")
+    if not _inside(here, roots):
+        raise HTTPException(403, "that folder is outside the places the browser lists (the "
+                                 "folder beside your footage, your home folder and /mnt) — "
+                                 "typing its path still opens it")
+    rows: list[dict] = []
+    truncated = False
+    try:
+        with os.scandir(here) as it:
+            for e in it:
+                if e.name.startswith("."):
+                    continue
+                try:
+                    if not e.is_dir():
+                        continue
+                    child = Path(e.path).resolve()
+                except OSError:
+                    continue
+                if not _inside(child, roots):
+                    continue                       # a link out of the places is not followed
+                rows.append({"name": e.name, "path": str(child), "videos": _folder_videos(child)})
+                if len(rows) >= FOLDER_LIST_MAX * 2:
+                    truncated = True
+                    break
+    except OSError as exc:
+        raise HTTPException(403, f"cannot read {here}: {exc.strerror or exc}")
+    rows.sort(key=lambda r: (-(r["videos"] > 0), r["name"].lower()))
+    if len(rows) > FOLDER_LIST_MAX:
+        rows, truncated = rows[:FOLDER_LIST_MAX], True
+    parent = here.parent if here not in roots and _inside(here.parent, roots) else None
+    return JSONResponse({
+        "path": str(here), "name": here.name or str(here), "parent": str(parent) if parent else None,
+        "videos": _folder_videos(here), "folders": rows, "truncated": truncated,
+        "roots": [{"name": r.name or str(r), "path": str(r)} for r in roots],
+        "current": str(STATE["footage"])})
+
+
+def set_target(*, want_s: float | None = None, target=None) -> dict:
+    """The project's length target, written to the cut file (`target_s`, and `target_want_s`
+    when it was asked for as one number): what every first cut and Ask is written to. The
+    prompt the cut-writer receives carries it ("target length 54-66 s")."""
+    if want_s is not None:
+        rng = startwords.target_for(want_s)
+        want: float | None = float(want_s)
+    else:
+        rng = startwords.clean_range(target)
+        want = None
+    edl = read_edl()
+    edl["target_s"] = rng
+    if want is not None:
+        edl["target_want_s"] = round(want, 1)
+    else:
+        edl.pop("target_want_s", None)
+    write_edl(edl)
+    return {"target": rng, "target_want_s": edl.get("target_want_s"),
+            "aims": startwords.target_words(rng, edl.get("target_want_s"))}
+
+
+@app.post("/api/target")
+async def api_target(request: Request) -> JSONResponse:
+    """How long the film should be: `{seconds: 60}` (a range around it is made) or
+    `{target: [lo, hi]}`. Written to the cut file; a first pass or an Ask after it is
+    written to it. Wave 24 START (COLD-09, CLUMSY-02: 60 s asked, 2:56 and 2:41 delivered)."""
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise HTTPException(400, "expected a JSON object")
+    try:
+        if body.get("seconds") is not None:
+            return JSONResponse(set_target(want_s=float(body["seconds"])))
+        if body.get("target") is not None:
+            return JSONResponse(set_target(target=body["target"]))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(400, str(exc))
+    raise HTTPException(400, "give seconds, or target [low, high]")
 
 
 def configure(edl: Path | None, footage: Path, sidecars: Path | None, work: Path,

@@ -121,7 +121,7 @@ def test_ops_come_back_checked_described_and_priced(board):
     cost = d["cost"]
     assert cost["charged"] is False and cost["backend"] == "claude_cli"
     assert cost["words"] == "free on your plan" and "$" not in cost["words"]
-    assert "if it went through the API" in cost["hover"]
+    assert cost["hover"] == "free on your plan" and "if the same calls were billed through the API" in cost["api_note"]
     assert cost["measured"] is True and cost["usd"] > 0
     # the deep role's model, from config — never a literal (section S)
     assert cost["model"] == config.model_for(assist.ROLE)
