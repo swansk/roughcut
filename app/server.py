@@ -4922,7 +4922,7 @@ def _assist_rows() -> list[dict]:
         words, plan = revise.split_note(str(rec.get("text") or ""))
         rows.append({"job": rec.get("job"), "created": rec.get("created"), "note": words[:160],
                      "plan": "", "shots": len(res["ops"]), "colour_only": False, "kind": "edits",
-                     "edits": len(res["ops"]), "status": status, "cut": None, "this_cut": True,
+                     "edits": len(res["ops"]), "status": status, "cut": None, "this_cut": True, "reopen": True,
                      "replaced_by": None, "partial": False, "stale": False,
                      "_at": float(rec.get("created") or 0)})
     return rows
@@ -4961,7 +4961,7 @@ def asks_recent(n: int = ASK_RECENT_N) -> list[dict]:
             "note": words[:160], "plan": brief[:400], "kind": "cut",
             "shots": len(plan["segments"]), "colour_only": bool(plan.get("unchanged")),
             "status": status, "cut": Path(cut).name.removesuffix(CUT_SUFFIX) if cut else None,
-            "this_cut": _ask_for_this_cut(rec),
+            "this_cut": _ask_for_this_cut(rec), "reopen": True,
             "replaced_by": (rec.get("replaced") or {}).get("by"),
             "stale": _ask_for_this_cut(rec) and ask_stale(rec, saved),
             "same": _ask_for_this_cut(rec) and ask_same(rec, saved),

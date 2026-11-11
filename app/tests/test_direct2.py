@@ -224,7 +224,7 @@ def test_recent_proposals_show_the_editors_words_and_the_prompt_boxs_edits(board
     accepted_edit(c, ids, "trim the third shot")
     rows = c.get("/api/asks/recent").json()["proposals"]
     assert rows and rows[0]["note"] == "trim the third shot" and rows[0]["edits"] == 1
-    assert rows[0]["status"] == "accepted" and rows[0]["reopen"] is False
+    assert rows[0]["status"] == "accepted" and rows[0]["reopen"] is True      # wave 23 SAFE: set-aside edits come back from the list
     assert "⟦" not in server.json.dumps(rows)
 
 
