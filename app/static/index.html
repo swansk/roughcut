@@ -47,6 +47,7 @@
       <button type="button" data-cmd="ask">Ask for a change… <span class="k">Assistant</span></button>
       <button type="button" data-cmd="music">Music bed… <span class="k">Audio</span></button>
       <button type="button" data-cmd="fx">Design an effect… <span class="k">Designed Effects</span></button>
+      <hr><button type="button" data-cmd="deftrans" data-testid="menu-default-transition">Apply default transition <span class="k">Ctrl+D</span></button>
       <hr><button type="button" data-cmd="seq:addv">Add Video Track <span class="k">V3…</span></button>
       <button type="button" data-cmd="seq:adda">Add Audio Track <span class="k">A3…</span></button>
       <button type="button" data-cmd="seq:delv">Delete Video Track</button>
@@ -317,7 +318,7 @@
           <h2>Proposed cut</h2>
           <div class="pbtns">
             <button id="playProposal" data-next-for="cut" title="play the proposed cut in the Program monitor">▶ Play it</button>
-            <button id="acceptProposal" class="primary" title="Put the proposed cut on the timeline — one undo takes it back">Accept</button>
+            <button id="acceptProposal" title="Put the proposed cut on the timeline — one undo takes it back">Accept</button>
             <button id="acceptAll" hidden title="every proposed shot, the rejected ones too">Accept all</button>
             <button id="rejectProposal" class="ghost" title="Set it aside — it is kept under Recent proposals, and Ctrl+Z brings it back">Discard</button>
           </div>
@@ -416,6 +417,7 @@
 <script src="/dock.js"></script>
 <script src="/modules/hands.js"></script>
 <script src="/flow.js"></script>
+<script src="/modules/frame.js"></script>
 <script src="/timeline/timeline.js"></script>
 <script src="/timeline/timeline-trim.js"></script>
 <script src="/timeline/timeline-keys.js"></script>

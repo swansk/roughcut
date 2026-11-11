@@ -150,6 +150,28 @@ def no_undo_history_carried_over():
     clean()
 
 
+@pytest.fixture(autouse=True)
+def no_proposal_carried_over():
+    """Every test starts with no proposal waiting. A proposal waits until it is answered (wave 23
+    SAFE) instead of lapsing when the cut is next written, so one a test left in the work dir
+    (test_ui_flow's module-scoped server never goes through the `client` fixture's cleanup) is
+    still the pending proposal of the next test's page: Next names it, a first cut is refused
+    under it, and the Assistant opens on it."""
+    def clear():
+        server = sys.modules.get("server")
+        state = getattr(server, "STATE", None) if server is not None else None
+        asks = state.get("asks") if state else None
+        if asks:
+            for left in Path(asks).glob("*.json"):
+                try:
+                    left.unlink()
+                except OSError:
+                    pass
+    clear()
+    yield
+    clear()
+
+
 # The walk-through's switch (wave 12, lane TEACH; REDESIGN-GOAL dimension 16). The board opens
 # its first-run walk-through (app/static/tour.js) on a browser's first visit, over what a test
 # would click. Every browser context and page the suite opens gets the flag the walk-through

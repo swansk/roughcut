@@ -810,6 +810,56 @@ function machineLine(box, seg) {
   if (first) go(); else machineTimer = setTimeout(go, 450);
 }
 
+/* Effect Controls for a selected transition (round 2 FINISH-10): the length in seconds and in
+ * frames (typed or stepped: one undo entry each), where it sits against the cut in numbers, and
+ * Remove (Delete does the same). */
+function renderTransitionPanel(box, info) {
+  const want = `tr:${info.key}`;
+  if (inspecting !== want) {
+    commitWhy(box);
+    inspecting = want;
+    const el = document.createElement('div');
+    el.className = 'trpanel';
+    el.dataset.testid = 'transition-panel';
+    el.innerHTML = `<div class="trname"></div>
+      <label>Duration <input class="trdur" data-testid="transition-dur" type="number" step="0.01" min="0.04"> s</label>
+      <label>Frames <input class="trframes" data-testid="transition-frames" type="number" step="1" min="1"></label>
+      <div class="tralign">Alignment <b></b></div>
+      <div class="trsplit">Before the cut <b class="trb"></b> s · after the cut <b class="tra"></b> s</div>
+      <button type="button" class="trdel" data-testid="transition-remove">Remove transition</button>`;
+    const key = info.key;
+    el.querySelector('.trdur').addEventListener('change', (ev) => {
+      const v = parseFloat(ev.target.value);
+      if (Number.isFinite(v) && v > 0) tl.setTransitionDur(key, v);
+      renderInspector();
+    });
+    el.querySelector('.trframes').addEventListener('change', (ev) => {
+      const f = parseFloat(ev.target.value);
+      const cur = tl.transitionInfo(key);
+      if (Number.isFinite(f) && f >= 1 && cur) tl.setTransitionDur(key, f / cur.rate);
+      renderInspector();
+    });
+    el.querySelectorAll('input').forEach((i) => i.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); ev.target.blur(); }     // the keys are the timeline's again
+    }));
+    el.querySelector('.trdel').addEventListener('click', () => { tl.removeTransition(key); });
+    box.replaceChildren(el);
+  }
+  const q = (s) => box.querySelector(s);
+  const lab = document.querySelector('#ecHead span'), what = $('#ecWhat');
+  if (lab) lab.textContent = 'Transition';
+  if (what) what.textContent = info.name;
+  q('.trname').textContent = `${info.name} · ${info.family === 'audio' ? 'sound' : 'picture'} · ${info.align === 'center'
+    ? `on the cut between shot ${info.shotA} and shot ${info.shotB}` : info.align === 'start'
+      ? `fading in shot ${info.shotB}` : `fading out shot ${info.shotA}`}`;
+  const dur = q('.trdur'), fr = q('.trframes');
+  if (document.activeElement !== dur) dur.value = info.dur.toFixed(2);
+  if (document.activeElement !== fr) fr.value = String(info.frames);
+  q('.tralign b').textContent = info.align === 'center' ? 'centred on the cut' : info.align === 'start' ? 'starts at the shot’s head' : 'ends at the shot’s tail';
+  q('.trb').textContent = info.before.toFixed(2);
+  q('.tra').textContent = info.after.toFixed(2);
+}
+
 function renderInspector() {
   const box = $('#inspector');
   if (!box) return;
@@ -825,6 +875,9 @@ function renderInspector() {
     return;
   }
   const selIds = [...tl.state.sel].filter((id) => tl.indexOf(id) >= 0);
+  // a selected transition (a click on it, or Ctrl+D's): its length and where it sits, as numbers
+  const trInfo = !selIds.length && typeof tl.transitionInfo === 'function' && tl.tsel ? tl.transitionInfo() : null;
+  if (trInfo) { renderTransitionPanel(box, trInfo); return; }
   const seg = selIds.length > 1 ? null : inspected();
   // A clip on V2+ selected (and no V1 shot): its own Effect Controls (wave 9, V2EC).
   // Keyed by id: a V2 edit or an undo replaces the clip's object, not the panel.
@@ -2923,6 +2976,9 @@ function programInit() {
   tl.on('playhead', (ev) => programSync(ev && ev.t));
   tl.on('tracks', (ev) => { prog.tracks = (ev && ev.tracks) || tl.tracks(); programSync(); });
   tl.on('change', () => programSync());
+  // the frame's shape changed (Sequence Settings, its undo, another cut: wave 25 VERTICAL): the
+  // Effect Controls are built again, for a 9:16 / 1:1 cut has a Reframe section a 16:9 one has not
+  tl.on('frame', () => { inspecting = null; renderInspector(); programSync(); });
 }
 
 function toggleCut() {
@@ -3669,6 +3725,16 @@ function syncPlayer() {
       : 'the sequence is empty · drag a clip to the Timeline or press , (Insert)';
   }
   if (player.idx >= segs.length) { pauseCut(); player.idx = -1; }
+  // An emptied cut (select all, delete) has no frame to show and no time: the playhead goes to 0, the
+  // timecode says so, and the empty Program is drawn over the old picture. Undo brings the cut back, and
+  // the picture with it (round 2, the finder: the Program kept an old frame at 00:00:18:03).
+  if (!segs.length && !pendingPlan) {
+    if (player.playing) pauseCut();
+    player.idx = -1;
+    if (window.tl && (tl.state.playhead || 0) !== 0) tl.setPlayhead(0, { reveal: false });
+    const pos = $('#pos');
+    if (pos && pos.textContent !== '00:00:00:00') pos.textContent = '00:00:00:00';
+  }
   if (!player.playing) monitorCatchUp();
   if (player.playing && player.idx >= 0 && !player.off) {
     const seg = segs[player.idx];
@@ -6382,12 +6448,9 @@ function wireProposalUndo() {
   tl.on('change', (ev) => {
     const tag = ev && typeof ev.tag === 'string' ? ev.tag : '';
     if (!tag.startsWith('proposal:')) {
-      // an accept taken back (or done again) is said so in Recent proposals: "accepted, then undone"
-      if (ev && (ev.kind === 'undo' || ev.kind === 'redo') && ev.label) {
-        fetch('/api/asks/undone', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-          credentials: 'omit', body: JSON.stringify({ label: ev.label, redo: ev.kind === 'redo' }) })
-          .then(() => paintRecent(), () => {});
-      }
+      // an accept taken back (or done again): the server marks its record from the same event the
+      // prompt posts for the AI's ledger (/api/assist/event), so the list says "accepted, then undone"
+      if (ev && (ev.kind === 'undo' || ev.kind === 'redo') && ev.label) setTimeout(paintRecent, 700);
       return;
     }
     const job = tag.slice(9);

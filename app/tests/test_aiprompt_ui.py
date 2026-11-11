@@ -448,7 +448,7 @@ def test_a_click_on_the_chip_changes_the_scope_and_it_stays_until_changed(live_s
     pg.locator(SCOPE).click()
     pg.locator('[data-testid="ai-scope-menu"] button[data-scope="auto"]').click()
     pg.wait_for_function(f"document.querySelector('{SCOPE}').innerText.trim() === 'Shot 2 · CLIP_B'", timeout=3000)
-    assert "following what is selected" in pg.locator(SCOPE).get_attribute("title")
+    assert "following the shots you selected" in pg.locator(SCOPE).get_attribute("title")
     _close(pg)
 
 
@@ -935,3 +935,45 @@ def test_the_sequence_menus_ask_goes_to_the_prompt(live_server, project, browser
     assert pg.evaluate("dock.current()") == "ask"      # the Assistant, where the answer is reviewed
     assert posts == []
     pg.context.close()
+
+
+# ---------------------------------------------------------------- wave 25 DIRECT2
+
+def test_the_default_scope_ignores_a_selection_the_app_made_while_playing(live_server, project, browser):
+    pg = _open(browser, live_server, project)
+    assert _scope_text(pg) == "Sequence"
+    # what Play does: tl.syncSel adopts the shot under the playhead, source "app"
+    pg.evaluate("tl.select([tl.state.segs[0].id], { source: 'app' })")
+    pg.wait_for_timeout(1200)
+    assert _scope_text(pg) == "Sequence" and pg.evaluate("rcAI.scope().kind") == "sequence"
+    # the editor's own click is a choice
+    pg.locator("#tl .blk").nth(1).click()
+    pg.wait_for_function(f"document.querySelector('{SCOPE}').innerText.trim() === 'Shot 2 · CLIP_B'", timeout=3000)
+    _close(pg)
+
+
+def test_take_back_is_one_undo_entry_and_one_undo_cancels_it(live_server, project, browser):
+    pg = _open(browser, live_server, project)
+    pg.wait_for_function("document.querySelector('#tl .blk')", timeout=5000)
+    r = pg.evaluate("""() => {
+      const ids = tl.state.segs.map((s) => s.id), a = ids[0];
+      const snap = () => JSON.stringify(tl.state.segs.map((s) => [s.id, s.in, s.out]));
+      const start = snap();
+      tl.batch('AI: trim', () => tl.setRange(a, 0.5, null));
+      const one = snap();
+      tl.batch('Add marker', () => tl.setRange(a, null, 2.0));       // by hand, above it
+      tl.batch('AI: trim', () => tl.setRange(a, 0.75, null));
+      const two = snap();
+      const nope = tl.takeBack(9, 'x');
+      const back = tl.takeBack(2, 'AI: change taken back');
+      const after = snap();
+      const stack = tl.history().undo.map((e) => e.label);
+      tl.undo();
+      return { start, one, two, nope, back, after, undone: snap(), stack };
+    }""")
+    assert r["nope"]["ok"] is False and "only 2 AI changes" in r["nope"]["why"]
+    assert r["back"]["ok"] is True and r["back"]["n"] == 2
+    assert r["after"] == r["start"] and r["after"] != r["two"]    # back past both AI entries and the hand edit between
+    assert r["stack"][-1] == "AI: change taken back" and r["stack"][:3] == ["AI: trim", "Add marker", "AI: trim"]
+    assert r["undone"] == r["two"]                    # one Undo cancels the take-back
+    _close(pg)

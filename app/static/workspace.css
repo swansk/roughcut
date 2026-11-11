@@ -277,6 +277,13 @@ body.ws-resizing.col { cursor: col-resize; } body.ws-resizing.row { cursor: row-
              container-type: size; }
 .screen, .mon { position: relative; flex: none; background: #000; overflow: hidden;
                 aspect-ratio: 16 / 9; width: min(100cqw, calc(100cqh * 16 / 9)); }
+/* The Program takes the cut's own frame shape (wave 25 VERTICAL, app/static/frame.js sets
+   --fw / --fh: 16 / 9 unless the cut is 9:16 or 1:1); letterboxed in the panel, never
+   stretched. A shaped frame FILLS with the shot (cover, the centre crop), the reframe of
+   a shot moving the crop (effects.js `reframeLook`) — the export crops the same window. */
+.screen { --fw: 16; --fh: 9; aspect-ratio: var(--fw) / var(--fh);
+          width: min(100cqw, calc(100cqh * var(--fw) / var(--fh))); }
+.screen[data-frame] video, .screen[data-frame] canvas#gradeCanvas, .screen[data-frame] #monPoster { object-fit: cover; }
 .screen video, .mon video { position: absolute; inset: 0; width: 100%; height: 100%; display: none;
                 object-fit: contain; }
 .screen video.live, .mon video.live { display: block; }
@@ -802,3 +809,15 @@ input.hands-tc { box-sizing: border-box; padding: 0 4px; background: #101013; co
 input.hands-tc.bad { border-color: var(--bad, #e46a6a); }
 #proposalStale { margin: 4px 0 6px; padding: 5px 8px; border: 1px solid var(--warn); border-radius: 4px; color: var(--warn); font-size: 11.5px; }
 #proposalStale.sure { background: rgba(226, 177, 79, .12); }
+
+/* Effect Controls for a selected transition (app.js renderTransitionPanel) */
+.trpanel { display: grid; gap: 8px; padding: 10px 12px; font-size: 12px; }
+.trpanel .trname { color: var(--text); font-weight: 600; }
+.trpanel label { display: flex; align-items: center; gap: 8px; color: var(--dim); }
+.trpanel input { width: 72px; background: #101013; color: var(--text); border: 1px solid var(--line); padding: 2px 4px; font: inherit; }
+.trpanel .tralign, .trpanel .trsplit { color: var(--dim); }
+.trpanel b { color: var(--text); font-weight: 600; }
+.trpanel .trdel { justify-self: start; }
+
+/* an emptied cut draws over the old frame the monitor still holds */
+#progEmpty:not([hidden]) { background: #0b0b0d; z-index: 3; }

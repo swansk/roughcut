@@ -235,7 +235,12 @@ def test_trimming_the_in_point_moves_the_poster_without_one_frame_per_nudge(page
         timeout=10000)
     page.wait_for_timeout(400)         # any straggler request would have started by now
     assert any("t=2.50" in u for u in asked), asked
-    assert len(asked) <= 2, f"a frame per press, not per settled trim: {asked}"
+    # (the other shot's own filmstrip poster is fetched when its block first scrolls into view,
+    # whenever that lands: it is not the trimmed shot's frame, so only the trimmed clip counts)
+    # and it counts frames, not requests: the inspector's, the monitor's rest still and the block
+    # all ask for the one frame, and how many of those the browser coalesces depends on its load
+    mine = {u.split("&")[0] for u in asked if "/CLIP_A." in u}
+    assert len(mine) <= 2, f"a frame per press, not per settled trim: {asked}"
 
 
 def test_the_strip_has_no_trim_buttons_and_the_trim_keys_need_a_shot(page):
@@ -454,7 +459,7 @@ def test_an_empty_timeline_offers_a_first_cut_and_gets_one(page):
         # the Ask tool, and both are the EDL's story; ONE priced button, Next's to mark
         assert "What is this film about?" in page.locator(".empty").inner_text()
         # (lane FPUI's "Run first pass", `.fp-empty-btn`, sits beside it in the box)
-        assert page.locator(".empty button:not(.fp-empty-btn)").count() == 1
+        assert page.locator(".empty button:not(.fp-empty-btn):not(.fp-newfilm)").count() == 1   # (wave 24 START: "New film" is not an AI action)
         assert page.locator("#firstCut").get_attribute("data-next-for") == "cut"
         assert "aims for" in page.locator("#firstAims").inner_text()
         # ONE AI action in the empty Timeline (verdict 4, punch 10): until a first pass has
@@ -748,9 +753,12 @@ def test_a_version_row_offers_a_download_and_says_how_big_it_is(page):
     # film of this cut is named in its hover, and the Download is this panel's.
     head = page.locator("#makeFilm")
     page.wait_for_function(
-        "document.querySelector('#makeFilm').title.includes('last exported as')", timeout=5000)
+        "/was last (rendered|exported) as /.test(document.querySelector('#makeFilm').title)", timeout=5000)
     assert head.inner_text() == "Export"
-    assert dl.get_attribute("title").split(" · ")[0] in head.get_attribute("title")
+    # (wave 24 DELIVER, FINISH-26: the hover names the file on disk, with its folder, not the
+    # name a download would suggest)
+    on_disk = page.evaluate("thisCutsFilm().name")
+    assert on_disk in head.get_attribute("title") and "renders" in head.get_attribute("title")
     with page.expect_download(timeout=15000) as got:
         dl.click()
     assert got.value.suggested_filename.endswith(".mp4")
@@ -1018,7 +1026,15 @@ def test_clicking_a_block_in_the_strip_jumps_the_monitor(page):
     click (or space) plays from there."""
     blocks = page.locator("#tl .blk")
     assert blocks.count() == 2
+    # (wave 24 HANDS-03: a double-click opens the shot in the Source, In and Out set, and plays
+    # nothing; Space on the selected shot is what plays the cut from there)
     blocks.nth(0).dblclick()
+    page.wait_for_function("window.rcSource && rcSource.clip === 'CLIP_A.MP4'", timeout=10000)
+    assert page.evaluate("rcSource.inPoint") == pytest.approx(1.0, abs=0.05)
+    assert not page.evaluate("player.playing")
+    page.evaluate("document.activeElement && document.activeElement.blur()")
+    blocks.nth(0).click()
+    page.keyboard.press("Space")
     page.wait_for_function("player.playing && player.idx === 0", timeout=10000)
     # shot A starts at 1.0 into its clip, not at the top of the proxy
     page.wait_for_function(
@@ -1353,8 +1369,9 @@ def test_the_seen_tab_offers_the_audit_priced_and_marks_a_one_look_find(page, pr
         assert priced["n"] == 1 and priced["usd"] > 0, priced
         assert button.inner_text() == \
             f"Check 1 claim · {cost_tag(priced['usd'], server.config.charges_money())}"
-        if not server.config.charges_money():     # the estimate is labelled as the API's
-            assert "estimated cost if using the API" in button.get_attribute("title")
+        if not server.config.charges_money():     # one wording on the plan: no figure beside "free" (wave 24 START)
+            assert button.get_attribute("title") == "free on your plan"
+            assert "$" not in button.get_attribute("title")
         rows = page.locator("#library .cand")
         assert "one look" in rows.nth(1).inner_text().lower()
 
@@ -1836,7 +1853,7 @@ def test_cut_from_the_bin_is_one_ask_with_the_fixed_note(page):
         page.keyboard.press("x")
         page.wait_for_selector("#tlEmpty .empty")
         assert not page.locator("#askPanel").is_visible()
-        assert page.locator(".empty button:not(.fp-empty-btn)").count() == 1
+        assert page.locator(".empty button:not(.fp-empty-btn):not(.fp-newfilm)").count() == 1   # (wave 24 START: "New film" is not an AI action)
         page.evaluate("rcFirstPass.state = () => ({ state: 'done' })")   # a pass has run
         page.wait_for_selector("#firstCut:visible", timeout=3000)
         assert_priced(page, "#firstCut", "Make the first cut from your 1 keep", "bin")
@@ -2381,9 +2398,12 @@ def test_the_board_words_a_price_by_whether_it_is_billed(page):
     ev = lambda fn, p: page.evaluate(f"([p]) => rcCost.{fn}(0.58, p)", [p])  # noqa: E731
     assert ev("tag", free) == "free on your plan"
     assert "$" not in ev("tag", free)
-    assert ev("note", free) == \
-        "free on your Claude plan — about $0.58 estimated cost if using the API"
-    assert ev("spent", free) == "~$0.58 if using the API · free on your plan"
+    # (wave 24 START, COLD-05 / COLD-07 / FINISH-23: one wording; the API-equivalent figure is
+    # `detail`, for a Details disclosure, and is still labelled as the API's)
+    assert ev("note", free) == "free on your plan"
+    assert ev("spent", free) == "free on your plan"
+    assert "$0.58" in ev("detail", free) and "API" in ev("detail", free)
+    assert ev("detail", billed) == "$0.58, billed to the API key"
     assert ev("tag", billed) == "~$0.58"
     assert ev("spent", billed) == "cost $0.58"
     # a response that does not say is never passed off as free

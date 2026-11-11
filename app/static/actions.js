@@ -101,6 +101,7 @@
                       ...Object.fromEntries(VIG_PROPS.map((k) => [k, k])) };
   const KEY_PROP = { posx: 'position_x', posy: 'position_y', scale: 'scale', rotation: 'rotation', opacity: 'opacity', volume_db: 'volume_db',
                      ...Object.fromEntries(VIG_PROPS.map((k) => [k, k])) };
+  const FRAME_NAME = { '16:9': 'Landscape 16:9', '9:16': 'Vertical 9:16', '1:1': 'Square 1:1' };
   const CUT_OPS = new Set(['insert', 'overwrite', 'append', 'move', 'razor', 'ripple_delete', 'trim', 'roll', 'slip', 'speed']);
   const LOOK_OPS = new Set(['set', 'keys', 'effect', 'curve', 'wheel', 'vignette', 'look', 'match']);   // shown on the Program
   const TX_OPS = new Set(['transition', 'fade']);                                // drawn on the timeline
@@ -108,12 +109,14 @@
     insert: 'timeline', overwrite: 'timeline', append: 'timeline', move: 'timeline', razor: 'timeline',
     ripple_delete: 'timeline', trim: 'timeline', roll: 'timeline', slip: 'timeline', speed: 'timeline',
     marker: 'timeline', in_out: 'timeline', track_add: 'timeline', overlay: 'timeline',
+    frame: 'timeline', new_cut: 'timeline',
     set: 'effect_controls', keys: 'effect_controls', effect: 'effect_controls',
     curve: 'lumetri', wheel: 'lumetri', vignette: 'lumetri', look: 'lumetri', match: 'lumetri',
     transition: 'transitions', fade: 'transitions', design_effect: 'designed_effects', export: 'export',
+    take_back: 'history',
   };
   const FAMILY_NAME = { timeline: 'Timeline', effect_controls: 'Effect Controls', lumetri: 'Lumetri Color',
-                        transitions: 'Transitions', designed_effects: 'Designed Effects', export: 'Export' };
+                        transitions: 'Transitions', designed_effects: 'Designed Effects', export: 'Export', history: 'Undo history' };
   // one glyph per family (14 px, currentColor), in the panels' own icon style
   const ICON = {
     timeline: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="4" width="6" height="3.5" rx=".6"/><rect x="8.5" y="4" width="6" height="3.5" rx=".6"/><rect x="1.5" y="9.5" width="13" height="3" rx=".6"/></svg>',
@@ -122,6 +125,7 @@
     transitions: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="4" width="7" height="8" rx=".8"/><rect x="7.5" y="4" width="7" height="8" rx=".8" opacity=".55"/><path d="M7.5 4l1 8"/></svg>',
     designed_effects: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M8 1.8l1.5 3.6 3.7 1.1-3.7 1.2L8 11.3 6.5 7.7 2.8 6.5l3.7-1.1z"/><path d="M12.5 11.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z"/></svg>',
     export: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 2v8M5 7l3 3 3-3"/><path d="M2.5 11v2.5h11V11"/></svg>',
+    history: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a5 5 0 1 0 1.6-3.7"/><path d="M3 2.5v3h3"/></svg>',
   };
 
   /* ------------------------------------------------------------ the cut's arithmetic */
@@ -296,6 +300,14 @@
         if (!fx.set(op.prop, Number(v), c.target(op.id).seg)) refuse(`key ${n + 1} was refused (is the track locked?)`);
       });
     },
+    // Sequence Settings › Frame (wave 25 VERTICAL): one undo entry
+    frame(op) {
+      const t = TL();
+      if (!t || typeof t.setFrame !== 'function') refuse('the frame is not available');
+      if (!t.setFrame(op.frame)) refuse(`the sequence is already ${op.frame}, or its track is locked`);
+    },
+    // a second deliverable is made by Accept (acceptIntoCopy), never through apply()
+    new_cut() { refuse('a new cut is saved when you accept the review'); },
     // a video effect (wave 14, VFX): the bin's drop, then its section's values (effects.js)
     effect(op, c) {
       if (!FX() || typeof FX().vfxOp !== 'function') refuse('video effects are not loaded');
@@ -386,6 +398,16 @@
     if (!t || typeof t.batch !== 'function') {
       return { applied: 0, refused: list.map((_, i) => ({ i, why: 'the timeline is not loaded' })), after: Promise.resolve([]) };
     }
+    const back = list.find((o) => o && o.op === 'take_back');
+    if (back) {                      // "put it back": one entry of its own, never inside a batch
+      if (typeof t.takeBack !== 'function') {
+        return { applied: 0, refused: [{ i: 0, why: 'this timeline cannot take changes back' }], after: Promise.resolve([]) };
+      }
+      const label = opts.label || labelFor([back]);
+      const r = t.takeBack(Number(back.n) || 1, label);
+      if (!r.ok) return { applied: 0, refused: [{ i: list.indexOf(back), why: r.why }], after: Promise.resolve([]) };
+      return { applied: 1, refused: [], after: Promise.resolve([]), label, committed: true, designs: 0 };
+    }
     const label = withDesigns(opts.label || labelFor(list), list);
     const ctx = makeCtx();
     const refused = [];
@@ -452,10 +474,12 @@
     trim: ['trim', 'trims'], roll: ['roll', 'rolls'], slip: ['slip', 'slips'], speed: ['speed', 'speed changes'],
     marker: ['marker', 'markers'], in_out: ['In/Out', 'In/Out'], track_add: ['new track', 'new tracks'],
     overlay: ['overlay', 'overlays'], keys: ['keyframes', 'keyframe sets'],
+    frame: ['frame shape', 'frame shapes'], new_cut: ['new cut', 'new cuts'],
     curve: ['colour change', 'colour changes'], wheel: ['colour change', 'colour changes'],
     look: ['colour change', 'colour changes'], match: ['colour change', 'colour changes'],
     transition: ['transition', 'transitions'], fade: ['fade', 'fades'],
     design_effect: ['effect', 'effects'], export: ['export', 'exports'],
+    take_back: ['change taken back', 'changes taken back'],
     effect: ['video effect', 'video effects'],
     vignette: ['vignette', 'vignettes'],
   };
@@ -575,6 +599,8 @@
       }
       case 'in_out': return `Sequence${'in' in op ? ` In ${op.in == null ? 'cleared' : tc(op.in)}` : ''}${'out' in op ? ` Out ${op.out == null ? 'cleared' : tc(op.out)}` : ''}`;
       case 'track_add': return `Add a ${op.kind} track`;
+      case 'frame': return `Sequence frame ${FRAME_NAME[op.frame] || op.frame}`;
+      case 'new_cut': return `A NEW cut “${op.name}”, a saved copy in ${FRAME_NAME[op.frame] || op.frame}: the edits below are made on the copy — the cut you are on stays as it is`;
       case 'overlay': return `${r(op)} on ${op.track || 'V2'} at ${tc(op.at)}`;
       case 'set': return `${Shot(op.id)}: ${op.prop} ${op.value}`;
       case 'keys': return `${Shot(op.id)}: ${op.prop} keyframes (${(op.keys || []).length})`;
@@ -1115,11 +1141,20 @@
     lookOff({ keepGrade: true });
     if (window.tlLanes && tlLanes.clearGhost) tlLanes.clearGhost();
     clearTx();
+    // A second deliverable (wave 25 VERTICAL, WORDS-22): the first op is a new cut — the
+    // switcher's "save a copy" first, then the rest of the ops on the copy
+    if (R.ops[idx[0]] && R.ops[idx[0]].op === 'new_cut') return acceptIntoCopy(idx);
     // the entry is named for what the ops are, never the model's summary cut to fit (the
     // summary stays the review's own line)
     const out = applyOps(idx.map((i) => R.ops[i]), { label: labelFor(idx.map((i) => R.ops[i])) });
+    return landed(idx, idx, out);
+  }
+
+  /* What an accept says and records once its ops have landed. `idx`: the accepted ops;
+   * `ran`: the ones applyOps was given (the same, bar a new cut's first). */
+  function landed(idx, ran, out) {
     const label = out.label || '';                 // with its design requests named (withDesigns)
-    const failed = new Set(out.refused.map((x) => idx[x.i]));
+    const failed = new Set(out.refused.map((x) => ran[x.i]));
     const took = idx.filter((i) => !failed.has(i));
     // the accepted look shows through the block it made until its save lands (then the
     // saved LUT, baked by the same function, takes over): no blink back to Before
@@ -1141,6 +1176,61 @@
     closeQuiet();
     app.toast(said, out.refused.length ? 6000 : d ? 5000 : 3000);
     return out;
+  }
+
+  /* The copy first — POST /api/cuts/copy (the cut on disk as it is: a review writes nothing),
+   * in the new frame — then the cut switcher opens it, which reloads the page; the rest of the
+   * ops wait in sessionStorage and are made on the copy, as one undo entry, once it is up
+   * (`afterCopy`). A copy that cannot be made leaves everything as it was and says why. */
+  const PENDING = 'rc.afterCopy';
+  async function acceptIntoCopy(idx) {
+    const cut = R.ops[idx[0]];
+    const ran = idx.slice(1);
+    let r = null;
+    try {
+      await app.flush();
+      const res = await fetch('/api/cuts/copy', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: cut.name, open: false, frame: cut.frame }) });
+      r = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(r.detail || `the copy failed (${res.status})`);
+    } catch (e) {
+      app.toast(`no new cut was made — ${e.message}; this cut is as it was`, 6000);
+      paint();
+      return null;
+    }
+    const ops = ran.map((i) => R.ops[i]);
+    try {
+      sessionStorage.setItem(PENDING, JSON.stringify({ ops, name: cut.name, frame: cut.frame,
+        label: ops.length ? labelFor(ops) : '' }));
+    } catch (e) { /* private window: the copy is made, the edits are the editor's to ask again */ }
+    answer(idx, R.ops.map((_, i) => i).filter((i) => !idx.includes(i)), { label: '', committed: false });
+    closeQuiet();
+    const sw = window.switcher;
+    if (sw && typeof sw.openCut === 'function') await sw.openCut(r.copy.path);
+    return { applied: idx.length, refused: [], after: Promise.resolve([]), copied: r.copy.name };
+  }
+
+  /* The page that opened the copy: the waiting ops, made on it. */
+  function afterCopy() {
+    let raw = null;
+    try { raw = sessionStorage.getItem(PENDING); sessionStorage.removeItem(PENDING); } catch (e) { return; }
+    if (!raw) return;
+    let job = null;
+    try { job = JSON.parse(raw); } catch (e) { return; }
+    const t = TL();
+    let tries = 0;
+    const go = () => {
+      const ready = t && app.segs().length && window.effects && (typeof P !== 'undefined' && P && P.cut === job.name);
+      if (!ready && tries++ < 100) { setTimeout(go, 150); return; }
+      let out = { refused: [], committed: false };
+      if (ready && job.ops.length) out = applyOps(job.ops, { label: job.label || labelFor(job.ops) });
+      const said = `saved “${job.name}” (${FRAME_NAME[job.frame] || job.frame}) and made the edits on it`
+        + (out.refused.length ? ` — ${named(out.refused[0].why)}` : '')
+        + (out.committed ? ` — ${app.undoKey()} undoes them` : '') + '; your other cut is as it was';
+      app.toast(said, 7000);
+    };
+    go();
   }
 
   /* Reject all sets the edits aside, undoably (wave 23 SAFE, CLUMSY-17): an entry on the undo stack
@@ -1204,6 +1294,7 @@
     const t = TL();
     if (!t || typeof t.on !== 'function') { setTimeout(init, 200); return; }
     t.on('change', () => recheckSoon());
+    afterCopy();
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
 

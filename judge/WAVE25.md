@@ -6,6 +6,8 @@ Same loop (`judge/WAVE23.md`, "Lane rules" bind). Lanes are added as the second 
 |---|---|---|
 | VERTICAL | WORDS-22 (sev 4: "make a 20 second vertical version for Instagram" offered to overwrite the main film with a shorter horizontal one), FINISH-14 (no 9:16 anywhere) | the sequence's frame shape end to end: where the cut stores it, Sequence Settings, the Program monitor's frame, the shot's reframe in Effect Controls, `research/tools/assemble.py`'s frame size and crop, the export dialog's sizes, `roughcut/fx.py`'s frame for titles, the prompt-box AI's way to make a second deliverable; new tests |
 | DIRECT2 | round 2 `words` (fixed 15, better 5, same 2 of 23; `judge/copper-editors/round2/words-*.{md,jsonl}`): WORDS-15, -19 (SAFE's part), -11, -06, -17, -08, -04, -02, -16, -07, -05, -03, -13, -14, -09 of round 2 | `roughcut/assist.py`, `roughcut/look.py`, `roughcut/actions.py` (ops only: VERTICAL adds its own op there), `app/server.py`: the assist endpoints, `app/static/aiprompt.js`; new tests |
+| MATCH | FINISH-19 in both rounds: the exported file is 2-5 levels darker in red (and 1-3 in green and blue) than the Program monitor on every frame, frames aligned | the colour path only: how the monitor's graded canvas (`app/static/grade.js` shaders, the proxy's range and matrix) and the export (`research/tools/assemble.py`, `roughcut/colour.py`) turn the same source pixel into a displayed one; a measuring test; no change to how frames are scheduled |
+| MUSIC | FINISH-14 and WORDS-11 of round 2: no level for the music bed anywhere, the AI "can't find a music bed" and cannot place or duck one; FINISH-11, -15 | the Audio tab's music bed (level, under-speech ducking, in and out), `roughcut/effects.py` `add_music`, one prompt-box operation for music in `roughcut/actions.py` / `roughcut/assist.py` (ops table only), the export's download name and time-left; new tests |
 
 ## What done looks like
 
@@ -55,4 +57,29 @@ shows the editor's words, not "⟦the plan⟧" markup, and lists prompt-box prop
 hand" is not said of a cut nobody touched (WORDS-09). Music by words (WORDS-11) and a second deliverable as a new cut
 (WORDS-18) are other lanes (MUSICOP, VERTICAL): do not build them. Tests with the fake backend; up to 30 live calls
 on the plan to replay the director's failing turns from `judge/copper-editors/round2/words-journal.md`.
+
+**MATCH.** What the editor grades is what ships. Measure first: on the suite's fixture and on three Copper frames
+(a snow shot, a night interior, a graded shot), the Program monitor's canvas pixels against the exported file's
+frame at the same timecode, per channel, ungraded and graded, in the gate's browser. Find the cause of the constant
+offset the finishing editor measured twice (monitor [153,167,180] against file [149,164,179]): candidates are the
+full-range (`yuvj420p`) GoPro source going through a limited-range proxy or export, a 601 / 709 matrix mismatch
+between the browser's video decode and ffmpeg's conversion, the grade's LUT being applied in a different space in
+the shader and in the export, or rounding in the proxy. Fix it where it is wrong (the file is the truth a viewer
+sees; the monitor must predict it), without changing an existing export's pixels unless they were the wrong ones
+(say which side moved and why). Done: mean absolute difference at most 1 level per channel on those frames, graded
+and ungraded, pinned by a test that renders a real export of the fixture and compares it with the canvas; the
+existing colour, lumetri and export tests still pass; playback timing tests untouched.
+
+**MUSIC.** A bed the editor can set, by hand and by words. (a) The Audio tab's music bed has a level (dB, with a
+sensible default under speech), "lower under talking" on or off with its depth, and fade in and out; a change is
+heard in the Program (meters move accordingly) and is in the export; one undo each. (b) The prompt-box AI has one
+music operation: choose a track from what the project has (lane DELIVER's "Add music…" tracks and the repo's), set
+its level, ducking and fades, or remove it; "add music that fits and keep it under the talking" proposes it like any
+edit, and when the project has no track it says so and points at Add music… (WORDS-11: "even an imported song is
+something the AI can't place or duck"). The cut-writer and the prompt-box AI can both see whether a bed is set
+(FINISH-14: "I can't find a music bed in this cut"). (c) Download saves under the name the editor gave the export
+(FINISH-11), and the 4K time-left does not jump around (FINISH-15: 11 → 16 → 5 → 11 min, finished at "~8 min
+left"): smooth it and never show less than what the measured rate implies. Loudness: after the bed is mixed the
+export still passes the -1 dBTP limiter; state the integrated loudness of the finished file in the export's done
+screen. Tests on the fixture; up to ten live calls on the plan for (b).
 
