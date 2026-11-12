@@ -15,6 +15,7 @@ same commit. Releases move entries into a dated version section.
 - Wave 24 GATEFIX, twelve tests the merged lanes broke: the Program's catch-up after an edit no longer collapses the editor's selection to the shot under the playhead (a split's two halves stay selected, an inserted shot stays the selection; `tl.cueQuiet`); a click on a ghost shot keeps the monitor's "proposal · …" line; Next's "Refine" chip is shown again over a cut (the first-cut hide is for the "Cut" offer only); a quiet board writes no undo history (nothing to take back, nothing sent). Tests: the Index panel keeps >= 8 rows at 1440x900 with the clip's found block (10 at 1080), the chip walk holds no cut, two reads made race-free, and the AI scope chip test hands the chip back to the selection ("Follow my selection again") after asking about a clip, as wave 23 DIRECT made a chosen scope stay.
 
 ### Fixed
+Docs: judge/LOOP.md State for waves 27 and 28.
 Tests: the partial-accept test reads the new accept message ("Accepted 2 of 5 shots").
 Selects: one click on a row shows its clip in the Source monitor, parked on its In with its In and Out set; up / down move through the rows and the Source follows; Space plays and pauses it there; Enter and a double-click play it from the In (Enter no longer adds: the row's + add and , do)
 - Wave 28 PROPOSE: test_timeline_speed reads a new ghost's class with its wave-28 change mark (`ghost added grew`).

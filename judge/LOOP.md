@@ -815,3 +815,18 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
   (`f4b6f41`, whose own self-score was 9/8/8/7/8/8/8/7 against the old 8-dimension goal). Karl's K1
   (re-run the first pass) and K2 (Premiere quality, maybe a full redesign) recorded. Verdict 1 next:
   the baseline, expected FAIL with low B and C scores.
+
+- **2026-11-11 ~22:50 (wave 27 + 28, Karl back).** Wave 27: GRAIN (`ef24154`: the look's interval is the editor's
+  choice, 4 s down to 0.1 s) and LOOKOP (`0f25f8b`: AI op `relook`). Full gate on `ef24154` RED on three
+  playback-timing tests only; two fail the same way on the frozen `e0c0501` copy, so the machine that night, not the
+  code; not root-caused; no full gate has run since. Wave 28 from Karl's own session on Copper (his words in the
+  session: Ask / Accept "none of it worked really well", "never cut off audio... let people complete their sentences
+  and wait for the reaction", Selects cannot be previewed without a right-click): PEEK (`141b464`: a click on a
+  Selects row shows it in the Source; Enter now plays instead of adding, Karl may want it back), PROPOSE
+  (`ebb710a`: a waiting proposal plays in the Program, says what it changes, joined shots are amber not red strikes,
+  Accept / Discard take the lane down at once; his frozen-after-Accept board was NOT reproduced, two ways it can
+  freeze were closed), SENTENCE (`70bac6a`: `roughcut/sentences.py`, polish moves cut points to sentence edges plus
+  the reply, the length is an aim, `research/tools/speech_cuts.py` counts clipped lines: before cut 5, his accepted
+  cut 0, a fresh re-run 0 at 2:16). Quick gate GREEN on `70bac6a`; 8766 restarted on it, open on Copper. Open: the
+  header's "Next: Make the film" and Selects' "none kept yet" read wrong after an accept; no way to play the old cut
+  while a proposal waits; laughs the recogniser did not write down are invisible to the rule.
