@@ -25,6 +25,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from roughcut import boundaries, config, firstpass, flow, inference, revise  # noqa: E402
+from roughcut import sentences as sentences_mod  # noqa: E402
 
 from test_index import _stub_tools  # noqa: E402
 from test_server import _fresh  # noqa: E402
@@ -102,10 +103,19 @@ def test_polish_leaves_a_verbatim_shot_alone(project):
                             "transcript": side["transcript"]}}
     seg = {"id": "gA", "clip": "CLIP_A.MP4", "in": 1.0, "out": 3.0, "why": "x"}
     assert boundaries.polish([seg], clips)[0]["out"] != 3.0, "the fixture must bite"
+    # the editor's own shot (hand) echoed back: nothing moves it, not even the line rule
     plan = revise.polish_kept_alone({"segments": [dict(seg)], "notes": "kept"}, clips,
-                                    [dict(seg)])
+                                    [dict(seg)], hand={"gA"})
     assert (plan["segments"][0]["in"], plan["segments"][0]["out"]) == (1.0, 3.0)
     assert plan["notes"] == "kept"
+    # an AI shot echoed back keeps its word-level points, but a line it cuts is finished
+    # (Karl 2026-11-11: never cut off audio, in general) — and said
+    ai = revise.polish_kept_alone({"segments": [dict(seg)], "notes": "kept"}, clips,
+                                  [dict(seg)])
+    got = ai["segments"][0]
+    assert got["in"] < 1.0 and got["out"] > 3.0
+    assert sentences_mod.is_line_fix(got["polish_why"]) and "word" not in got["polish_why"]
+    assert "no line is cut off" in ai["notes"] and ai["lines_added_s"] > 0
     # a new range is still polished, and said
     moved = revise.polish_kept_alone({"segments": [dict(seg)], "notes": ""}, clips, [])
     assert moved["segments"][0]["out"] != 3.0 and "Boundary polish" in moved["notes"]
@@ -304,7 +314,22 @@ def model():
 
 
 @pytest.fixture
-def fp(tmp_path, project, monkeypatch, model):
+def fp(fp_lines, monkeypatch):
+    """`fp_lines` with the line rule (roughcut/sentences.py) switched off. The suite's
+    fake transcript is one quick run-on exchange ("hello there how are you" answered by
+    "goodbye" a second later), so the rule grows every shot these provenance tests use
+    to the end of its clip and re-keys their ids; what they test is the locks, the
+    bases and the diff. The rule's own tests are test_sentences.py, and its path
+    through the server is `test_a_rerun_finishes_every_line_but_the_locked_one`."""
+    monkeypatch.setattr(
+        sentences_mod, "complete_lines",
+        lambda segs, clips, **kw: ([dict(x, _src=i) if kw.get("keep_src") else dict(x)
+                                    for i, x in enumerate(segs)], []))
+    yield fp_lines
+
+
+@pytest.fixture
+def fp_lines(tmp_path, project, monkeypatch, model):
     """A fresh bin (no cut yet) over the suite's footage and sidecars, the index's
     tools stubbed, every write under tmp_path."""
     import server
@@ -1069,3 +1094,36 @@ def test_an_echo_in_hundredths_snaps_back_to_the_cut():
     moved = revise.to_sequence({"segments": [dict(echo, out=10.19)]}, cur, 59.94)["segments"]
     assert moved[0]["in"] == 1.4014 or _on_grid(moved[0]["in"], 60000 / 1001)
     assert moved[0]["out"] != 10.2102 and _on_grid(moved[0]["out"], 60000 / 1001)
+
+
+def test_a_rerun_finishes_every_line_but_the_locked_one(fp_lines, model):
+    """The line rule through the server (Karl 2026-11-11: never cut off audio): a re-run's
+    proposal cuts no line — except inside the editor's locked shot, which comes back
+    exactly as the editor left it — and its notes say so."""
+    fp = fp_lines
+    import server
+
+    fp.post("/api/firstpass", json={"mode": "run"})
+    s = _wait(fp)
+    assert s["state"] == "done", s
+    plan = _plan(fp, s["proposal"]["job"])
+    clips, _ = server._ask_clips(None)
+    assert sentences_mod.measure(plan["segments"], clips)["clipped"] == 0
+    _wait_indexes(server)
+    fp.put("/api/project", json={"segments": plan["segments"], "story": ""})
+    fp.post("/api/asks/answer", json={"answer": "accept"})
+    segs = _segs(fp)
+    # a hand trim that cuts into the line: the editor's, so it stays
+    trimmed = dict(segs[0], out=1.6)
+    fp.put("/api/project", json={"segments": [trimmed, segs[1]], "story": ""})
+    fp.post("/api/firstpass", json={"mode": "rerun"})
+    s = _wait(fp)
+    assert s["state"] == "done", s
+    plan = _plan(fp, s["proposal"]["job"])
+    kept = [x for x in plan["segments"] if x.get("id") == trimmed["id"]]
+    assert [(k["in"], k["out"]) for k in kept] == [(trimmed["in"], trimmed["out"])]
+    others = [x for x in plan["segments"] if x.get("id") != trimmed["id"]]
+    m = sentences_mod.measure(others, clips)
+    assert m["clipped"] == 0, m["problems"]
+    assert any(sentences_mod.is_line_fix(x.get("polish_why", "")) for x in others)
+    assert "no line is cut off" in plan["notes"]

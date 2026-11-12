@@ -33,6 +33,7 @@ import re
 from typing import Any, Callable
 
 from . import actions, config
+from . import sentences as sentencesmod
 from . import look as lookmod
 from . import tracks as tracksmod
 from .firstpass import clip_name, cost_words
@@ -761,6 +762,11 @@ Export presets: {presets}
 - slow motion → speed 0.5 (0.25 for very slow); faster → speed 1.5 to 2.
 - tighten or shorten → trim the in or out (clip seconds, inside the clip); cut at a moment →
   razor; take out → ripple_delete; swap or reorder → move.
+- never cut off a line: an in or out on a shot with speech goes at a sentence edge (the word
+  timings above), after the line and the reaction to it (the laugh, the reply). A length asked
+  for is an aim: to land near it, drop a whole shot or run a little long and say so, never
+  trim into a sentence. Only when the editor's words say a hard cut mid-line is fine, add
+  `"tight": true` to that op.
 - a dissolve between two shots → transition cross_dissolve (audio_crossfade for the sound);
   fade in / out → fade with dip_to_black at the start / end.
 - a vignette (darker or lighter edges or corners, "draw the eye to the middle") → vignette,
@@ -788,8 +794,8 @@ Export presets: {presets}
   "for" a place → a SECOND DELIVERABLE: the first op is `new_cut` (a saved copy, named from the
   ask, `frame` "9:16" for vertical and "1:1" for square), the ops after it shorten and shape the
   copy (ripple_delete and trim to the length asked; keep the opening and the best moments; the
-  copy's length is the sum of the kept shots' lengths in the table, so count it and land within
-  a second of the ask). The cut the editor is on is NEVER shortened or reshaped for these, and
+  copy's length is the sum of the kept shots' lengths in the table, so count it and land near
+  the ask — over it rather than inside a line, and say so). The cut the editor is on is NEVER shortened or reshaped for these, and
   the `summary` begins "A new cut, <name>:" and says that the cut they are on stays as it is.
   Only to change THIS cut's own shape ("make this sequence vertical") is the `frame` op used.
 
@@ -977,7 +983,9 @@ def run(text: str, scope: dict | None, state: dict, clips: dict,
     if len(calls) > 1:
         cost["calls"] = len(calls)
     out: dict = {"kind": got["kind"], "summary": got.get("summary") or "", "cost": cost}
+    fixed_lines: list[str] = []
     if got["kind"] == "ops":
+        got["ops"], fixed_lines = finish_op_lines(got["ops"], state, clips)
         checked = actions.check(got["ops"], state)
         out.update(checked)
         if not out["summary"]:
@@ -993,6 +1001,13 @@ def run(text: str, scope: dict | None, state: dict, clips: dict,
         out["text"] = got["text"]
     if out["kind"] == "ops" and out.get("ops"):
         out = honest_summary(out, text, bool(got.get("from_picture")), looked)
+        if fixed_lines:
+            out["line_fixes"] = fixed_lines
+            n = len(fixed_lines)
+            said = out["summary"].rstrip()
+            said = said if not said or said.endswith((".", "!", "?")) else said + "."
+            out["summary"] = (f"{said} {n} cut point{'s' if n != 1 else ''} moved so no line "
+                              "is cut off mid-sentence.").strip()
     if looked:
         out["looked"] = looked
         if out["kind"] == "answer" and "looked" not in out["text"][:80].lower():
@@ -1001,3 +1016,56 @@ def run(text: str, scope: dict | None, state: dict, clips: dict,
             looked["saw"] = name_shots(looked["saw"], state.get("segments") or [])
     # the editor's words name shots as the editor does, whatever the model wrote
     return _named(out, state.get("segments") or [])
+
+
+# ---------------------------------------------------------------- never cut off a line
+
+# Karl, 2026-11-11: "never cut off audio … let people complete their sentences and wait for
+# the reaction" — in general, so for the prompt box's edits too, a vertical or a short copy
+# included. The ops that set a clip range on the cut's sound: their in and out are moved to
+# sentence edges (`sentences.complete_segment`) before they are checked. An op the model
+# marked `"tight": true` (the editor said a hard cut mid-line is fine) is left as it is.
+RANGE_OPS = ("insert", "overwrite", "append")
+
+
+def finish_op_lines(ops: Any, state: dict, clips: dict) -> tuple[Any, list[str]]:
+    """`(ops, lines)`: the ops with every clip range that cuts into a line moved to the
+    line's edges, and one plain line per op moved. Ops it cannot read pass through."""
+    if not isinstance(ops, list):
+        return ops, []
+    by_id = {s.get("id"): s for s in state.get("segments") or [] if isinstance(s, dict)}
+    out, lines = [], []
+    for op in ops:
+        if not isinstance(op, dict):
+            out.append(op)
+            continue
+        op = dict(op)
+        if op.pop("tight", None) is True:
+            out.append(op)
+            continue
+        kind = op.get("op")
+        try:
+            if kind in RANGE_OPS and op.get("clip") in clips:
+                seg = {"in": float(op["in"]), "out": float(op["out"])}
+                new, why = sentencesmod.complete_segment(seg, clips[op["clip"]])
+                if why:
+                    op["in"], op["out"] = new["in"], new["out"]
+                    lines.append(f"{kind} {clip_name(op['clip'])}: {'; '.join(why)}")
+            elif kind == "trim" and op.get("id") in by_id:
+                cur = by_id[op["id"]]
+                if cur.get("clip") in clips and (op.get("in") is not None or op.get("out") is not None):
+                    seg = {"in": float(cur["in"] if op.get("in") is None else op["in"]),
+                           "out": float(cur["out"] if op.get("out") is None else op["out"])}
+                    new, why = sentencesmod.complete_segment(
+                        seg, clips[cur["clip"]], check_in=op.get("in") is not None,
+                        check_out=op.get("out") is not None)
+                    if why:
+                        if op.get("in") is not None:
+                            op["in"] = new["in"]
+                        if op.get("out") is not None:
+                            op["out"] = new["out"]
+                        lines.append(f"trim {clip_name(cur['clip'])}: {'; '.join(why)}")
+        except (KeyError, TypeError, ValueError):
+            pass
+        out.append(op)
+    return out, lines

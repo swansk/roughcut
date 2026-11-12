@@ -36,11 +36,22 @@ Two shots are left exactly alone, on purpose:
     is black, blurred or pointed at a glove, and trading a clipped word for four
     unwatchable frames is not a trade.
 
+Since 2026-11-11 polish runs the LINE rule first (`roughcut/sentences.py`, Karl: *"never
+cut off audio … let people complete their sentences and wait for the reaction"*): a
+shot with speech is grown — by up to `sentences.MAX_GROW_S` a side, not 1.2 s — to the
+start of its first sentence and past the end of its last one and the quick reply to
+it, and two shots of one clip that then overlap are joined. That is a deliberate
+reversal of "never reach for a line the model did not choose" for the one case Karl
+named: a line the model cut into. It still never adds a line the shot did not touch,
+beyond the short reaction.
+
 Pure: it reads a plan and the analysed clips and returns a new plan. Nothing on
 disk is touched — least of all the EDL, which is Karl's cut.
 """
 
 from __future__ import annotations
+
+from . import sentences  # the line rule (Karl 2026-11-11) runs before the word polish
 
 # Padding. PAD_TAIL/PAD_HEAD are edl_snap.py's numbers, kept identical so the two
 # paths in the app cannot disagree about where a line ends — and now with a
@@ -200,35 +211,89 @@ def polish_segment(seg: dict, clip: dict, floor: float = 0.0,
     return out, out["polish_why"]
 
 
-def polish(segments: list[dict], clips: dict[str, dict]) -> list[dict]:
-    """Polish every shot in a plan. Pure — the input list is not mutated."""
+def polish(segments: list[dict], clips: dict[str, dict], *,
+           keep: set[str] | None = None,
+           echoed: set[int] | None = None,
+           fixed: list[dict] | None = None) -> list[dict]:
+    """Polish every shot in a plan. Pure — the input list is not mutated.
+
+    First every line is finished (`sentences.complete_lines`, Karl's standing rule: a
+    shot with speech starts on a sentence and ends after it and its reaction, and two
+    shots of one clip that now overlap become one); then each shot's words are polished
+    as before. `keep`: ids of the editor's own shots — never moved, nothing grows into
+    them. A shot marked `tight` (the ask said mid-line is fine there) is left as it is
+    too. `echoed`: indices of shots the model copied verbatim from the cut — they get
+    the line rule but not the word polish (the 1.34 s "unchanged" shot). `fixed`: ranges
+    of shots that will be in the cut whatever the plan says (a re-run's locks): no shot
+    grows into them."""
+    keep = set(keep or ())
+    echoed = set(echoed or ())
+    lined, _ = sentences.complete_lines(
+        segments, clips, keep=keep, keep_src=True, fixed=fixed,
+        unusable_of=lambda clip: _unusable_spans(clip.get("visual")))
     out: list[dict] = []
-    for i, seg in enumerate(segments):
+    for i, seg in enumerate(lined):
+        src_i = seg.pop("_src", i)
+        line_why = seg.pop("sentence_why", "")
+        src = segments[src_i]
         clip = clips.get(seg.get("clip"))
-        if not clip:
-            out.append(dict(seg))
+        frozen = bool(seg.get("tight")) or (seg.get("id") is not None and seg.get("id") in keep)
+        if not clip or frozen:
+            out.append(dict(src) if frozen else seg)
             continue
-        # Room to grow: the nearest boundary of another shot cut from this clip.
-        same = [s for j, s in enumerate(segments)
-                if j != i and s.get("clip") == seg["clip"]]
-        floor = max((float(s["out"]) for s in same
-                     if float(s["out"]) <= float(seg["in"]) + 0.01), default=0.0)
-        ceiling = min((float(s["in"]) for s in same
-                       if float(s["in"]) >= float(seg["out"]) - 0.01), default=None)
-        polished, _ = polish_segment(seg, clip, floor=floor, ceiling=ceiling)
-        out.append(polished)
+        reasons = [line_why] if line_why else []
+        if src_i not in echoed:
+            # Room to grow: the nearest boundary of another shot cut from this clip.
+            # (shots already polished at their new range, so two never overlap)
+            same = [s for j, s in enumerate(out + lined[i:]) if j != i
+                    and s.get("clip") == seg["clip"]]
+            floor = max((float(s["out"]) for s in same
+                         if float(s["out"]) <= float(seg["in"]) + 0.01), default=0.0)
+            ceiling = min((float(s["in"]) for s in same
+                           if float(s["in"]) >= float(seg["out"]) - 0.01), default=None)
+            polished, why = polish_segment(seg, clip, floor=floor, ceiling=ceiling)
+            # finishing a word must never start a sentence it cannot finish (a word polish
+            # that reaches into the next line's first word cuts that line off)
+            if why and not _cuts_more_lines(seg, polished, clip):
+                seg = polished
+                reasons.append(why)
+        seg = dict(seg)
+        seg.pop("polished_from", None)
+        seg.pop("polish_why", None)
+        o_in, o_out = round(float(src["in"]), 2), round(float(src["out"]), 2)
+        if reasons and (round(float(seg["in"]), 2), round(float(seg["out"]), 2)) != (o_in, o_out):
+            seg["in"], seg["out"] = round(float(seg["in"]), 2), round(float(seg["out"]), 2)
+            seg["polished_from"] = [o_in, o_out]
+            seg["polish_why"] = "; ".join(reasons)
+        else:
+            seg = dict(src)
+        out.append(seg)
     return out
+
+
+def _cuts_more_lines(old: dict, new: dict, clip: dict) -> bool:
+    sents = sentences.sentences(clip.get("transcript") or [])
+
+    def cut(s: dict) -> int:
+        return sum(1 for p in sentences.shot_problems(float(s["in"]), float(s["out"]), sents)
+                   if p["kind"] in ("mid_in", "mid_out"))
+    return cut(new) > cut(old)
 
 
 def summarise(before: list[dict], after: list[dict]) -> str:
     """One line for the plan's notes, so the change is declared rather than felt."""
     changed = [s for s in after if s.get("polished_from")]
-    if not changed:
+    if not changed and len(after) == len(before):
         return ""
+    lines = sum(1 for s in changed if sentences.is_line_fix(s.get("polish_why", "")))
+    joined = sum(1 for s in changed if "joined" in s.get("polish_why", ""))
     finished = sum(1 for s in changed if "to finish" in s.get("polish_why", ""))
     trimmed = sum(1 for s in changed if "dead air" in s.get("polish_why", ""))
     opened = sum(1 for s in changed if "to the start of" in s.get("polish_why", ""))
     bits = []
+    if lines:
+        bits.append(f"{lines} lengthened so no line is cut off mid-sentence or before its reply"
+                    + (f", {joined} of them joined with the next shot of the same clip" if joined else ""))
     if finished:
         bits.append(f"{finished} finished a word the cut ran through")
     if trimmed:
@@ -241,14 +306,37 @@ def summarise(before: list[dict], after: list[dict]) -> str:
             f"({', '.join(bits)}); {b:.1f}s → {a:.1f}s.")
 
 
-def polish_plan(plan: dict, clips: dict[str, dict]) -> dict:
+def polish_plan(plan: dict, clips: dict[str, dict], *, keep: set[str] | None = None) -> dict:
     """Apply polish to a validated plan and declare it in the plan's notes."""
     before = plan.get("segments") or []
-    after = polish(before, clips)
+    after = polish(before, clips, keep=keep)
     line = summarise(before, after)
     out = dict(plan)
     out["segments"] = after
     if line:
         notes = (plan.get("notes") or "").strip()
         out["notes"] = f"{notes}\n\n{line}".strip() if notes else line
+    return out
+
+
+def finish_lines(segments: list[dict], clips: dict[str, dict], *,
+                 keep: set[str] | None = None) -> list[dict]:
+    """The line rule alone, again, on a plan a later step has moved (the first pass's
+    check widens shots to hold a retimed moment; the locks put shots back): every line
+    finished, overlapping shots of one clip joined, each change appended to the shot's
+    `polish_why`. `keep`: ids never touched. Idempotent on a plan already finished."""
+    lined, _ = sentences.complete_lines(
+        segments, clips, keep=keep, keep_src=True,
+        unusable_of=lambda clip: _unusable_spans(clip.get("visual")))
+    out = []
+    for i, seg in enumerate(lined):
+        src = segments[seg.pop("_src", i)]
+        why = seg.pop("sentence_why", "")
+        if not why:
+            out.append(dict(src))
+            continue
+        seg = dict(seg)
+        seg.setdefault("polished_from", [round(float(src["in"]), 2), round(float(src["out"]), 2)])
+        seg["polish_why"] = "; ".join(x for x in (src.get("polish_why"), why) if x)
+        out.append(seg)
     return out
