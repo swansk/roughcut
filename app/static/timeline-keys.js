@@ -264,10 +264,16 @@
     const pp = window.rcProposalPlayer;
     return !segs().length && pp && pp.ready() ? pp : null;
   }
+  /* (wave 28 PROPOSE) The transport keys (Space, L, K) play a waiting proposal on any sequence,
+   * as the Program's ▶ Play does: while it waits, the Program is the proposal's. */
+  function proposalWaits() {
+    const pp = window.rcProposalPlayer;
+    return pp && pp.ready() ? pp : null;
+  }
 
   function shuttleKey(k, e) {
     if (e.repeat) return true;                         // holding a key is not pressing it again
-    const pp = proposalOnly();
+    const pp = proposalWaits();
     if (pp) {
       if (k === 'k') pp.pause();
       else if (k === 'l') { if (!pp.playing()) pp.play(); }
@@ -1129,7 +1135,7 @@
         case '?': handled = showMap(); break;
         case ' ': {                                        // space is app.js's: play at 1×
           // … or the proposal, on an empty sequence — not on a focused ✓ / ✗, whose space is its own
-          const pp = t && t.closest && t.closest('[role=checkbox]') ? null : proposalOnly();
+          const pp = t && t.closest && t.closest('[role=checkbox]') ? null : proposalWaits();
           if (pp && !e.repeat) { pp.toggle(); handled = true; } else if (pp) handled = true; else settle();
           break;
         }
