@@ -195,7 +195,7 @@ def test_accepting_2_of_5_proposed_shots_puts_exactly_those_2_on_v1_in_one_undo(
         assert _ranges(pg) == [["CLIP_A.MP4", 0.5, 2.0], ["CLIP_C.MP4", 1.0, 3.0]]
         assert pg.locator("#tl .blk").count() == 2
         assert pg.evaluate(f"document.querySelector('{GHOST}').hidden") is True
-        _toast(pg, "applied 2 of 5 shots")
+        _toast(pg, "Accepted 2 of 5 shots")
         _wait_saved(pg)
         assert _on_disk(project) == [["CLIP_A.MP4", 0.5, 2.0], ["CLIP_C.MP4", 1.0, 3.0]]
         _shot(pg, "02-accepted-2")
