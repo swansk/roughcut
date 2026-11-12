@@ -359,7 +359,7 @@ def test_selects_is_a_sortable_list_whose_rows_insert_by_comma_and_overwrite_by_
         pg.keyboard.press(",")
         assert _ranges(pg) == [["CLIP_A.MP4", 1.0, 3.0], ["CLIP_C.MP4", 0.5, 2.0],
                                ["CLIP_B.MP4", 0.0, 2.0]]
-        _toast(pg, "from the bin")
+        _toast(pg, "from the Source monitor")
         # `.` overwrites from the playhead with the selected row's range
         _row(pg, "CLIP_B").click()
         pg.evaluate("document.activeElement && document.activeElement.blur()")

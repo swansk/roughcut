@@ -382,7 +382,7 @@ def test_adding_from_the_bin_lands_at_the_playhead(page):
     card = page.locator('#library .keep[title*="the goodbye"]')
     card.click()                                       # select
     assert "sel" in card.get_attribute("class")
-    page.keyboard.press("Enter")                       # add it at the playhead
+    card.locator("button.add").click()                 # add it at the nearest cut (Enter plays it now: wave 28)
     assert shots(page)[-1] == ["CLIP_A.MP4", 4.0, 5.5]
     assert page.evaluate("segs.length") == 4
     # one undo each
@@ -399,23 +399,69 @@ def test_adding_from_the_bin_lands_at_the_playhead(page):
     assert shots(page)[1] == ["CLIP_A.MP4", 1.0, 3.0]
 
 
-def test_space_on_a_selected_keep_plays_it_in_the_bin_not_the_monitor(page):
+def _src(page) -> dict:
+    return page.evaluate("""() => ({clip: rcSource.clip, inP: rcSource.inPoint, out: rcSource.outPoint,
+        paused: dock.source.v.paused, t: dock.source.v.currentTime,
+        sel: [...tl.state.sel], playhead: tl.state.playhead, segs: segs.length,
+        prog: player.playing})""")
+
+
+def test_one_click_on_a_keep_shows_it_in_the_source_parked_on_its_in(page):
+    """Karl, 2026-11-11: you could not preview a Selects row without the right-click menu.
+    One click: the Source monitor shows the clip, its In and Out the row's, paused on the In;
+    the cut, the timeline's selection and the playhead stay as they were (wave 28 PEEK)."""
     _with_bin(page)
+    before = _src(page)
     card = page.locator('#library .keep[title^="CLIP_C"]')
     card.click()
+    page.wait_for_function("rcSource.clip === 'CLIP_C.MP4'", timeout=5000)
+    now = _src(page)
+    assert (now["inP"], now["out"]) == (0.5, 2.0)
+    assert now["paused"] is True
+    for k in ("sel", "playhead", "segs", "prog"):
+        assert now[k] == before[k], k
+    assert shots(page) == [["CLIP_A.MP4", 1.0, 3.0], ["CLIP_B.MP4", 0.0, 2.0]]
+    assert "CLIP_C" in page.inner_text("#srcTitle")
+    # `,` takes what is on screen: the same range
+    page.keyboard.press(",")
+    assert ["CLIP_C.MP4", 0.5, 2.0] in shots(page)
+
+
+def test_space_plays_the_selected_keep_in_the_source_and_again_pauses_it(page):
+    _with_bin(page)
+    page.locator('#library .keep[title^="CLIP_C"]').click()
+    page.wait_for_function("rcSource.clip === 'CLIP_C.MP4'", timeout=5000)
+    page.keyboard.press(" ")
+    page.wait_for_function("!dock.source.v.paused", timeout=5000)
+    page.wait_for_function("dock.source.v.currentTime > 0.5", timeout=5000)
+    assert _src(page)["prog"] is False                   # the cut did not start
     assert not page.locator("#findPlayer").is_visible()
     page.keyboard.press(" ")
-    assert page.locator("#findPlayer").is_visible()
-    src = page.get_attribute("#findVideo", "src") or ""
-    assert "CLIP_C" in src and "#t=0.50" in src, src
-    assert page.evaluate("player.playing") is False      # the cut did not start
-    assert "a crash" in page.locator("#findWhat").inner_text()
-    # double-click opens the pick in the Source monitor, its In and Out set (verdict 3,
-    # punch 7 — Premiere's double-click on a subclip; test_picks_editor drives it)
-    page.evaluate("document.querySelector('#findPlayer').style.display = 'none'")
-    card.dblclick()
-    page.wait_for_function("window.rcSource && rcSource.clip === 'CLIP_C.MP4'", timeout=5000)
-    assert page.evaluate("[rcSource.inPoint, rcSource.outPoint]") == [0.5, 2.0]
+    assert _src(page)["paused"] is True
+
+
+def test_enter_and_double_click_play_a_keep_from_its_in_and_arrows_move_the_source(page):
+    _with_bin(page)
+    rows = page.locator("#library tr.keep")
+    first = rows.nth(0)
+    first.click()
+    page.wait_for_function("rcSource.clip && !!rcSource.clip", timeout=5000)
+    before = _src(page)
+    page.keyboard.press("ArrowDown")                     # the Source follows the row
+    page.wait_for_function(f"rcSource.clip !== {json.dumps(before['clip'])}", timeout=5000)
+    mid = _src(page)
+    assert mid["paused"] is True and mid["sel"] == before["sel"] and mid["playhead"] == before["playhead"]
+    assert page.locator("#library tr.keep.sel").count() == 1
+    page.keyboard.press("Enter")                         # plays from the In, does not add
+    page.wait_for_function("!dock.source.v.paused", timeout=5000)
+    assert _src(page)["segs"] == 2 and _src(page)["t"] >= mid["inP"]
+    page.keyboard.press("ArrowUp")                       # back; the playing stops
+    page.wait_for_function(f"rcSource.clip === {json.dumps(before['clip'])}", timeout=5000)
+    assert _src(page)["paused"] is True
+    page.evaluate("document.querySelector('#findPlayer') && (document.querySelector('#findPlayer').style.display = 'none')")
+    rows.nth(1).dblclick()
+    page.wait_for_function("!dock.source.v.paused", timeout=5000)
+    assert _src(page)["segs"] == 2 and _src(page)["sel"] == before["sel"]
 
 
 # ---------------------------------------------------------------- keys and project

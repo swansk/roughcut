@@ -199,7 +199,7 @@ def test_comma_takes_the_bins_selected_clip_without_a_source_monitor(page):
     page.keyboard.press(",")
     assert ranges(page) == [["CLIP_A.MP4", 1.0, 3.0], ["CLIP_C.MP4", 0.5, 2.0],
                             ["CLIP_B.MP4", 0.0, 2.0]]
-    toast(page, "from the bin")
+    toast(page, "from the Source monitor")
 
 
 # ------------------------------------------------------------------ edge nudges
