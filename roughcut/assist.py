@@ -709,6 +709,28 @@ the offset into it). You cannot look again.
 """
 
 
+def index_block(state: dict) -> str:
+    """What the index looked at, per clip, and the stops a closer look can use: the answer to
+    "what detail did you look at?" and the ground of the `relook` op."""
+    rl = state.get("relook") if isinstance(state.get("relook"), dict) else None
+    if not rl or not rl.get("clips"):
+        return ""
+    groups: dict[str, list[str]] = {}
+    for name, c in rl["clips"].items():
+        got = c.get("got") or f"not looked at yet (its next look is every {float(c.get('interval_s') or 4):g} s)"
+        groups.setdefault(got, []).append(str(name))
+    rows = []
+    for got, names in groups.items():
+        rows.append(f"  {got}: " + ", ".join(names[:40]) + (f" and {len(names) - 40} more" if len(names) > 40 else ""))
+    stops = ", ".join(f"{float(x):g}" for x in rl.get("stops") or ())
+    return ("## What the index looked at\n"
+            "The index describes each clip from frames sampled at an interval (a frame every N seconds); a "
+            "smaller interval sees more detail and takes longer. What each clip got:\n" + "\n".join(rows)
+            + f"\nStops for a closer look (seconds between frames): {stops}. "
+            + (f"A look cannot start now: {rl['busy']}. " if rl.get("busy") else "")
+            + "Answer \"what did you look at / at what detail\" from this list, in words, with no op.\n\n")
+
+
 def build_prompt(text: str, scope: dict | None, state: dict, clips: dict,
                  history: list[str] | None = None, look_ok: bool = False, ctx: dict | None = None) -> str:
     looks = ", ".join(state.get("looks") or []) or "(none)"
@@ -726,7 +748,7 @@ def build_prompt(text: str, scope: dict | None, state: dict, clips: dict,
 A clip marked EDITOR'S DESCRIPTION was written or corrected by the editor: it outranks "described" (the index's text) and the transcript wherever they differ. An ellipsis (…) marks text shortened for room; never say a description is cut off.
 {clips_block(clips)}
 
-## The library
+{index_block(state)}## The library
 Looks: {looks}
 Export presets: {presets}
 
@@ -757,6 +779,10 @@ Export presets: {presets}
   talking", "no music") → one music op: a `track` from "Music tracks", `level` in dB against the
   film, `duck`; with none listed, answer that the project has no music and the editor adds a
   track with Add music… in the Audio tab. Never a volume_db on shots for the bed.
+- "look closer at X", "look at everything every quarter second", "look again, more often" → one relook op
+  (`interval_s` one of the stops under "What the index looked at": "every second" 1, "every quarter second" 0.25,
+  "as fine as it goes" 0.1; `clips` the named clips, "cut" for the clips the cut uses, "all" for everything). It
+  re-looks at the footage, not the cut: the colour `look` op is something else.
 - a review copy, a file to upload, the final file → export with quick, youtube or master.
 - a vertical / phone / Instagram / TikTok / Reels / Shorts / square version, or a shorter cut
   "for" a place → a SECOND DELIVERABLE: the first op is `new_cut` (a saved copy, named from the

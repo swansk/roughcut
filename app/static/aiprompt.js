@@ -627,10 +627,10 @@
         if (!a.accepted) return { line: 'Rejected — nothing changed', act: '', what: '' };
         // a design request is never "applied" (verdict 12, punch 5): it is being designed,
         // and its proposal waits in Designed Effects (Show opens it there)
-        const des = a.designs || 0, cuts = a.accepted - des;
-        const applied = !cuts ? '' : !des && a.accepted !== a.total ? `${a.accepted} of ${a.total} applied`
+        const des = a.designs || 0, lk = a.looks || 0, cuts = a.accepted - des - lk;
+        const applied = !cuts ? '' : !des && !lk && a.accepted !== a.total ? `${a.accepted} of ${a.total} applied`
           : `${plural(cuts, 'change')} applied`;
-        const line = [applied, des ? designLine(a) : ''].filter(Boolean).join(' · ');
+        const line = [applied, lk ? 'Started a closer look' : '', des ? designLine(a) : ''].filter(Boolean).join(' · ');
         // how to undo it, while the accept is still the last thing on the undo stack
         return { line, act: des ? 'Show' : '', what: des ? 'fx' : '', hint: a.top ? `${IS_MAC ? '⌘Z' : 'Ctrl+Z'} undoes` : '' };
       }
@@ -974,7 +974,7 @@
     if (!d || !AI.result || AI.result.job !== d.job) return;
     const acc = (d.accepted || []).length, rej = (d.rejected || []).length;
     AI.result.answered = { accepted: acc, rejected: rej, total: acc + rej, label: d.label || '',
-      top: !!(acc && d.committed), designs: Number(d.designs) || 0, ready: 0, failed: 0 };
+      top: !!(acc && d.committed), designs: Number(d.designs) || 0, looks: Number(d.looks) || 0, ready: 0, failed: 0 };
     paintStatus();
   }
 

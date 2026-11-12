@@ -67,7 +67,7 @@ def test_every_family_of_the_pro_tools_has_its_ops():
             "overlay"}
     assert need <= set(actions.OPS)
     assert set(actions.FAMILIES) == {"timeline", "effect_controls", "lumetri", "transitions",
-                                     "designed_effects", "music", "export", "history"}
+                                     "designed_effects", "music", "index", "export", "history"}
     for p in ("posx", "posy", "scale", "rotation", "opacity", "volume_db", "temperature",
               "tint", "exposure", "contrast", "highlights", "shadows", "whites", "blacks",
               "saturation", "hsl_hue", "hsl_shift", "hsl_saturation"):
@@ -581,3 +581,117 @@ def test_a_vignette_is_lumetris_own():
 def test_vignette_and_sharpen_refusals(op, why):
     st = state(overlays=[{"id": "ov1", "clip": "CLIP_C.MP4", "in": 0, "out": 1, "at": 0.5, "track": "V2"}])
     assert why in refused(op, st)
+
+
+# ---------------------------------------------------------------- relook (lane LOOKOP)
+
+STOPS = [4.0, 3.0, 2.0, 1.0, 0.5, 0.25, 0.1]
+
+
+def relook_state(busy: str = "", **over) -> dict:
+    """The index's side as server.relook_state gives it, with a pricer that is not the server's."""
+    seen: list = []
+
+    def price(names, iv):
+        seen.append((names, iv))
+        n = 3 if names is None else len(names)
+        return {"n": n, "frames": int(n * 600 / iv / 4), "eta_words": "about 36 minutes",
+                "cost_words": "free on your plan", "usd": 0.0, "notes": []}
+
+    rl = {"stops": STOPS, "busy": busy, "price": price,
+          "clips": {"CLIP_A.MP4": {"got": "every 4 s", "interval_s": 4.0},
+                    "CLIP_B.MP4": {"got": "", "interval_s": 4.0},
+                    "CLIP_C.MP4": {"got": "every 1 s, whole clip", "interval_s": 1.0}}}
+    rl.update(over)
+    st = state(relook=rl)
+    st["_seen"] = seen
+    return st
+
+
+def test_relook_is_an_index_op_apart_from_the_colour_look():
+    assert actions.FAMILY_OF["relook"] == "index" and actions.FAMILY_OF["look"] == "lumetri"
+    assert actions.FAMILIES["index"] == ("relook",)
+    assert "relook" not in actions.CUT_OPS
+
+
+def test_relook_takes_a_stop_and_clip_names():
+    st = relook_state()
+    op = accepted({"op": "relook", "interval_s": 0.25, "clips": ["clip_a"]}, st)
+    assert op == {"op": "relook", "interval_s": 0.25, "clips": ["CLIP_A.MP4"]}
+    assert st["_seen"][-1] == (["CLIP_A.MP4"], 0.25)
+    for stop in STOPS:                                  # every stop the Index panel offers
+        assert accepted({"op": "relook", "interval_s": stop, "clips": ["CLIP_B.MP4"]}, st)["interval_s"] == stop
+
+
+def test_relook_refuses_an_interval_that_is_not_a_stop():
+    for bad in (0.3, 5, 0, -1, "fast", None):
+        why = refused({"op": "relook", "interval_s": bad, "clips": "all"}, relook_state())
+        assert "interval_s" in why and "0.25" in why and "0.1" in why, why
+
+
+def test_relook_refuses_a_clip_the_project_does_not_have():
+    why = refused({"op": "relook", "interval_s": 1, "clips": ["MILK_JUG"]}, relook_state())
+    assert "MILK_JUG" in why and "no clip" in why
+    assert "clips" in refused({"op": "relook", "interval_s": 1, "clips": []}, relook_state())
+    assert "clips" in refused({"op": "relook", "interval_s": 1}, relook_state())
+
+
+def test_relook_all_and_cut():
+    st = relook_state()
+    assert accepted({"op": "relook", "interval_s": 0.5, "clips": "all"}, st)["clips"] == "all"
+    assert st["_seen"][-1] == (None, 0.5)
+    st = relook_state()
+    st["segments"] = st["segments"][:2]                 # the cut uses A and B only
+    op = accepted({"op": "relook", "interval_s": 2, "clips": "cut"}, st)
+    assert op["clips"] == ["CLIP_A.MP4", "CLIP_B.MP4"]
+    # naming every clip is the whole bin
+    assert accepted({"op": "relook", "interval_s": 2, "clips": ["CLIP_A", "CLIP_B", "CLIP_C"]}, relook_state())["clips"] == "all"
+    st = relook_state()
+    st["segments"] = []
+    assert "no shots" in refused({"op": "relook", "interval_s": 2, "clips": "cut"}, st)
+
+
+def test_relook_card_says_what_will_be_looked_at_and_what_it_costs():
+    st = relook_state()
+    line = actions.check([{"op": "relook", "interval_s": 0.25, "clips": "all"}], st)["lines"][0]
+    assert line == ("Look again at all 3 clips, a frame every 0.25 s: about 36 minutes, 1,800 frames. "
+                    "Free on your plan. The cut does not change."), line
+    st = relook_state(price=lambda n, iv: {"n": 1, "frames": 90, "eta_words": "under a minute",
+                                           "cost_words": "~$1.20", "usd": 1.2, "notes": []})
+    line = actions.check([{"op": "relook", "interval_s": 1, "clips": ["CLIP_B.MP4"]}], st)["lines"][0]
+    assert line == ("Look again at CLIP_B, a frame every 1 s: under a minute, 90 frames. "
+                    "Costs ~$1.20. The cut does not change."), line
+
+
+def test_relook_is_refused_with_the_servers_reason_while_the_index_is_stopping():
+    why = refused({"op": "relook", "interval_s": 1, "clips": "all"},
+                  relook_state(busy="the index is stopping — ask again in a moment"))
+    assert why == "the index is stopping — ask again in a moment"
+
+
+def test_relook_with_nothing_to_run_says_why_and_a_second_one_waits():
+    st = relook_state(price=lambda n, iv: {"n": 0, "notes": ["3 clips marked junk: not looked at (priced)"]})
+    assert "marked junk" in refused({"op": "relook", "interval_s": 1, "clips": "all"}, st)
+    ok, bad = actions.validate([{"op": "relook", "interval_s": 1, "clips": "all"},
+                                {"op": "relook", "interval_s": 0.5, "clips": "all"}], relook_state())
+    assert len(ok) == 1 and "one closer look" in bad[0]["why"]
+    assert "no footage" in refused({"op": "relook", "interval_s": 1, "clips": "all"}, state())
+
+
+def test_relook_changes_no_shot_and_is_no_cut_edit():
+    st = relook_state()
+    out = actions.check([{"op": "relook", "interval_s": 0.25, "clips": "all"}], st)
+    assert out["families"] == ["index"] and "preview" not in out
+    assert actions.simulate([{"op": "relook", "interval_s": 1, "clips": "all"}], st)["segments"] == st["segments"]
+
+
+def test_the_prompt_lists_the_stops_and_what_each_clip_got():
+    from roughcut import assist
+    st = relook_state()
+    text = assist.index_block(st)
+    assert "every 4 s: CLIP_A.MP4" in text and "every 1 s, whole clip: CLIP_C.MP4" in text
+    assert "not looked at yet" in text and "CLIP_B.MP4" in text
+    assert "0.25" in text and "0.1" in text
+    assert "relook" in actions.schema_text()
+    assert assist.index_block(state()) == ""
+    assert "What the index looked at" in assist.build_prompt("what detail did you look at?", None, st, {})

@@ -115,10 +115,11 @@
     transition: 'transitions', fade: 'transitions', design_effect: 'designed_effects', export: 'export',
     take_back: 'history',
     music: 'music',
+    relook: 'index',
   };
   const FAMILY_NAME = { timeline: 'Timeline', effect_controls: 'Effect Controls', lumetri: 'Lumetri Color',
                         transitions: 'Transitions', designed_effects: 'Designed Effects', export: 'Export', history: 'Undo history',
-                        music: 'Music' };
+                        music: 'Music', index: 'Index' };
   // one glyph per family (14 px, currentColor), in the panels' own icon style
   const ICON = {
     timeline: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="4" width="6" height="3.5" rx=".6"/><rect x="8.5" y="4" width="6" height="3.5" rx=".6"/><rect x="1.5" y="9.5" width="13" height="3" rx=".6"/></svg>',
@@ -127,6 +128,7 @@
     transitions: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="1.5" y="4" width="7" height="8" rx=".8"/><rect x="7.5" y="4" width="7" height="8" rx=".8" opacity=".55"/><path d="M7.5 4l1 8"/></svg>',
     designed_effects: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M8 1.8l1.5 3.6 3.7 1.1-3.7 1.2L8 11.3 6.5 7.7 2.8 6.5l3.7-1.1z"/><path d="M12.5 11.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z"/></svg>',
     music: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M6 11.5V3l7-1.5v8.5"/><circle cx="4.5" cy="11.5" r="1.6"/><circle cx="11.5" cy="10" r="1.6"/></svg>',
+    index: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="7" cy="7" r="4.5"/><path d="M10.4 10.4L14 14"/></svg>',
     export: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 2v8M5 7l3 3 3-3"/><path d="M2.5 11v2.5h11V11"/></svg>',
     history: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a5 5 0 1 0 1.6-3.7"/><path d="M3 2.5v3h3"/></svg>',
   };
@@ -486,6 +488,7 @@
     transition: ['transition', 'transitions'], fade: ['fade', 'fades'],
     design_effect: ['effect', 'effects'], export: ['export', 'exports'], music: ['music', 'music changes'],
     take_back: ['change taken back', 'changes taken back'],
+    relook: ['closer look', 'closer looks'],
     effect: ['video effect', 'video effects'],
     vignette: ['vignette', 'vignettes'],
   };
@@ -621,6 +624,7 @@
       case 'design_effect': return `Designed effect on ${shot(op.id)}: “${op.note}”`;
       case 'music': return op.remove ? 'Remove the music bed'
         : `Music bed${op.track ? `: ${String(op.track).replace(/^(project|music)\//, '')}` : ''}${op.level != null ? `, ${op.level > 0 ? '+' : ''}${op.level} dB against the film` : ''}${op.duck === false ? ', no dip under talking' : op.duck_db != null ? `, ${op.duck_db} dB dip` : ''}`;
+      case 'relook': return `Look again at ${op.clips === 'all' ? 'all the clips' : (op.clips || []).join(', ')}, a frame every ${op.interval_s} s`;
       case 'export': {
         const v = exportVideo(op, R.exportInfo, R.exportInfo && (R.exportInfo.presets || []).find((p) => p.key === op.preset));
         const own = [op.size != null && op.size !== '' ? v.frame : '', op.fps != null && op.fps !== '' ? v.fps : '', v.bitrate]
@@ -716,6 +720,7 @@
       : livePreview(op) ? 'shown on the Program monitor (◐ Before / After) until you accept'
         : TX_OPS.has(op.op) ? 'drawn dashed on the timeline, where it will sit, until you accept'
           : op.op === 'export' ? 'runs only when you accept'
+            : op.op === 'relook' ? 'starts the Index look job when you accept: no shot changes, no undo step'
             : op.op === 'design_effect' ? 'opens Designed Effects on this shot with this note; its own review follows'
               : 'applied when you accept';
     return `<li class="air-op${on ? '' : ' off'}${block ? ' blocked' : ''}" data-testid="ai-op-row" data-op-index="${i}" data-op="${esc(op.op)}" data-family="${fam}" aria-checked="${on}">
@@ -1158,7 +1163,7 @@
     answered.set(job, acc.length);
     window.dispatchEvent(new CustomEvent('rc:assist-answered', {
       detail: { job, accepted: acc, rejected: rej, label: made.label || '', committed: !!made.committed,
-                designs: made.designs || 0 } }));
+                designs: made.designs || 0, looks: made.looks || 0 } }));
     fetch(`/api/assist/${encodeURIComponent(job)}/answer`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, credentials: 'omit',
       body: JSON.stringify({ accepted: acc, rejected: rej, ...(made.label ? { label: made.label } : {}) }),
@@ -1169,6 +1174,55 @@
     if (!R.res || R.res.kind !== 'ops') return null;
     const idx = accepted();
     if (!idx.length) return null;
+    const looks = idx.filter((i) => R.ops[i].op === 'relook');
+    if (looks.length) return acceptWithLooks(idx, looks);
+    return acceptCuts(idx);
+  }
+
+  /* A closer look is the Index panel's own Run (POST /api/index/rerun, the one runner): started
+   * here, on Accept, with the interval and clips reviewed. It is not a cut edit — no undo
+   * step, nothing for the ledger — so it is taken out of the ops the timeline applies. A look
+   * the server refuses (the index is stopping) is said with the server's own reason. */
+  async function acceptWithLooks(idx, looks) {
+    const first = idx.find((i) => !looks.includes(i));
+    if (first != null && R.ops[first].op === 'new_cut') {
+      app.toast('A closer look is its own request: ask for it apart from the new cut', 6000);
+      return null;
+    }
+    const refusals = [];
+    const started = [];
+    for (const i of looks) {
+      const op = R.ops[i];
+      try {
+        const res = await fetch('/api/index/rerun', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ clips: op.clips === 'all' ? null : op.clips, stages: ['look'], interval_s: op.interval_s }) });
+        const r = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(typeof r.detail === 'string' ? r.detail : `the look did not start (${res.status})`);
+        started.push(i);
+        if (window.rcIndex && typeof rcIndex.refresh === 'function') { try { rcIndex.refresh(); } catch (e) { /* its own poll */ } }
+        if (typeof window.pollJobs === 'function') { try { window.pollJobs(); } catch (e) { /* its own poll */ } }
+      } catch (e) {
+        refusals.push({ i, why: e.message });
+      }
+    }
+    const rest = idx.filter((i) => !looks.includes(i));
+    let out;
+    if (rest.length) {
+      out = acceptCuts(rest, { deferAnswer: true });
+    } else {
+      lookOff({ keepGrade: true });
+      if (window.tlLanes && tlLanes.clearGhost) tlLanes.clearGhost();
+      clearTx();
+      out = { applied: 0, refused: [], after: Promise.resolve([]), label: '', committed: false, designs: 0 };
+    }
+    const ran = rest.concat(refusals.map((x) => x.i));
+    const merged = { ...out, refused: out.refused.concat(refusals.map((x, k) => ({ i: rest.length + k, why: x.why }))) };
+    merged.looks = started.length;
+    return landed(idx, ran, merged);
+  }
+
+  function acceptCuts(idx, opts = {}) {
     lookOff({ keepGrade: true });
     if (window.tlLanes && tlLanes.clearGhost) tlLanes.clearGhost();
     clearTx();
@@ -1184,7 +1238,7 @@
     if (keeps.length && window.fx && typeof fx.moveTitle === 'function') {
       setTimeout(() => keeps.forEach((a) => { fx.moveTitle(a.fx, a.shot).catch(() => {}); }), 400);
     }
-    return landed(idx, idx, out);
+    return opts.deferAnswer ? out : landed(idx, idx, out);
   }
 
   /* What an accept says and records once its ops have landed. `idx`: the accepted ops;
@@ -1200,16 +1254,18 @@
       else if (grade.previewing) grade.preview(null);
     }
     const rej = R.ops.map((_, i) => i).filter((i) => !took.includes(i));
-    answer(took, rej, { label, committed: out.committed, designs: out.designs || 0 });
-    const n = took.length;
+    const nl = out.looks || 0;                     // closer looks started: not edits, nothing to undo
+    answer(took, rej, { label, committed: out.committed, designs: out.designs || 0, looks: nl });
+    const n = took.length - nl;
     // a design request is not an applied edit (verdict 12, punch 5: "✓ 2 changes applied"
     // though nothing was): it is being designed, and its proposal waits in Designed Effects
     const d = out.designs || 0, cuts = n - d;
     const designing = d ? `${d === 1 ? 'an effect' : `${d} effects`} being designed — review ${d === 1 ? 'it' : 'them'} in Designed Effects` : '';
+    const looking = nl ? 'started a closer look (Window › Index shows it; Stop is there)' : '';
     const said = out.refused.length
-      ? `${[cuts ? `applied ${cuts} of ${idx.length}` : '', designing].filter(Boolean).join(' · ') || 'nothing applied'} — ${named(out.refused[0].why)}`
-      : `${[cuts ? `applied ${cuts === 1 ? 'the edit' : `${cuts} edits`}` : '', designing].filter(Boolean).join(' · ')}`
-        + (out.committed ? ` — ${app.undoKey()} undoes ${n === 1 ? 'it' : 'them'}` : '');
+      ? `${[cuts ? `applied ${cuts} of ${idx.length - nl}` : '', looking, designing].filter(Boolean).join(' · ') || 'nothing applied'} — ${named(out.refused[0].why)}`
+      : `${[cuts ? `applied ${cuts === 1 ? 'the edit' : `${cuts} edits`}` : '', looking, designing].filter(Boolean).join(' · ')}`
+        + (out.committed ? ` — ${app.undoKey()} undoes ${cuts === 1 ? 'it' : 'them'}` : '');
     closeQuiet();
     app.toast(said, out.refused.length ? 6000 : d ? 5000 : 3000);
     return out;
@@ -1277,10 +1333,13 @@
   function reject(opts = {}) {
     if (!R.res) return;
     const res = R.res, was = res.kind, n = R.ops.length;
+    const onlyLooks = n > 0 && R.ops.every((o) => o.op === 'relook');
     if (was === 'ops') answer([], R.ops.map((_, i) => i));
     closeQuiet();
     if (was !== 'ops') return;
     if (opts.redo) { if (!opts.quiet) app.toast('AI edit set aside'); return; }
+    // a closer look is no cut edit: turning it down starts nothing and leaves nothing to undo
+    if (onlyLooks) { app.toast('No closer look started', 4000); return; }
     const t = TL();
     const mark = res.job && t && typeof t.mark === 'function' ? t.mark('set aside AI edit', `proposal:assist:${res.job}`) : false;
     const back = () => {
