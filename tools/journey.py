@@ -549,7 +549,7 @@ RE_CUT = [
     # a range no locked shot holds: since the line rule (wave 28) grows the first cut's
     # shots to whole lines and their replies, the fixture's 6 s clips are mostly locked by
     # now, and a re-run with nothing new would be "Already the cut"
-    {"clip": "CLIP_B.MP4", "in": 0.0, "out": 2.0, "why": "the greeting, from the other side"},
+    {"clip": "CLIP_B.MP4", "in": 0.0, "out": 0.45, "why": "a breath before the greeting"},
 ]
 
 
