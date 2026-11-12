@@ -4671,6 +4671,50 @@ function openPickInSource(s) {
   return true;
 }
 
+/* One click on a row (wave 28 PEEK): the Source monitor shows it, paused on the In, its In
+ * and Out the row's. Nothing else moves: not the cut, the timeline's selection, the Program. */
+function parkKeepInSource(s) {
+  const src = window.dock && dock.source;
+  if (!src || !src.v || s.missing || !P.clips[s.clip]) return false;
+  src.shuttle(0);                                   // a clip playing from the last row stops
+  return openPickInSource(s);
+}
+
+/* Double-click and Enter: parked, then played from the In to the Out. Space (resume) takes it
+ * from wherever it is paused, or pauses it. Without a Source monitor, the bin's player. */
+function playKeepFromIn(s, resume) {
+  const src = window.dock && dock.source;
+  if (!src || !src.v) return playKeep(s);
+  const here = window.rcSource || {};
+  const m = src.marks[s.clip];
+  const shown = here.clip === s.clip && m && Math.abs(m[0] - s.start) < 0.06;
+  if (!shown && !parkKeepInSource(s)) return playKeep(s);
+  if (resume && !src.v.paused) { src.shuttle(0); return true; }
+  if (!resume) src.v.currentTime = (src.marks[s.clip] || [s.start])[0];
+  src.playRange();
+  return true;
+}
+
+// Keys on a Selects row (wave 28 PEEK): up / down move through the rows and the Source follows,
+// Space plays or pauses it there, Enter plays it from its In. On the window, in capture, so
+// the timeline's own up / down (its listener is made at boot, after this one) (edit to edit), Space and Enter stay out of it. `,` / `.` and
+// the row's "+ add" put it in the cut.
+window.addEventListener('keydown', (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+  if (!['ArrowUp', 'ArrowDown', 'Enter', ' '].includes(e.key)) return;
+  const row = e.target.closest && e.target.closest('#library .keep');
+  if (!row || !row._keep || e.target.closest('button, input, a, [role=checkbox]')) return;
+  e.preventDefault(); e.stopImmediatePropagation();
+  if (e.key === 'Enter') { if (!e.repeat) playKeepFromIn(row._keep); return; }
+  if (e.key === ' ') { if (!e.repeat) playKeepFromIn(row._keep, true); return; }
+  const rows = [...document.querySelectorAll('#library tr.keep')].filter((r) => r._keep);
+  const next = rows[rows.indexOf(row) + (e.key === 'ArrowDown' ? 1 : -1)];
+  if (!next) return;
+  selectKeep(next._keep, next);
+  next.scrollIntoView({ block: 'nearest' });
+  parkKeepInSource(next._keep);
+}, true);
+
 function keepRow(s, cols) {
   cols = cols || selCols(($('#library') || {}).clientWidth || 300);
   const d = document.createElement('tr');
@@ -4730,14 +4774,17 @@ function keepRow(s, cols) {
   d.addEventListener('click', (e) => {
     if (e.target.closest('a.use, button.use, .chip, .junkq, .pv')) return;
     selectKeep(s, d);
-    // Premiere's rule: `,` inserts from the panel in use — the row just chosen, not a
-    // clip the Source monitor was showing before (a double-click puts it there instead)
-    if (window.rcSource && window.rcSource.clip) { window.rcSource.clip = null; window.rcSource.auto = false; }
+    // One click shows the row in the Source monitor, parked on its In with its In and Out
+    // set (wave 28 PEEK), so `,` takes what is on screen. A row the Source cannot hold
+    // (footage missing, not analysed): `,` takes the row, not a clip shown before.
+    if (!parkKeepInSource(s) && window.rcSource && window.rcSource.clip) {
+      window.rcSource.clip = null; window.rcSource.auto = false;
+    }
   });
   d.addEventListener('dblclick', (e) => {
     if (e.target.closest('a.use, button.use, .chip, .junkq, .pv')) return;
     selectKeep(s, d);
-    openPickInSource(s);
+    playKeepFromIn(s);
   });
   const link = d.querySelector('a.use');
   if (link) {
@@ -7671,22 +7718,6 @@ async function boot() {
     const k = c.dataset.chip;
     binChip = binChip === k ? null : k;
     renderLibrary();
-  });
-  // Keys inside the bin: enter adds the focused keep at the playhead (or selects its
-  // shot when it is already in the cut), space plays it in the bin's player. Stopped
-  // here so the board's own enter / space (play the shot, play the cut) stay out of it.
-  $('#library').addEventListener('keydown', (e) => {
-    const row = e.target.closest('.keep');
-    if (!row || !row._keep) return;
-    if (e.key === 'Enter') {
-      e.preventDefault(); e.stopPropagation();
-      const add = row.querySelector('button.add');
-      const use = row.querySelector('a.use');
-      if (add) addKeep(row._keep); else if (use) use.click();
-    } else if (e.key === ' ') {
-      e.preventDefault(); e.stopPropagation();
-      playKeep(row._keep);
-    }
   });
   $('#auditClaims').onclick = auditClaims;
 }
