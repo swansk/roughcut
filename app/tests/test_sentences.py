@@ -213,3 +213,12 @@ def test_assist_ops_land_on_sentence_edges_unless_tight():
     assert (got[1]["in"], got[1]["out"]) == (5.75, 9.45)
     assert (got[2]["in"], got[2]["out"]) == (7.0, 8.0) and "tight" not in got[2]
     assert len(lines) == 2
+
+
+def test_a_new_shot_does_not_grow_into_a_rerun_locked_shot_the_plan_left_out():
+    """A re-run's locked shots are put back after the answer (enforce_locks), so a new shot
+    must not grow over one: it would be dropped as a duplicate of the locked footage."""
+    cur = [{"clip": "A.MP4", "in": 3.5, "out": 4.6, "id": "gL"}]
+    plan = {"segments": [{"clip": "A.MP4", "in": 0.25, "out": 1.6}], "notes": ""}
+    got = revise.polish_kept_alone(plan, clips(), cur, hand={"gL"}, locked={"gL"})["segments"][0]
+    assert got["out"] <= 3.5, got

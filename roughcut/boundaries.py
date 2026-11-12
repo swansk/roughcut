@@ -213,7 +213,8 @@ def polish_segment(seg: dict, clip: dict, floor: float = 0.0,
 
 def polish(segments: list[dict], clips: dict[str, dict], *,
            keep: set[str] | None = None,
-           echoed: set[int] | None = None) -> list[dict]:
+           echoed: set[int] | None = None,
+           fixed: list[dict] | None = None) -> list[dict]:
     """Polish every shot in a plan. Pure — the input list is not mutated.
 
     First every line is finished (`sentences.complete_lines`, Karl's standing rule: a
@@ -222,11 +223,13 @@ def polish(segments: list[dict], clips: dict[str, dict], *,
     as before. `keep`: ids of the editor's own shots — never moved, nothing grows into
     them. A shot marked `tight` (the ask said mid-line is fine there) is left as it is
     too. `echoed`: indices of shots the model copied verbatim from the cut — they get
-    the line rule but not the word polish (the 1.34 s "unchanged" shot)."""
+    the line rule but not the word polish (the 1.34 s "unchanged" shot). `fixed`: ranges
+    of shots that will be in the cut whatever the plan says (a re-run's locks): no shot
+    grows into them."""
     keep = set(keep or ())
     echoed = set(echoed or ())
     lined, _ = sentences.complete_lines(
-        segments, clips, keep=keep, keep_src=True,
+        segments, clips, keep=keep, keep_src=True, fixed=fixed,
         unusable_of=lambda clip: _unusable_spans(clip.get("visual")))
     out: list[dict] = []
     for i, seg in enumerate(lined):

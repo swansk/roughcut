@@ -383,16 +383,19 @@ def complete_segment(seg: dict, clip: dict, *, floor: float = 0.0,
 
 def complete_lines(segments: list[dict], clips: dict[str, dict], *,
                    keep: set[str] | None = None,
-                   unusable_of=None, keep_src: bool = False) -> tuple[list[dict], list[str]]:
+                   unusable_of=None, keep_src: bool = False,
+                   fixed: list[dict] | None = None) -> tuple[list[dict], list[str]]:
     """Every shot's lines finished (`complete_segment`), then shots of one clip that now
     run on into each other in the film joined into one. A shot whose id is in `keep`
     (the editor's own edits) or marked `tight` (the ask said mid-line cuts are fine) is
     left exactly as it is, and nothing grows into it. Returns (segments, the changed
     shots' reasons as lines for the notes). Pure. `keep_src`: each shot keeps `_src`
-    (the index of the input shot it came from) and `sentence_why`, for the polish."""
+    (the index of the input shot it came from) and `sentence_why`, for the polish.
+    `fixed`: ranges `{clip, in, out}` of shots that will be in the cut whatever this plan
+    says (the re-run's locked shots, put back after): nothing grows into them."""
     keep = set(keep or ())
     unusable_of = unusable_of or (lambda clip: [])
-    fixed = [dict(s) for s in segments]
+    fixed_segs = [dict(s) for s in segments]
     why: dict[int, list[str]] = {}
 
     def frozen(s: dict) -> bool:
@@ -411,8 +414,8 @@ def complete_lines(segments: list[dict], clips: dict[str, dict], *,
                     and not frozen(segments[j])
                     and ((j == i + 1 and float(segments[j]["in"]) >= float(seg["in"]))
                          or (j == i - 1 and float(segments[j]["out"]) <= float(seg["out"])))}
-        same = [(j, s) for j, s in enumerate(fixed) if j != i and s.get("clip") == seg["clip"]
-                and j not in joinable]
+        same = [(j, s) for j, s in enumerate(fixed_segs) if j != i and s.get("clip") == seg["clip"]
+                and j not in joinable] + [(-1, f) for f in fixed or () if f.get("clip") == seg["clip"]]
         floor = max((float(s["out"]) for _, s in same if float(s["out"]) <= float(seg["in"]) + 0.01),
                     default=0.0)
         ceiling = min((float(s["in"]) for _, s in same if float(s["in"]) >= float(seg["out"]) - 0.01),
@@ -423,15 +426,16 @@ def complete_lines(segments: list[dict], clips: dict[str, dict], *,
             check_out=not (nxt and _runs_on(seg, nxt)),
             unusable=unusable_of(clip),
             taken=[(float(o["in"]), float(o["out"])) for j, o in enumerate(segments)
-                   if j != i and o.get("clip") == seg.get("clip")])
+                   if j != i and o.get("clip") == seg.get("clip")]
+            + [(float(f["in"]), float(f["out"])) for f in fixed or () if f.get("clip") == seg.get("clip")])
         if reasons:
-            fixed[i] = new
+            fixed_segs[i] = new
             why[i] = reasons
 
     # join: consecutive shots of one clip, in recording order, that now meet or overlap
     out: list[dict] = []
     lines: list[str] = []
-    for i, seg in enumerate(fixed):
+    for i, seg in enumerate(fixed_segs):
         s = dict(seg)
         s["_src"] = i
         if i in why:

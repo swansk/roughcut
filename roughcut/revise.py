@@ -1234,7 +1234,8 @@ def _ask(prompt: str, system: str, clips: dict[str, dict],
          on_partial: Callable[[str, str], None] | None = None,
          heroes: list[dict] | None = None, *, colour: dict | None = None,
          current: list[dict] | None = None, focus_id: str | None = None,
-         new_clips: list[str] | None = None, hand: set[str] | None = None) -> dict:
+         new_clips: list[str] | None = None, hand: set[str] | None = None,
+         locked: set[str] | None = None) -> dict:
     schema = PLAN_SCHEMA_COLOUR if colour is not None else PLAN_SCHEMA
     if new_clips:
         schema = {**schema, "new_clips": NEW_CLIPS_SHAPE}
@@ -1251,7 +1252,7 @@ def _ask(prompt: str, system: str, clips: dict[str, dict],
     # off a transcript is asking it to do arithmetic the sidecar already knows.
     # A colour-only plan is the cut as it stands: nothing the model chose to polish.
     plan = (dict(result.content) if result.content.get("unchanged")
-            else polish_kept_alone(result.content, clips, current, hand))
+            else polish_kept_alone(result.content, clips, current, hand, locked))
     plan["usage"] = {
         "input_tokens": result.input_tokens, "output_tokens": result.output_tokens,
         "projected_usd": result.projected_usd, "model": result.model,
@@ -1289,7 +1290,8 @@ def propose(segments: list[dict], clips: dict[str, dict], story: str, note: str,
     return _ask(build_prompt(segments, clips, story, note, target, events, selects,
                              colour, locked, new_clips),
                 SYSTEM, clips, on_partial, colour=colour, current=segments,
-                new_clips=new_clips, hand=set(hand if hand is not None else (locked or ())))
+                new_clips=new_clips, hand=set(hand if hand is not None else (locked or ())),
+                locked=set(locked or ()))
 
 
 # ------------------------------------------------------------------ the truth of a plan
@@ -1415,7 +1417,8 @@ def to_sequence(plan: dict, current: list[dict] | None, fps: float | None,
 
 
 def polish_kept_alone(plan: dict, clips: dict[str, dict],
-                      current: list[dict] | None, hand: set[str] | None = None) -> dict:
+                      current: list[dict] | None, hand: set[str] | None = None,
+                      locked: set[str] | None = None) -> dict:
     """`polish_plan`, except a shot the model returned exactly as it is in the current
     cut keeps its word-level cut points. Polish exists to fix cut points the model read
     off a transcript; a range copied verbatim from the cut was the editor's (or an
@@ -1433,7 +1436,9 @@ def polish_kept_alone(plan: dict, clips: dict[str, dict],
                                          or s.get("id") == c.get("id")) for c in cur)}
     # the editor's shot as the editor left it: a hand shot the model re-cut is the model's now
     keep = {before[i].get("id") for i in echoed if before[i].get("id") in set(hand or ())}
-    after = polish(before, clips, keep=keep, echoed=echoed)
+    # a re-run's locked shots come back whatever the plan says: nothing may grow into them
+    fixed = [c for c in cur if c.get("id") in set(locked or ())]
+    after = polish(before, clips, keep=keep, echoed=echoed, fixed=fixed)
     out = dict(plan)
     out["segments"] = after
     if any(sentences.is_line_fix(s.get("polish_why", "")) for s in after):
