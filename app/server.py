@@ -82,6 +82,8 @@ from roughcut import flow as flowmod  # noqa: E402
 from roughcut import deep as deepmod  # noqa: E402
 from roughcut import firstpass as fpmod  # noqa: E402
 from roughcut import startwords  # noqa: E402     # wave 24 START: length, time, plain words
+from roughcut import boundaries as boundariesmod  # noqa: E402     # wave 28 SENTENCE: never cut off a line
+from roughcut import sentences as sentencesmod  # noqa: E402
 from roughcut import reconcile as reconcilemod  # noqa: E402     # wave 25 FIND2: the description's last step
 from roughcut import findthink  # noqa: E402     # wave 25 FIND2: the model step of Find
 from roughcut import look as lookmod_find  # noqa: E402
@@ -3394,12 +3396,15 @@ def _ask_run(entry, job: str, segments: list[dict], clips: dict, story: str, not
         return
     entry["state"] = "running"
     grade = ask_colour_context(segments) if segments else None
+    # The editor's own shots, which the line rule never lengthens (Karl 2026-11-11: never cut
+    # off a line — but hand edits are his): a re-run's locks, else every shot cut by hand.
+    hand = set(locked) if locked is not None else _hand_ids(segments)
     try:
         watcher = _ask_watcher(entry, shots)
         if focus is not None:
             plan = revise.propose_shot(segments=segments, index=focus, clips=clips,
                                        story=story, note=note, target=target,
-                                       on_partial=watcher, colour=grade)
+                                       on_partial=watcher, colour=grade, hand=hand)
             # The model answered for one shot; the proposal the human reads and
             # accepts is the whole timeline, so the splice happens here — a record on
             # disk holding only the replacement would offer "1 shot" as the recovered
@@ -3416,7 +3421,7 @@ def _ask_run(entry, job: str, segments: list[dict], clips: dict, story: str, not
             plan = revise.propose(segments=segments, clips=clips, story=story,
                                   note=note, target=target, events=ranked,
                                   selects=read_edl().get("selects"),
-                                  on_partial=watcher, colour=grade,
+                                  on_partial=watcher, colour=grade, hand=hand,
                                   **({"locked": set(locked)} if locked else {}),
                                   **({"new_clips": new_clips} if new_clips else {}))
         else:
@@ -3459,6 +3464,10 @@ def _ask_run(entry, job: str, segments: list[dict], clips: dict, story: str, not
                                if isinstance(v, dict)})
     if finish is not None:
         plan = finish(plan)
+    over = sentencesmod.over_aim_line(sum(actionsmod.dur(x) for x in plan.get("segments") or []),
+                                      target, float(plan.get("lines_added_s") or 0.0))
+    if over and not _SAYS_OVER.search(str(plan.get("notes") or "")):
+        plan["notes"] = "\n\n".join(x for x in (str(plan.get("notes") or "").strip(), over) if x)
     if plan.get("notes") and plan.get("segments"):     # one length: the header's (WORDS-03)
         plan["notes"] = revise.true_length_words(
             plan["notes"], sum(actionsmod.dur(x) for x in plan["segments"]))
@@ -3499,6 +3508,23 @@ def _ask_run(entry, job: str, segments: list[dict], clips: dict, story: str, not
     entry.complete("polish")
     entry.finish("done", detail="a colour change proposed, the cut as it is"
                  if plan.get("unchanged") else f"{len(plan['segments'])} shots proposed")
+
+
+# The model's own notes already say the cut runs past the target ("well over the project's
+# 108-132 s target"): the board does not say it a second time.
+_SAYS_OVER = re.compile(r"\b(over|past|beyond|longer than)\b[^.]{0,60}\b(target|aim)\b", re.I)
+
+
+def _hand_ids(segments: list[dict]) -> set[str]:
+    """Ids of the cut's shots the editor cut (`firstpass.manual_edits`). Never fails an ask:
+    unreadable provenance means no hand shots are known, and the line rule applies to all."""
+    if not segments:
+        return set()
+    try:
+        return {r["id"] for r in fpmod.manual_edits(read_edl(), ask_plans()) if r.get("id")}
+    except Exception as exc:  # noqa: BLE001
+        print(f"  !! ask: hand edits not read: {exc}", flush=True)
+        return set()
 
 
 def ask_colour_context(segments: list[dict]) -> dict | None:
@@ -7304,6 +7330,10 @@ def _firstpass_walk(job: str, fp: dict) -> None:
                 # verdict 13, punch 10: never "listed as 29.4 s, but its in and out only
                 # span 14.7 s" about a locked shot the editor slowed
                 plan["checks"] = fpmod.drop_speed_checks(plan.get("checks"), segments, locked)
+            # the check step may have widened a shot onto a line; the locks put shots back:
+            # every line finished again, the locked shots untouched (Karl 2026-11-11)
+            plan["segments"] = boundariesmod.finish_lines(plan["segments"], clips,
+                                                          keep=set(locked))
             if left:
                 plan["notes"] = "\n\n".join(x for x in (
                     str(plan.get("notes") or "").strip(),

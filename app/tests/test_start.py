@@ -32,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from roughcut import startwords  # noqa: E402
 
 from conftest import _make_clip  # noqa: E402
-from test_firstpass import fp, model, _wait  # noqa: E402,F401  (the suite's fake backend)
+from test_firstpass import fp, fp_lines, model, _wait  # noqa: E402,F401  (the suite's fake backend)
 from test_server import _fresh  # noqa: E402
 
 

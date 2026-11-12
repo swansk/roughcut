@@ -212,7 +212,9 @@ def test_polish_plan_declares_itself_in_the_notes_and_mutates_nothing():
             {"clip": "A.MP4", "in": 10.0, "out": 22.0}]
     plan = {"segments": segs, "notes": "built around the greeting"}
     got = boundaries.polish_plan(plan, {"A.MP4": clip()})
-    assert got["segments"][0]["out"] == 3.75
+    # 2.4-3.2 cuts "how are you" (2.4-4.0) after "are": since 2026-11-11 the line
+    # rule finishes the sentence, not just the word (4.0 + PAD_TAIL)
+    assert got["segments"][0]["out"] == 4.45
     assert plan["segments"][0]["out"] == 3.2, "input plan untouched"
     assert plan["notes"] in got["notes"]
     assert "adjusted 1 of 2 shots" in got["notes"]

@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import colour as colourmod
-from . import config, edits, speakers, telemetry_events
+from . import config, edits, sentences, speakers, telemetry_events
 from .boundaries import polish, polish_plan, summarise  # noqa: F401 — polish_plan re-exported
 from .estimate import Estimate, estimate
 from .firstpass import clip_name
@@ -49,6 +49,21 @@ PLAN_SCHEMA = {
                         "accepting, and why",
                 "clip": "GX010495.MP4", "in": 1.6, "out": 13.7}],
 }
+
+# Karl, 2026-11-11, on the Copper first pass: "there are several clips where you cut the audio
+# mid sentence. never do that, extend as needed (past 2 mins is ok) so you capture complete
+# sentences + reaction" — and "this is something you actually should change in general". Stated
+# once in every cut-writing prompt; `boundaries.polish` enforces it after the answer
+# (roughcut/sentences.py), so the prompt is the aim and the polish the guarantee.
+SPEECH_RULE = (
+    "**Never cut off a line.** A shot with speech starts at the start of a sentence and ends "
+    "after the sentence ends and after the reaction to it (the laugh, the reply) has played "
+    "out. When that conflicts with the target length, the sentence wins: let the film run "
+    "longer than the target, or drop a whole shot, but never clip a line to save seconds. The "
+    "target length is an aim, not a limit; if finishing lines takes the film over it, say so "
+    "in one plain sentence in `notes`. Only when the editor's own words for this ask say a "
+    "hard cut mid-line is fine for a shot, mark that shot `\"tight\": true` and say why in its "
+    "`why`.")
 
 # What the prompts say about `checks` (every Ask's "What to return").
 CHECKS_GUIDANCE = (
@@ -744,8 +759,8 @@ def build_prompt(segments: list[dict], clips: dict[str, dict], story: str,
 {story.strip() or "(the editor has not written this yet — infer it from the material)"}
 
 ## Target length
-{target[0]:.0f}-{target[1]:.0f} seconds. The current edit is {total:.1f}s over \
-{len(segments)} shots.
+{target[0]:.0f}-{target[1]:.0f} seconds (an aim, not a limit). The current edit is \
+{total:.1f}s over {len(segments)} shots.
 
 ## The current edit, in order
 {current}
@@ -759,7 +774,7 @@ def build_prompt(segments: list[dict], clips: dict[str, dict], story: str,
 The full revised edit as an ordered list of segments — not a diff, not only the parts
 you changed. Keep what works; the note tells you what to change. Timestamps are
 seconds within the named clip. Prefer cutting on utterance boundaries visible in the
-transcripts above. Each clip says when it was recorded relative to the others — use it
+transcripts above. {SPEECH_RULE} Each clip says when it was recorded relative to the others — use it
 as information rather than as a rule. Deliberate reordering is good editing; only the
 accidental kind, drifting backwards through one continuous stretch for no reason,
 reads as a mistake. Say in the `why` when a move is deliberate.
@@ -801,8 +816,8 @@ edit yet; you are making the first one.
 {note_section(note, "The editor's direction") if note.strip() else "## The editor's direction\n" + ask}
 
 ## Target length
-{target[0]:.0f}-{target[1]:.0f} seconds, drawn from {len(clips)} clips totalling \
-{total:.0f}s of material.
+{target[0]:.0f}-{target[1]:.0f} seconds (an aim, not a limit), drawn from {len(clips)} clips \
+totalling {total:.0f}s of material.
 
 ## How to read this material
 {guidance}
@@ -813,7 +828,7 @@ edit yet; you are making the first one.
 ## What to return
 A complete first cut as an ordered list of segments — the order they should play in,
 not the order the clips were shot. Timestamps are seconds within the named clip. Cut
-on utterance boundaries visible in the transcripts above. Every segment needs a `why`:
+on utterance boundaries visible in the transcripts above. {SPEECH_RULE} Every segment needs a `why`:
 one sentence on what that moment is for. In `notes`, say what you decided this film is
 about\
 {" — and name any of the editor's selects you left out, heroes first." if kept else "."}
@@ -871,8 +886,8 @@ about ONE shot of the current edit.
 {story.strip() or "(the editor has not written this yet)"}
 
 ## Target length
-{target[0]:.0f}-{target[1]:.0f} seconds. The current edit is {total:.1f}s over \
-{len(segments)} shots.
+{target[0]:.0f}-{target[1]:.0f} seconds (an aim, not a limit). The current edit is \
+{total:.1f}s over {len(segments)} shots.
 
 ## The current edit, in order
 {current}
@@ -893,7 +908,7 @@ The replacement for this one shot only, as `segments` — usually one segment, m
 the note asks to split it. Every segment must come from {clip}; the rest of the edit
 is not yours to change here. Timestamps are seconds within the clip. Prefer cutting on
 utterance boundaries visible in the transcript, and mind what plays before and after
-this shot. If the note would be best served by removing the shot entirely, return it
+this shot. {SPEECH_RULE} If the note would be best served by removing the shot entirely, return it
 unchanged and say so in `notes` — removing is the editor's own one-click action.
 {CHECKS_GUIDANCE}{colour_only}"""
 
@@ -902,7 +917,7 @@ def propose_shot(segments: list[dict], index: int, clips: dict[str, dict],
                  story: str, note: str,
                  target: tuple[float, float] = (120.0, 180.0),
                  on_partial: Callable[[str, str], None] | None = None,
-                 colour: dict | None = None) -> dict:
+                 colour: dict | None = None, hand: set[str] | None = None) -> dict:
     """Ask for a revision of one shot. Returns {'segments', 'notes', 'usage'} where
     `segments` is the replacement for that shot alone — the caller splices — and
     `colour`, when the note asked for one, a patch that touches that shot's id only.
@@ -923,7 +938,7 @@ def propose_shot(segments: list[dict], index: int, clips: dict[str, dict],
     ctx = colour if sid else None
     return _ask(build_shot_prompt(segments, index, clips, story, note, target, ctx),
                 SHOT_SYSTEM, scoped, on_partial, colour=ctx,
-                current=[segments[index]], focus_id=sid)
+                current=[segments[index]], focus_id=sid, hand=hand)
 
 
 # A hero counts as placed when one shot covers at least this much of its range — the
@@ -1072,9 +1087,12 @@ def validate_plan(payload: Any, clips: dict[str, dict],
         if not (0.0 <= t_in < t_out <= duration + 0.05):
             raise ValueError(
                 f"segment {i} range {t_in}-{t_out} outside {clip} (0-{duration:.1f})")
-        clean.append({"clip": clip, "in": round(t_in, 2),
-                      "out": round(min(t_out, duration), 2),
-                      "why": str(seg.get("why", "")).strip()[:200]})
+        row = {"clip": clip, "in": round(t_in, 2),
+               "out": round(min(t_out, duration), 2),
+               "why": str(seg.get("why", "")).strip()[:200]}
+        if seg.get("tight") is True:
+            row["tight"] = True         # the ask said a hard cut mid-line is fine here
+        clean.append(row)
     notes = str(payload.get("notes", "")).strip()[:1200]
     for h in dropped_heroes(clean, heroes or []):
         if not _names_clip(notes, str(h["clip"])):
@@ -1216,7 +1234,7 @@ def _ask(prompt: str, system: str, clips: dict[str, dict],
          on_partial: Callable[[str, str], None] | None = None,
          heroes: list[dict] | None = None, *, colour: dict | None = None,
          current: list[dict] | None = None, focus_id: str | None = None,
-         new_clips: list[str] | None = None) -> dict:
+         new_clips: list[str] | None = None, hand: set[str] | None = None) -> dict:
     schema = PLAN_SCHEMA_COLOUR if colour is not None else PLAN_SCHEMA
     if new_clips:
         schema = {**schema, "new_clips": NEW_CLIPS_SHAPE}
@@ -1233,7 +1251,7 @@ def _ask(prompt: str, system: str, clips: dict[str, dict],
     # off a transcript is asking it to do arithmetic the sidecar already knows.
     # A colour-only plan is the cut as it stands: nothing the model chose to polish.
     plan = (dict(result.content) if result.content.get("unchanged")
-            else polish_kept_alone(result.content, clips, current))
+            else polish_kept_alone(result.content, clips, current, hand))
     plan["usage"] = {
         "input_tokens": result.input_tokens, "output_tokens": result.output_tokens,
         "projected_usd": result.projected_usd, "model": result.model,
@@ -1249,7 +1267,8 @@ def propose(segments: list[dict], clips: dict[str, dict], story: str, note: str,
             selects: list[dict] | None = None,
             colour: dict | None = None,
             locked: set[str] | None = None,
-            new_clips: list[str] | None = None) -> dict:
+            new_clips: list[str] | None = None,
+            hand: set[str] | None = None) -> dict:
     """Ask for a revision. Returns {'segments', 'notes', 'usage'}, plus `colour` (a
     patch on the EDL's colour block) when the note asked for a change to the picture.
 
@@ -1262,14 +1281,15 @@ def propose(segments: list[dict], clips: dict[str, dict], story: str, note: str,
     keeps the editor's hand edits); the caller enforces it (`firstpass.enforce_locks`),
     the prompt only asks. `new_clips` — footage imported since the last pass (a
     re-run): the prompt lists it and the answer says, per clip, what it did with it
-    (`new_clips` in the plan).
+    (`new_clips` in the plan). `hand` — ids of the editor's own shots: the line rule
+    never lengthens them (default: `locked`).
     """
     if not note.strip():
         raise ValueError("empty note")
     return _ask(build_prompt(segments, clips, story, note, target, events, selects,
                              colour, locked, new_clips),
                 SYSTEM, clips, on_partial, colour=colour, current=segments,
-                new_clips=new_clips)
+                new_clips=new_clips, hand=set(hand if hand is not None else (locked or ())))
 
 
 # ------------------------------------------------------------------ the truth of a plan
@@ -1395,21 +1415,31 @@ def to_sequence(plan: dict, current: list[dict] | None, fps: float | None,
 
 
 def polish_kept_alone(plan: dict, clips: dict[str, dict],
-                      current: list[dict] | None) -> dict:
+                      current: list[dict] | None, hand: set[str] | None = None) -> dict:
     """`polish_plan`, except a shot the model returned exactly as it is in the current
-    cut is left exactly as it is. Polish exists to fix cut points the model read off a
-    transcript; a range copied verbatim from the cut was the editor's (or an accepted
-    earlier plan's), and snapping it is a change nobody asked for — the source of the
-    "unchanged" shot that lost 1.34 s."""
+    cut keeps its word-level cut points. Polish exists to fix cut points the model read
+    off a transcript; a range copied verbatim from the cut was the editor's (or an
+    accepted earlier plan's), and snapping it is a change nobody asked for — the source
+    of the "unchanged" shot that lost 1.34 s.
+
+    The LINE rule is the exception (Karl, 2026-11-11: never cut off audio, in general):
+    an echoed shot that cuts a line is still lengthened — unless it is the editor's own
+    (`hand`: ids of shots cut by hand, or the re-run's locks) returned as the editor left
+    it, which nothing changes."""
     before = [dict(s) for s in plan.get("segments") or []]
     cur = [s for s in (current or []) if isinstance(s, dict) and "in" in s and "out" in s]
-    after = polish(before, clips)
-    for i, s in enumerate(before):
-        if any(_echoed(s, c) and (not s.get("id") or not c.get("id")
-                                      or s.get("id") == c.get("id")) for c in cur):
-            after[i] = dict(s)
+    echoed = {i for i, s in enumerate(before)
+              if any(_echoed(s, c) and (not s.get("id") or not c.get("id")
+                                         or s.get("id") == c.get("id")) for c in cur)}
+    # the editor's shot as the editor left it: a hand shot the model re-cut is the model's now
+    keep = {before[i].get("id") for i in echoed if before[i].get("id") in set(hand or ())}
+    after = polish(before, clips, keep=keep, echoed=echoed)
     out = dict(plan)
     out["segments"] = after
+    if any(sentences.is_line_fix(s.get("polish_why", "")) for s in after):
+        # what finishing lines cost in length, for the "over the aim" sentence
+        out["lines_added_s"] = round(max(0.0, sum(edits.dur(s) for s in after)
+                                         - sum(edits.dur(s) for s in before)), 1)
     line = summarise(before, after)
     if line:
         notes = (plan.get("notes") or "").strip()
