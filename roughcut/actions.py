@@ -116,6 +116,10 @@ THE OPS (each maps to the human path named after the arrow)
                                                  Rate / Bitrate set first; it runs only
                                                  when the editor accepts it
 
+  Index (not a cut edit: no undo step, no change in the ledger)
+    relook        {interval_s, clips}            → Window › Index's Run for the look stage: the
+                                                 clips (names, "all" or "cut") looked at again,
+                                                 a frame every `interval_s`; the same job
   History
     take_back     {n}                            → the cut as it was before the AI's `n`th latest accepted
                                                  change (a step of its own: one Undo cancels it)
@@ -156,6 +160,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
     "transitions": ("transition", "fade"),
     "designed_effects": ("design_effect",),
     "music": ("music",),
+    "index": ("relook",),
     "export": ("export",),
     "history": ("take_back",),
 }
@@ -314,6 +319,8 @@ History
   {{"op":"take_back","n"}}                        take the cut back `n` of the AI's own accepted changes (1 = the latest, listed above as "changes on this cut"); a change by hand made after them is taken back with them. Use it alone for "put it back", "go back to before X"; one Undo cancels it
 Music
   {{"op":"music","track"?,"level"?,"duck"?,"duck_db"?,"fade_in"?,"fade_out"?,"remove"?}}   the music bed (Audio tab): `track` is one of the "Music tracks" listed above (omit it to change the bed that is set), `level` its loudness in dB against the film's own sound ({MUSIC_LEVEL_MIN:g}..{MUSIC_LEVEL_MAX:g}; default -8, "keep it quiet" -12, "up a bit" -4), `duck` true to dip it under talking (the default) or false, `duck_db` how far it dips ({MUSIC_DUCK_MAX:g} at most, default 12), `fade_in` / `fade_out` seconds (0..20), `remove` true takes the bed off. "Add music … and keep it under the talking" is `track` plus `duck` true
+Index (a closer look at the footage; it changes no shot and takes no undo step)
+  {{"op":"relook","interval_s","clips"}}   look at footage again, a frame every `interval_s` seconds (one of the stops listed under "What the index looked at"); `clips` is a list of clip names from that list, "all" (every clip) or "cut" (the clips the cut uses). The review says how long it takes and what it costs; it runs the Index panel's look as one job. NOT the colour `look` op. Use it only when the editor asks to look closer / more often / again; "what detail did you look at" is answered in words from the list, with no op
 Export
   {{"op":"export","preset","range":"all"|"in_out","name"?,"size"?,"fps"?,"bitrate"?}}   render a file (runs only once the editor accepts it). The preset's own frame, rate and quality unless you set them: size {sizes} (the frame height, at the sequence's aspect; "match" is the footage's own frame), fps {rates}, bitrate a target in Mbps ({EXPORT_BITRATE_MIN:g}–{EXPORT_BITRATE_MAX:g}). "A 720p review copy" is quick with "size":"720"
 """
@@ -467,6 +474,9 @@ class _Sim:
         # the music bed the Audio tab has (None: none), and the tracks it can choose from
         self.music = dict(state["music"]) if isinstance(state.get("music"), dict) and state["music"].get("asset") else None
         self.music_tracks = [dict(t) for t in state.get("music_tracks") or [] if isinstance(t, dict) and t.get("asset")]
+        # the index's side (server.relook_state): the stops, what each clip got, why a look cannot start
+        self.relook = state.get("relook") if isinstance(state.get("relook"), dict) else None
+        self.relooked = False
         self.dead: set[str] = set()        # new:<k> of a creating op that was refused
         self._anon = 0
         # the cut as the editor sees it when the review opens: every line names a shot by
@@ -1477,6 +1487,66 @@ def _c_take_back(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
             f"Take the cut back {n} change{'s' if n != 1 else ''}: {what}")
 
 
+def _relook_clips(raw: Any, sim: _Sim) -> tuple[list[str] | None, str]:
+    """The clips a `relook` names: (names, None for the whole bin), and the words for who."""
+    rl = sim.relook or {}
+    have: dict[str, dict] = rl.get("clips") or {}
+    if isinstance(raw, str) and raw.strip().lower() in ("all", "bin", "everything", "every clip"):
+        return None, f"all {len(have)} clip{'s' if len(have) != 1 else ''}"
+    if isinstance(raw, str) and raw.strip().lower() == "cut":
+        names: list[str] = []
+        for sg in sim.segs:
+            c = str(sg.get("clip"))
+            if c in have and c not in names:
+                names.append(c)
+        if not names:
+            raise Refused("the cut has no shots from the project's clips yet: name the clips to look at")
+        return names, f"the {len(names)} clip{'s' if len(names) != 1 else ''} in the cut"
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list) or not raw or not all(isinstance(x, str) and x.strip() for x in raw):
+        raise Refused("`clips` is a list of clip names, \"all\" or \"cut\"")
+    names = []
+    for x in raw:
+        key = x.strip().lower()
+        hit = next((c for c in have if c.lower() == key), None) or next(
+            (c for c in have if c.rsplit(".", 1)[0].lower() == key.rsplit(".", 1)[0]), None)
+        if hit is None:
+            raise Refused(f"no clip {x.strip()!r} in the project (the clips are listed under \"What the index looked at\")")
+        if hit not in names:
+            names.append(hit)
+    if len(names) == len(have):
+        return None, f"all {len(have)} clips"
+    shown = ", ".join(n.rsplit(".", 1)[0] for n in names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
+    return names, shown if len(names) == 1 else f"{len(names)} clips ({shown})"
+
+
+def _c_relook(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
+    rl = sim.relook
+    if not rl or not rl.get("clips"):
+        raise Refused("the project has no footage to look at")
+    if rl.get("busy"):
+        raise Refused(str(rl["busy"]))
+    if sim.relooked:
+        raise Refused("one closer look at a time: ask for the next one after this one")
+    stops = [float(x) for x in rl.get("stops") or ()]
+    iv = _f(raw.get("interval_s"))
+    if iv is None or not any(abs(iv - x) < 1e-9 for x in stops):
+        raise Refused("`interval_s` must be one of " + ", ".join(f"{x:g}" for x in stops)
+                      + " (seconds between frames)" + (f"; {raw.get('interval_s')!r} is not" if iv is not None else ""))
+    iv = next(x for x in stops if abs(iv - x) < 1e-9)
+    names, who = _relook_clips(raw.get("clips"), sim)
+    price = rl["price"](names, iv) if callable(rl.get("price")) else {}
+    if not price.get("n"):
+        raise Refused("nothing to look at again" + (": " + "; ".join(price.get("notes") or []) if price.get("notes") else ""))
+    sim.relooked = True
+    cost = str(price.get("cost_words") or "")
+    cost = f"Costs {cost}." if cost.startswith("~") else (cost[:1].upper() + cost[1:] + ".") if cost else ""
+    line = (f"Look again at {who}, a frame every {iv:g} s: {price.get('eta_words') or 'a short while'}, "
+            f"{int(price.get('frames') or 0):,} frames. {cost} The cut does not change.").replace("  ", " ")
+    return {"op": "relook", "interval_s": iv, "clips": "all" if names is None else names}, line
+
+
 def _c_music(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
     clean: dict = {"op": "music"}
     if raw.get("remove"):
@@ -1548,7 +1618,7 @@ CHECK = {
     "effect": _c_effect,
     "curve": _c_curve, "wheel": _c_wheel, "look": _c_look, "match": _c_match, "vignette": _c_vignette,
     "transition": _c_transition, "fade": _c_fade, "design_effect": _c_design_effect,
-    "export": _c_export, "take_back": _c_take_back, "music": _c_music,
+    "export": _c_export, "take_back": _c_take_back, "music": _c_music, "relook": _c_relook,
 }
 assert set(CHECK) == set(OPS)
 

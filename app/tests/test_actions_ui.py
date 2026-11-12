@@ -1574,3 +1574,56 @@ def test_an_export_op_s_review_says_its_frame_rate_and_bitrate(browser, live_ser
         p.wait_for_function("!rcActions.open")
     finally:
         b.close()
+
+
+def test_a_closer_look_is_reviewed_then_started_as_the_index_job_and_is_no_cut_edit(browser, live_server, project):
+    """Lane LOOKOP: the AI's `relook` op. The review card says what will be looked at and the
+    server's own estimate; Accept POSTs the Index panel's own /api/index/rerun with that interval
+    and those clips (the one runner — the route here answers for it, so no real look runs); it
+    adds no undo step, changes no byte of the EDL and never joins the change ledger; Reject
+    starts nothing."""
+    import server
+    b = Board(browser, live_server, project)
+    try:
+        p = b.page
+        posts: list[dict] = []
+
+        def rerun(route):
+            posts.append(json.loads(route.request.post_data))
+            route.fulfill(status=200, content_type="application/json", body=json.dumps({"job": "ab12", "joined": False}))
+        p.route("**/api/index/rerun", rerun)
+        before_edl, before_stack = b.raw(), p.evaluate("tl.undoLabels()")
+        ledger_before = server.assist_ledger(server.assist_cut())
+        ops = [{"op": "relook", "interval_s": 0.25, "clips": ["clip_a"]}]
+        res = b.ask(ops, "A closer look at CLIP_A")
+        assert res["ops"] == [{"op": "relook", "interval_s": 0.25, "clips": ["CLIP_A.MP4"]}]
+        line = res["lines"][0]
+        plan = server.rerun_plan({"clips": ["CLIP_A.MP4"], "stages": ["look"], "interval_s": 0.25})
+        assert line.startswith("Look again at CLIP_A, a frame every 0.25 s: ") and plan["eta_words"] in line, line
+        assert f"{plan['frames']:,} frames" in line and line.endswith("The cut does not change."), line
+        assert "free on your plan" in line.lower() or "~$" in line
+        # Reject: nothing starts
+        b.review(res)
+        row = p.locator("[data-testid=ai-op-row]")
+        assert row.get_attribute("data-family") == "index" and "Look again at CLIP_A" in row.inner_text()
+        p.locator("[data-testid=ai-reject-all]").click()
+        p.wait_for_function("!rcActions.open")
+        assert posts == []
+        # Accept: the Index's own run, with the reviewed interval and clips
+        res = b.ask(ops, "A closer look at CLIP_A")
+        b.review(res)
+        b.accept()
+        p.wait_for_function("true")
+        for _ in range(50):
+            if posts:
+                break
+            time.sleep(0.1)
+        assert posts == [{"clips": ["CLIP_A.MP4"], "stages": ["look"], "interval_s": 0.25}]
+        assert p.evaluate("tl.undoLabels()") == before_stack                 # no undo step
+        assert b.settle() == json.loads(before_edl)                          # the cut is untouched
+        assert server.assist_ledger(server.assist_cut()) == ledger_before        # not a change to the cut
+        # the conversation says it
+        turn = server._turn_text(json.loads(server._assist_record_path(res["job"]).read_text()))
+        assert "Started a closer look" in turn, turn
+    finally:
+        b.close()

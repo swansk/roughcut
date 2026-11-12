@@ -18524,6 +18524,23 @@ def assist_home() -> Path:
     return d
 
 
+def relook_state() -> dict:
+    """The index's side of what the AI is told and checked against (roughcut/actions.py
+    `relook`): the stops, each clip's `got` (and the interval its next look will use), why a
+    look cannot start now, and a pricer that is the Index panel's own (`rerun_plan`)."""
+    clips = footage_clips()
+    live = next((x for x in INDEXES.values() if x["state"] not in progress.TERMINAL), None)
+    busy = "the index is stopping — ask again in a moment" if live is not None and live.get("cancel") else ""
+
+    def price(names, interval: float) -> dict:
+        p = rerun_plan({"clips": names, "stages": ["look"], "interval_s": interval})
+        return {"n": len(p["plan"]), "frames": p["frames"], "eta_words": p["eta_words"],
+                "cost_words": fpmod.cost_words(p["usd"])["words"], "usd": p["usd"], "notes": p["notes"]}
+
+    return {"stops": list(VISUAL_INTERVALS), "busy": busy, "price": price,
+            "clips": {c: {"got": look_got(Path(c).stem), "interval_s": clip_look_interval(c)} for c in clips}}
+
+
 def assist_state(payload: dict | None = None) -> dict:
     """What an op is checked against: the cut, its clips' lengths, the sequence's
     markers, In / Out, tracks, V2+ clips and transitions, the looks and the presets."""
@@ -18532,6 +18549,10 @@ def assist_state(payload: dict | None = None) -> dict:
     looks = [k for k, v in looks_library().items() if v.get("kind") != "broken"]
     st = actionsmod.state_from(payload, looks=looks, presets=presets,
                                 tracks=list_assets().get("music") or [])
+    try:
+        st["relook"] = relook_state()
+    except Exception as exc:  # noqa: BLE001 — an index that cannot be read costs the AI its relook, never the ask
+        print(f"  !! assist relook: {exc}", flush=True)
     try:
         st["changes"] = [c for c in reversed(assist_ledger(assist_cut())) if c["status"] == "in"]
     except Exception as exc:  # noqa: BLE001 — a ledger that cannot be read costs the AI its take_back, never the ask
@@ -18719,6 +18740,9 @@ def _turn_text(rec: dict, plan_state: Callable[[str], str] | None = None) -> str
         if ans:
             out.append(f"  The editor accepted edits {[i + 1 for i in ans.get('accepted') or []] or 'none'}"
                        f" and rejected {[i + 1 for i in ans.get('rejected') or []] or 'none'}.")
+            ops_ = res.get("ops") or []
+            if any(i < len(ops_) and (ops_[i] or {}).get("op") == "relook" for i in ans.get("accepted") or []):
+                out.append("  Started a closer look at the footage (the Index's look job); the cut did not change.")
         else:
             out.append("  The editor had not answered it when the next ask came (it may still be waiting).")
     elif kind == "plan":
@@ -19198,8 +19222,12 @@ async def api_assist_answer(job: str, request: Request) -> JSONResponse:
     if acc and body.get("label"):
         rec["answer"]["label"] = str(body["label"])
     _assist_write(job, rec)
-    if acc and rec.get("cut") == assist_cut():          # the change joins the cut's complete ledger
+    res0 = rec.get("result") or {}
+    # a closer look is not a change to the cut: it never joins the ledger (the conversation says it)
+    edits = [i for i in acc if i < len(res0.get("ops") or []) and (res0["ops"][i] or {}).get("op") != "relook"]
+    if edits and rec.get("cut") == assist_cut():          # the change joins the cut's complete ledger
         res = rec.get("result") or {}
+        acc = edits
         taken = [(res.get("ops") or [])[i] for i in acc if i < len(res.get("ops") or [])]
         back = next((o.get("n") for o in taken if isinstance(o, dict) and o.get("op") == "take_back"), 0)
         lines = [x for i, x in enumerate(res.get("lines") or []) if i in acc]
