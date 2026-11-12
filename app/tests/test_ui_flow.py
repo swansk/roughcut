@@ -642,7 +642,7 @@ def test_a_colour_proposal_reads_as_words_and_accept_writes_the_grade(page, live
         assert page.evaluate("JSON.stringify(segs)") == before
         # one undo entry, and it takes the grade back (INTAKE M16 I16.4: colour rides
         # the undo stack now) — the toast says so rather than "the inspector", gone
-        assert page.locator("#toast").inner_text() == "colour applied — Ctrl+Z undoes it"
+        assert page.locator("#toast").inner_text() == "Colour accepted · Ctrl+Z undoes it"
         page.evaluate("document.activeElement && document.activeElement.blur()")
         page.keyboard.press("Control+z")
         deadline = time.time() + 10

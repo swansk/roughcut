@@ -194,7 +194,7 @@ def test_a_waiting_first_cut_opens_on_reload_as_an_edit(browser, live_server, pr
         assert pg.locator(f"{GHOST} .lbl").count() == 0
         head = pg.locator("#tl .tl-ghead")
         assert head.is_visible() and "Proposal" in head.inner_text()
-        assert "5 of 5" in head.inner_text()
+        assert "5 shots" in head.inner_text()   # a first cut: its count and length (wave 28: no "5 of 5 ✓")
         hb = _box(pg, "#tl .tl-ghead")
         first = _box(pg, f"{GHOST} .ghost")
         assert hb["x"] + hb["width"] <= first["x"], (hb, first)
@@ -903,8 +903,9 @@ def test_a_real_length_rerun_shows_five_rows(browser, live_server, project):
         pg.wait_for_function("!document.getElementById('ws').classList.contains('ptall')", timeout=3000)
         pg.evaluate("dock.open('ask')")
         pg.wait_for_function("document.getElementById('ws').classList.contains('ptall')", timeout=3000)
-        # a sequence with shots: the keys drive the cut, as before (the proposal is not theirs)
-        assert pg.evaluate("rcProposalPlayer.ready()") is False
+        # a sequence with shots: while the proposal waits, the transport keys play IT (wave 28
+        # PROPOSE: Karl pressed Play and watched his old cut)
+        assert pg.evaluate("rcProposalPlayer.ready()") is True
         # a check saved before the word-aware trim, cut 200 characters into a word, is
         # shown to its last whole word
         legacy = ("Check the opening shot: the skier turns toward the camera and it is the only face "

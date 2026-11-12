@@ -369,7 +369,7 @@ def test_a_pending_proposal_is_a_ghost_lane_you_can_play_either_side_of(page):
         # speech — so both wear `trimmed`; the order verdict is what matters here)
         assert classes[0].startswith("ghost same"), classes
         assert classes[1].startswith("ghost moved"), classes
-        assert classes[2] == "ghost added", classes
+        assert classes[2] == "ghost added grew", classes   # wave 28: a new shot is marked as one
         # aligned by the proposal's own film time
         assert left(page, f"{ghost} .ghost", 0) == pytest.approx(x_of(page, 0), abs=0.5)
         assert left(page, f"{ghost} .ghost", 1) == pytest.approx(
@@ -394,7 +394,8 @@ def test_a_pending_proposal_is_a_ghost_lane_you_can_play_either_side_of(page):
         assert names == page.evaluate(
             "pendingPlan.segments.map(s => tl.blockName(s, P.clips[s.clip] || null))"), names
         assert names == ["CLIP_B", "CLIP_A", "CLIP_C"], names
-        assert page.eval_on_selector_all(f"{ghost} .ghost .dur", "els => els.map(e => e.textContent)") == ["", "", ""]
+        # the badge is what the proposal does to the shot (wave 28 PROPOSE): the added one is "new"
+        assert page.eval_on_selector_all(f"{ghost} .ghost .dur", "els => els.map(e => e.textContent)")[2] == "new"
 
         # click the added ghost: the monitor is on CLIP_C at 0.5 s, and the cut is not playing
         page.locator(f"{ghost} .ghost").nth(2).click()

@@ -2999,6 +2999,12 @@ function toggleCut() {
     paintTransport();
     return;
   }
+  // (wave 28 PROPOSE) a proposal waiting: ▶ Play plays it, from the playhead
+  if (proposalPlayer.ready()) {
+    if (!proposalPlayer.play()) toast('the proposal is still being drawn — try again');
+    paintTransport();
+    return;
+  }
   playFrom(sel);
 }
 
@@ -3663,7 +3669,8 @@ function paintTotal() {
   const el = $('#total');
   if (!el) return;
   const g = window.tlLanes && typeof tlLanes.ghost === 'function' ? tlLanes.ghost() : null;
-  const t = !segs.length && pendingPlan && g && g.total > 0 ? g.total : total();
+  // (wave 28 PROPOSE) the proposal's length while one waits on any sequence: it is what the Program plays
+  const t = pendingPlan && g && g.total > 0 && g.plan === pendingPlan ? g.total : total();
   const s = tcOf(t);
   if (el.textContent !== s) el.textContent = s;
 }
@@ -5722,6 +5729,13 @@ const PROPOSAL_CSS = `
 #proposal .pbtns #acceptProposal { border-color: var(--accent); }
 #proposal .pbtns #rejectProposal { margin-left: auto; }
 #proposal h2 { display: inline-block; margin: 0; white-space: nowrap; line-height: 17px; }
+/* (wave 28 PROPOSE) what it was asked for, and when; what it changes, in one line; the Program's tag */
+#proposal .pasked { font-size: 11px; line-height: 15px; margin: 1px 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#proposal .pasked.old { color: var(--warn); }
+#proposal .pchange { font-size: 13px; line-height: 18px; font-weight: 600; color: var(--text); margin: 0 0 6px; }
+#progTag { margin-left: 8px; padding: 0 6px; border-radius: 3px; font-size: 11px; line-height: 16px; color: #111;
+  background: var(--warn); white-space: nowrap; }
+#progTag[hidden] { display: none; }
 #askFold { display: none; width: 100%; text-align: left; background: transparent; color: var(--dim);
   border: 1px solid var(--line); border-radius: 3px; padding: 3px 8px; margin: 0 0 8px; font-size: 11.5px;
   white-space: nowrap; overflow: hidden; }
@@ -6114,6 +6128,8 @@ function showProposal(plan) {
   const head = plan.unchanged
     ? `the cut unchanged — ${segs.length} shots ${fmt(oldTotal)}; only the colour changes`
     : `${segs.length} shots ${fmt(oldTotal)} → ${plan.segments.length} shots ${fmt(newTotal)}`;
+  paintAsked(plan);
+  paintProgramTag(true);
   const askSec = $('#proposal').closest('section[data-tool]');
   if (askSec) askSec.classList.toggle('nocut', !segs.length);
   $('#proposal').style.display = 'block';
@@ -6151,9 +6167,78 @@ function showProposal(plan) {
     playProposedShot(k);
   };
   paintReview();
+  paintChangeLine(plan);
+  paintTotal();
   if (!segs.length) syncPlayer();               // a first cut plays from its ghost lane
   if (window.dock) dock.reveal('#proposal');
   if (window.dock) dock.badge('ask', 0);
+}
+
+/* (wave 28 PROPOSE) What the proposal changes, in one line a person reads at a glance — "14
+ * shots longer · 3 joined · 2:06 → 2:36" — the same words as the Proposal lane's name. */
+function proposalChange(plan) {
+  const L = window.tlLanes;
+  if (!plan || plan.unchanged || !segs.length || !L || !L.changeSummary) return null;
+  const sum = L.changeSummary(plan);
+  return sum ? { sum, words: L.changeWords(sum) } : null;
+}
+function paintChangeLine(plan) {
+  let el = $('#proposalChange');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'proposalChange';
+    el.className = 'pchange';
+    el.dataset.testid = 'proposal-change';
+    const after = $('#proposal .pbtns');
+    if (!after) return;
+    after.insertAdjacentElement('afterend', el);
+  }
+  const c = proposalChange(plan);
+  el.hidden = !c;
+  el.textContent = c ? c.words : '';
+}
+
+/* (wave 28 PROPOSE) What the proposal was asked for and when, under its title: a proposal left
+ * waiting for hours (Karl's "Re-run the first pass", 3 h old) read as the answer to the ask he had
+ * just typed. From the record (`asked_at`, `asked_note`), else filled in when /api/asks/{job} answers. */
+function paintAsked(plan) {
+  let el = $('#proposalAsked');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'proposalAsked';
+    el.className = 'pasked hint';
+    el.dataset.testid = 'proposal-asked';
+    const h = $('#proposal h2');
+    if (!h) return;
+    h.insertAdjacentElement('afterend', el);
+  }
+  const at = plan && Number(plan.asked_at);
+  const note = plan && String(plan.asked_note || '').split('\n⟦')[0].trim();
+  if (!at && !note) { el.hidden = true; el.textContent = ''; return; }
+  const age = at ? Date.now() / 1000 - at : 0;
+  const what = note ? `“${note.length > 90 ? `${note.slice(0, 90)}…` : note}”` : '';
+  el.hidden = false;
+  el.classList.toggle('old', age > 30 * 60);
+  el.textContent = `${at ? `asked ${ago(age)}` : 'asked'}${what ? `: ${what}` : ''}`;
+  el.title = note ? `what this proposal answers: ${note}` : '';
+}
+
+/* (wave 28 PROPOSE) The Program's title says when it shows the proposal, not the cut. */
+function paintProgramTag(on) {
+  const t = $('#progTitle');
+  if (!t) return;
+  let tag = $('#progTag');
+  if (!tag) {
+    tag = document.createElement('span');
+    tag.id = 'progTag';
+    tag.className = 'progtag';
+    tag.dataset.testid = 'program-proposal-tag';
+    tag.textContent = 'proposal — not accepted yet';
+    tag.title = 'Play, Space and the playhead show the proposed cut until you Accept or Discard it';
+    const lbl = t.querySelector('.lbl');
+    (lbl || t).insertAdjacentElement('afterend', tag);
+  }
+  tag.hidden = !on;
 }
 
 /* The per-shot verdicts, in the panel: each row's ✓ / ✗, and Accept says what it takes
@@ -6214,7 +6299,9 @@ window.rcBoard = Object.freeze({
  * when that shot is the one on the monitor — and from the top once it has played out. */
 const proposalPlayer = {
   on: false,
-  ready() { return !!(pendingPlan && !segs.length && window.tlLanes && tlLanes.ghost && tlLanes.ghost()); },
+  // (wave 28 PROPOSE) on any sequence, not only an empty one: while a proposal waits, the
+  // Program's Play, Space and L play it — Karl pressed Play and watched his old cut
+  ready() { return !!(pendingPlan && window.tlLanes && tlLanes.ghost && tlLanes.ghost()); },
   playing() {
     const v = liveVideo();
     const ranging = window.tlLanes && typeof tlLanes.running === 'function' && tlLanes.running();
@@ -6296,7 +6383,8 @@ async function offerLastProposal() {
   const { record, pending } = await (await fetch('/api/asks/latest')).json();
   if (!record || !pending || !record.plan || !Array.isArray(record.plan.segments)) return;
   if (pendingPlan) return;                        // an Ask that landed first is up already
-  showProposal(record.plan);
+  showProposal({ ...record.plan, job: record.plan.job || record.job,
+                 asked_at: record.created, asked_note: record.note });
 }
 
 /* A four-minute Ask outlives a reload, and the job lives on the server, so the page
@@ -6422,6 +6510,8 @@ function acceptProposal(everything) {
   const r = everything !== true && cutToo && window.tlLanes && tlLanes.reviewed
     ? tlLanes.reviewed(pendingPlan) : null;
   const partial = !!(r && r.rejected);
+  // (wave 28 PROPOSE) what it changed, counted against the cut it replaces, for the line after
+  const change = cutToo && !partial ? proposalChange(pendingPlan) : null;
   // Segments and colour in the one save below (INTAKE I10.5), and in one undo entry:
   // the colour block rides every entry beside the cut (tl's `extra` hook, INTAKE M16
   // I16.4), so ⌘Z takes back what the proposal changed — the cut, the grade, or both.
@@ -6437,6 +6527,7 @@ function acceptProposal(everything) {
   if (window.dock) dock.badge('ask', 0);
   proposalAnswered('accept');
   render();
+  proposalDown();
   // Straight to disk (a 16-shot cut is not "in progress"), as ONE save: pushUndo's commit
   // runs on the microtask queued above and touches the 700 ms autosave; this microtask
   // runs after it and saves now, clearing that timer (wave 5, SAVE: it used to save twice,
@@ -6458,10 +6549,27 @@ function acceptProposal(everything) {
     };
     save().then(answer, answer);
   });
-  toast(partial ? `applied ${r.accepted} of ${r.total} shots${graded ? ' and the colour' : ''} — undo with ${undoKey()}`
-    : !graded ? `applied — undo with ${undoKey()}`
-      : cutToo ? `applied, cut and colour — ${undoKey()} undoes both`
-        : `colour applied — ${undoKey()} undoes it`);
+  // (wave 28 PROPOSE) one line that says what happened, the new length and the way back — in a
+  // toast and, until the next ask, under the Assistant's Ask button
+  const said = partial ? `Accepted ${r.accepted} of ${r.total} shots${graded ? ' and the colour' : ''} · now ${clock(total())} · ${undoKey()} undoes`
+    : change ? `Accepted · ${tlLanes.changeWords(change.sum, { now: true })}${graded ? ' · and the colour' : ''} · ${undoKey()} undoes`
+      : !graded ? `Accepted · now ${clock(total())} · ${undoKey()} undoes`
+        : cutToo ? `Accepted, cut and colour · now ${clock(total())} · ${undoKey()} undoes both`
+          : `Colour accepted · ${undoKey()} undoes it`;
+  toast(said, 9000);
+  const st = $('#askState');
+  if (st) st.textContent = said;
+}
+
+/* (wave 28 PROPOSE) The proposal was answered: its lane, strikes and name come off the timeline
+ * now, the Program is the cut's again (its title, its length, its line) — whatever the lanes'
+ * own redraw is doing. */
+function proposalDown() {
+  if (window.tlLanes && typeof tlLanes.endProposal === 'function') tlLanes.endProposal();
+  paintProgramTag(false);
+  paintTotal();
+  paintTransport();
+  monitorCatchUp(true);          // the picture is the cut's frame under the playhead, not the proposal's
 }
 
 /* ▶ Play it (INTAKE M16 I16.4): the proposed cut plays in the monitor from its ghost
@@ -6483,6 +6591,7 @@ function setProposalAside() {
   $('#lastAsk').style.display = 'none';      // answered: not offered again
   if (window.dock) dock.badge('ask', 0);
   if (window.tlLanes && tlLanes.clearGhost) tlLanes.clearGhost();
+  proposalDown();
   proposalAnswered('discard');
 }
 
@@ -6519,7 +6628,7 @@ async function reopenProposal(job, opts = {}) {
   }
   const plan = d.record && d.record.plan;
   if (!plan || !Array.isArray(plan.segments)) { toast('that proposal has no shots to open', 5000); return false; }
-  showProposal({ ...plan, job });
+  showProposal({ ...plan, job, asked_at: d.record.created, asked_note: d.record.note });
   if (window.dock) dock.open('ask', { focus: false });
   if (!opts.quiet) toast('proposal back — Accept or Discard it');
   flowSoon();
@@ -6615,6 +6724,12 @@ async function checkStale(plan) {
   let d;
   try { d = await (await fetch(`/api/asks/${job}`, { cache: 'no-store' })).json(); } catch (e) { return; }
   if (!pendingPlan || pendingPlan.job !== job) return;
+  const rec = d.record || {};
+  if (!pendingPlan.asked_at && (rec.created || rec.note)) {
+    pendingPlan.asked_at = rec.created;
+    pendingPlan.asked_note = rec.note;
+    paintAsked(pendingPlan);
+  }
   if (d.same) { proposalStale = { same: true, labels: [], confirmed: true }; paintStale(); paintReview(); return; }
   if (!d.stale) return;
   const skew = (d.now || 0) - Date.now() / 1000;                    // the server's clock against this page's

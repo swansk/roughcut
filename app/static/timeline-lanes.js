@@ -208,6 +208,18 @@
 #tl .tl-over .strike.kept { border-style: dashed; background: none; }
 #tl .tl-over .strike.kept button.rv { color: var(--good); border-color: var(--good); }
 #tl .tl-over .strike.flagged { box-shadow: inset 0 -2px 0 var(--warn); }
+#tl .tl-over .strike .slbl { position: absolute; left: 3px; bottom: 3px; padding: 0 4px; border-radius: 2px;
+  font-size: 10px; line-height: 14px; color: #fff; background: var(--bad); white-space: nowrap; }
+#tl .tl-over .strike.joined { border: 1px dashed var(--warn); background: rgba(0, 0, 0, .35); }
+#tl .tl-over .strike.joined .slbl { color: #111; background: var(--warn); }
+#tl .tl-xlane[data-lane=ghost] .ghost.grew .dur { color: var(--good); font-weight: 600; }
+#tl .tl-xlane[data-lane=ghost] .ghost.shrank .dur { color: var(--warn); font-weight: 600; }
+#tl .tl-xlane[data-lane=ghost] .ghost.grew, #tl .tl-xlane[data-lane=ghost] .ghost.shrank { opacity: .92; }
+/* a bar along the top says it even where the shot is too narrow for its badge: green longer (or new), amber shorter */
+#tl .tl-xlane[data-lane=ghost] .ghost.grew::after, #tl .tl-xlane[data-lane=ghost] .ghost.shrank::after { content: '';
+  position: absolute; left: 0; right: 0; top: 0; height: 3px; z-index: 2; background: var(--good); pointer-events: none; }
+#tl .tl-xlane[data-lane=ghost] .ghost.shrank::after { background: var(--warn); }
+#tl .tl-ghead span { white-space: normal; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
 #tl .tl-picks { position: absolute; left: 0; right: 0; height: 0; pointer-events: none; z-index: 4; }
 #tl .tl-xlane[data-lane=ghost].in-v1 { z-index: 3; }
 /* under the name band (the label's 1 + 14 + 3 px inside the ghost's 1 px border, and a
@@ -247,16 +259,17 @@
     raf = requestAnimationFrame(() => { raf = 0; redraw(); });
   }
 
+  /* (wave 28 PROPOSE) Each part on its own: a part that throws is logged and the rest still
+   * draw. Karl's board after an Accept (2026-11-11) kept the whole pre-accept drawing — the
+   * Proposal lane with its ✓ / ✗, three red strikes over the new V1, the Program's
+   * "proposal · …" line — the picture of a redraw that no longer ran to its end. */
   function redraw() {
     if (!mounted || holdRedraw) return;
     const a = app();
     if (!a) return;
-    drawHeroes(a);
-    drawA1(a);
-    drawGhost(a);
-    drawTxGhosts();
-    drawPicks(a);
-    layout();
+    for (const part of [drawHeroes, drawA1, drawGhost, drawTxGhosts, drawPicks, layout]) {
+      try { part(a); } catch (err) { console.error('tlLanes redraw:', part.name, err); }
+    }
     seen = snapshot(a);
   }
 
@@ -455,6 +468,33 @@
     return true;
   }
 
+  /* (wave 28 PROPOSE) The proposal was answered (Accept, Discard): its lane, its strikes over
+   * V1, its arrows and its name come down now, the Program stops being the proposal's (its
+   * playback, its "proposal · …" line, the follow of the playhead), and the lanes redraw
+   * against the cut — not on the next animation frame or poll, which a held redraw (a drag
+   * whose end never came) or a part that threw would never reach. */
+  function endProposal() {
+    if (rangeOn || ghost) stopRange();
+    shown = null;
+    shownGen++;
+    ghost = null;
+    mode = 'cut';
+    rangeSrc = '';
+    holdRedraw = false;
+    dragActive = false;
+    if (el.ghost) { el.ghost.replaceChildren(); el.ghost.hidden = true; }
+    if (el.over) el.over.replaceChildren();
+    if (el.arrows) el.arrows.replaceChildren();
+    if (tl.el && tl.el.root) {
+      tl.el.root.classList.remove('tl-proposing');
+      if (tl.el.root.parentElement) tl.el.root.parentElement.classList.remove('tl-proposing');
+    }
+    try { paintGhostHead(null); } catch (err) { /* no head column */ }
+    redraw();
+    paintT();
+    return true;
+  }
+
   /* ------------------------------------------------------------ a proposed transition */
   /* `list`: `{kind, dur?, a, b}` centred on the edit between shots a and b, or
    * `{kind, dur?, id, edge: 'start' | 'end'}` against shot id's edge — the review's own
@@ -593,6 +633,59 @@
     });
     const removed = cur.map((c, k) => k).filter((k) => !used.has(k));
     return { plan, ghosts, removed, total: start };
+  }
+
+  /* (wave 28 PROPOSE) What a proposal does to the cut, counted, so a person reads it without
+   * reading the notes: which shots get longer or shorter, which are new, which of the cut's
+   * shots it joins into a longer one (the same clip, its range inside a proposed shot) or
+   * drops, and the length before and after. `joinedInto(plan, c)` is the proposed shot a
+   * dropped shot of the cut lives on in, or -1. */
+  const LEN_EPS = 0.05;                 // under this a shot's length has not changed
+  function joinedInto(plan, c) {
+    if (!plan || !c) return -1;
+    const len = Math.max(1e-6, c.out - c.in);
+    return plan.segments.findIndex((s) => s.clip === c.clip
+      && (Math.min(s.out, c.out) - Math.max(s.in, c.in)) / len >= 0.8);
+  }
+  function changeSummary(plan, m0) {
+    if (!plan || !Array.isArray(plan.segments)) return null;
+    const m = m0 || (ghost && ghost.plan === plan ? ghost : matchPlan(plan));
+    const cur = tl.state.segs;
+    const out = { longer: 0, shorter: 0, added: 0, moved: 0, joined: 0, removed: 0,
+                  was: tl.total(), now: m.total, wasShots: cur.length, shots: m.ghosts.length };
+    for (const g of m.ghosts) {
+      if (g.cur < 0) { out.added++; continue; }
+      const d = tl.dur(g.seg) - tl.dur(cur[g.cur]);
+      if (d > LEN_EPS) out.longer++;
+      else if (d < -LEN_EPS) out.shorter++;
+      if (g.cls === 'moved') out.moved++;
+    }
+    for (const k of m.removed) {
+      if (joinedInto(plan, cur[k]) >= 0) out.joined++; else out.removed++;
+    }
+    return out;
+  }
+  const mss = (t) => {
+    const r = Math.round(Math.max(0, t || 0));
+    return `${Math.floor(r / 60)}:${String(r % 60).padStart(2, '0')}`;
+  };
+  /* "14 shots longer · 3 joined · 2:06 → 2:36" — the first count says "shots", the rest do not */
+  function changeWords(sum, opts = {}) {
+    if (!sum) return '';
+    const parts = [];
+    for (const [n, w] of [[sum.longer, 'longer'], [sum.shorter, 'shorter'], [sum.added, 'new'],
+                          [sum.joined, 'joined'], [sum.removed, 'removed'], [sum.moved, 'moved']]) {
+      if (n) parts.push(parts.length ? `${n} ${w}` : `${n} ${n === 1 ? 'shot' : 'shots'} ${w}`);
+    }
+    if (!parts.length) parts.push('no shot changes');
+    if (opts.length !== false) parts.push(opts.now ? `now ${mss(sum.now)}` : `${mss(sum.was)} → ${mss(sum.now)}`);
+    return parts.join(' · ');
+  }
+  /* A proposed shot's change of length against the cut's shot it matches, as its badge says it */
+  function deltaWords(d) {
+    if (d == null) return 'new';
+    if (Math.abs(d) <= LEN_EPS) return '';
+    return `${d > 0 ? '+' : '−'}${Math.abs(d).toFixed(1)}s`;
   }
 
   /* ------------------------------------------------------------ per-shot review */
@@ -785,8 +878,13 @@
     if (!plan || !ghost) return;
     const n = ghost.ghosts.length;
     const rej = reviewable(plan) ? [...reviewOf(plan).rej].filter((k) => k < n).length : 0;
-    const info = reviewable(plan) ? `${n - rej} of ${n} ✓ · ${tl.fmt(ghost.total)}` : `${n} shots · ${tl.fmt(ghost.total)}`;
-    h.title = 'the proposed cut, under V1 — ✓ / ✗ each shot, then Accept in the Assistant';
+    // (wave 28 PROPOSE) what it changes, counted, and the length before → after; the ✓ count
+    // only once a shot is turned down (18 of 18 ✓ said nothing)
+    const sum = tl.state.segs.length ? changeSummary(plan, ghost) : null;
+    const info = (rej ? `${n - rej} of ${n} ✓ · ` : '')
+      + (sum ? changeWords(sum) : `${n} shots · ${mss(ghost.total)}`);
+    h.title = `the proposed cut, under V1${sum ? ` — ${changeWords(sum)}` : ''}`
+      + (reviewable(plan) ? '\n✓ / ✗ each shot, then Accept in the Assistant' : '');
     if (h.lastChild.textContent !== info) h.lastChild.textContent = info;
   }
 
@@ -874,7 +972,10 @@
       return;
     }
     const fresh = !ghost || ghost.plan !== plan;
-    if (fresh) mode = 'cut';
+    // (wave 28 PROPOSE) while a proposal waits the Program is the proposal's: Play, Space and
+    // a ruler click play and show the proposed film (Karl pressed Play and watched the old
+    // cut). An explicit list (an AI edit's preview card) leaves the Program on the cut.
+    if (fresh) mode = plan.explicit ? 'cut' : 'proposal';
     ghost = matchPlan(plan);
     // a first cut on an empty sequence: zoomed so the whole proposal is in view (the
     // redraw the zoom asks for finds the same plan and does not zoom again)
@@ -913,13 +1014,20 @@
       // like V1: a badge only when the shot is retimed; the length is the tooltip's.
       // The label is never cut to "C…" (verdict 7, punch 8): it is what fits.
       if (!fonts) { lane.appendChild(d); fonts = ghostFonts(d.querySelector('.name')); }
+      // (wave 28 PROPOSE) the badge says what the proposal does to this shot: "+4.2s" longer,
+      // "−1.0s" shorter, "new"; nothing when it is the cut's shot as it is
+      const was = g.cur >= 0 && cur[g.cur] ? tl.dur(cur[g.cur]) : null;
+      const delta = cur.length ? deltaWords(was == null ? null : dur - was) : '';
+      const badge = [delta, s === 1 ? '' : `${round2(s)}×`].filter(Boolean).join(' ');
       const lab = ghostLabel(tl.blockName(g.seg, a && a.P && a.P.clips ? a.P.clips[g.seg.clip] || null : null),
-                             s === 1 ? '' : `${round2(s)}×`, Math.max(3, dur * z),
+                             badge, Math.max(3, dur * z),
                              !!(f && f.flags.length), isGen(g.seg.clip), fonts);
       d.querySelector('.name').textContent = lab.name;
       d.querySelector('.dur').textContent = lab.badge;
+      if (delta) d.classList.add(delta === 'new' ? 'grew' : delta[0] === '+' ? 'grew' : 'shrank');
       d.title = `proposal ${g.k + 1}. ${nameOf(g.seg.clip)} ${tl.fmt(g.seg.in)}–${tl.fmt(g.seg.out)} (${dur.toFixed(1)}s`
-        + `${s === 1 ? '' : ` at ${round2(s)}×`}) · ${what}${f && f.words ? ` · ${f.words}` : ''}`
+        + `${s === 1 ? '' : ` at ${round2(s)}×`}) · ${what}`
+        + `${was != null && Math.abs(dur - was) > LEN_EPS ? ` · ${dur > was ? 'longer' : 'shorter'} by ${Math.abs(dur - was).toFixed(1)}s (was ${was.toFixed(1)}s)` : ''}${f && f.words ? ` · ${f.words}` : ''}`
         + (g.seg.why ? `\nwhy: ${g.seg.why}` : '')
         + (g.seg.polished_from ? `\npolished from ${tl.fmt(g.seg.polished_from[0])}–${tl.fmt(g.seg.polished_from[1])}${g.seg.polish_why ? `: ${g.seg.polish_why}` : ''}` : '')
         + (f && f.flags.length ? `\n⚠ ${f.flags.join('\n⚠ ')}` : '')
@@ -958,7 +1066,20 @@
       s.style.left = px(tl.timeToX(tl.filmStart(c.id)));
       s.style.width = px(Math.max(3, tl.dur(c) * z));
       const flags = canReview ? removedFlags(plan, c) : [];
-      s.title = `${stemOf(c.clip)} — removed by the proposal${flags.length ? `\n⚠ ${flags.join('\n⚠ ')}` : ''}`;
+      // (wave 28 PROPOSE) a red diagonal alone did not say "this shot goes": the strike says
+      // it in a word — "joined" when the shot lives on inside a longer proposed shot of the
+      // same clip (the proposal ran two takes together), else "removed"
+      const into = joinedInto(plan, c);
+      if (into >= 0) s.classList.add('joined');
+      const sw = tl.dur(c) * z;
+      if (sw >= 34) {
+        const w = document.createElement('span');
+        w.className = 'slbl';
+        w.textContent = into >= 0 ? 'joined' : 'removed';
+        s.appendChild(w);
+      }
+      s.title = `${stemOf(c.clip)} — ${into >= 0 ? `joined into proposed shot ${into + 1} (one longer shot of the same clip)` : 'removed by the proposal'}`
+        + `${flags.length ? `\n⚠ ${flags.join('\n⚠ ')}` : ''}`;
       if (canReview) {
         s.dataset.key = curKey(c, k);
         if (flags.length) s.classList.add('flagged');
@@ -981,6 +1102,12 @@
     el.arrows.setAttribute('height', String(laneH + H.gap + lane.h));
     if (!el.arrows.querySelector('defs')) el.arrows.appendChild(arrowDefs());
     drawGhostPicks(a, plan);
+    // ... and the Program shows the proposal's frame under the playhead at once
+    if (fresh && !plan.explicit && cur.length && a && a.player && !a.player.playing) {
+      const t = tl.state.playhead || 0;
+      const at = ghostAt(t);
+      if (at) cueRangeAt(at.seg, at.start, Math.min(t, ghost.total));
+    }
     if (canReview) {
       paintVerdicts();
       if (hadK != null) focusGhost(hadK);
@@ -1213,7 +1340,8 @@
 
   /* The whole proposal, shot after shot, from its k-th. */
   function playPlan(k = 0) {
-    if (!ghost || k >= ghost.ghosts.length) { mode = 'cut'; paintMode(app()); return false; }
+    // played out: the Program stays the proposal's while it waits (wave 28 PROPOSE)
+    if (!ghost || k >= ghost.ghosts.length) { mode = ghost && !ghost.plan.explicit ? 'proposal' : 'cut'; paintMode(app()); return false; }
     mode = 'proposal';
     paintMode(null);
     const g = ghost.ghosts[k];
@@ -1626,6 +1754,18 @@
       if (box) box.addEventListener('dragstart', onDragStart);
     }
     el.bin.addEventListener('pointerdown', holdWhilePressed);
+    // (wave 28 PROPOSE) a drag whose source row was rebuilt mid-drag never gets its dragend
+    // (Chromium fires none on a detached node), and the lanes held still for good. No mouse
+    // event fires during a native drag: one with no button down means the drag is over.
+    const release = (e) => {
+      if (!holdRedraw || (e && e.buttons)) return;
+      holdRedraw = false;
+      dragActive = false;
+      schedule();
+    };
+    document.addEventListener('mousemove', release, { passive: true });
+    document.addEventListener('dragend', () => release(null), true);
+    document.addEventListener('drop', () => setTimeout(() => release(null), 0), true);
     markDraggable();
     if (typeof MutationObserver !== 'undefined') {
       const mo = new MutationObserver(() => { markDraggable(); schedule(); });
@@ -1667,6 +1807,7 @@
     showGhost, clearGhost, showTransitions, clearTransitions,
     transitions: () => txShown.map((x) => ({ ...x })),
     setVerdict, verdict, keepRemoved, reviewed, shotFacts,
+    endProposal, changeSummary, changeWords,
     // a ghost's label at a width (tests): {name, badge}, what drawGhost writes
     ghostLabel: (name, width, badge = '', flagged = false) => ghostLabel(name, badge, width, flagged, false,
       GHOST_FONT.name ? GHOST_FONT : { name: `normal 400 11px ${getComputedStyle(el.ghost || document.body).fontFamily}`,

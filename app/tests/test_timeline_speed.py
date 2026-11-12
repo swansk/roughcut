@@ -421,7 +421,7 @@ def test_show_ghost_draws_a_proposed_cut_with_new_ids_as_added_and_play_plan_pla
     classes = page.evaluate(
         f"[...document.querySelectorAll('{ghost} .ghost')].map(g => g.className)")
     assert classes[0].startswith("ghost same"), classes
-    assert classes[1] == "ghost added", classes
+    assert classes[1] == "ghost added grew", classes   # wave 28: a new shot is marked as one
     assert page.evaluate(f"document.querySelectorAll('{ghost} .ghost')[1].dataset.id") == "new:1"
     assert left(page, f"{ghost} .ghost", 0) == pytest.approx(x_of(page, 0), abs=0.5)
     assert width(page, f"{ghost} .ghost", 0) == pytest.approx(2.0 * zoom, abs=0.5)
