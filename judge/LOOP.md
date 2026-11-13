@@ -830,3 +830,14 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
   cut 0, a fresh re-run 0 at 2:16). Quick gate GREEN on `70bac6a`; 8766 restarted on it, open on Copper. Open: the
   header's "Next: Make the film" and Selects' "none kept yet" read wrong after an accept; no way to play the old cut
   while a proposal waits; laughs the recogniser did not write down are invisible to the rule.
+
+- **2026-11-13 ~11:00 (wave 28 gate).** Full gate on `3a312b9` RED with 11 functional tests broken by wave 28 that the
+  quick gate and the lanes' own runs missed; lane GATEFIX (`59591d2`): three real bugs in the sentence rule (a
+  tightening trim came back longer; times the editor typed were moved; a re-run's moved shot lost its id and grade),
+  eight stale tests. Full gate on `59591d2`: 2617 passed, journey / boot / understanding green, RED only on the
+  playback-timing family in the software browser: the 59.94 test (43–52 fps against 55; it has skipped on load or
+  failed in every full gate since Nov 9, so `e0c0501`'s "green" was a skip), a half-speed cut-out frame test
+  (intermittent alone), and two that pass alone. `test_index_panel_ui` rerun test timed out in the full run, passes
+  alone. NOT investigated: whether the 54 → 47 fps drop between Nov 9 and Nov 11 is a real slowdown (wave 23–25
+  colour work) and whether any of it shows in a real Chrome with a GPU. foxtrot rebooted 07:31; `roughcut-redesign`
+  is not enabled at boot, started by hand.
