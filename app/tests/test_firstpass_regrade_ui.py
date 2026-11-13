@@ -82,13 +82,29 @@ def model():
     inference.set_backend(None)
 
 
+@pytest.fixture
+def no_line_rule(monkeypatch):
+    """The line rule (roughcut/sentences.py) switched off, as test_firstpass's `fp` does.
+    The suite's fake transcript is one quick run-on exchange in every clip, so the rule
+    grows each first-pass shot to its clip's end and moves the re-run's "later stretch of
+    CLIP_C" to the last line, inside the old shot 3: the diff then reads it as shot 3
+    trimmed, not a new shot. What this test is about is the grade against a re-run's locks;
+    the rule's own path through a re-run is test_firstpass's
+    `test_a_rerun_finishes_every_line_but_the_locked_one`."""
+    from roughcut import sentences
+    monkeypatch.setattr(
+        sentences, "complete_lines",
+        lambda segs, clips, **kw: ([dict(x, _src=i) if kw.get("keep_src") else dict(x)
+                                    for i, x in enumerate(segs)], []))
+
+
 def _disk(live) -> dict:
     return httpx.get(live + "/api/project", timeout=20).json()
 
 
-def _ai_accept(pg, model, ops) -> None:
-    """The AI prompt's answer, reviewed in the Assistant and accepted as the editor does
-    it (Accept all), then on disk."""
+def _ai_accept(pg, model, ops, text: str = ASK) -> None:
+    """The AI prompt's answer to the editor's `text`, reviewed in the Assistant and accepted
+    as the editor does it (Accept all), then on disk."""
     model.ops = ops
     res = pg.evaluate("""async (text) => {
       await roughcutFlush();
@@ -100,7 +116,7 @@ def _ai_accept(pg, model, ops) -> None:
         if (d.status !== 'running') return d;
         await new Promise((z) => setTimeout(z, 50));
       }
-    }""", ASK)
+    }""", text)
     assert res["status"] == "done", res
     pg.evaluate("(r) => rcActions.review(r)", res)
     pg.wait_for_selector("[data-testid=ai-review] [data-testid=ai-op-row]")
@@ -115,7 +131,7 @@ def _ai_accept(pg, model, ops) -> None:
     }""")
 
 
-def test_an_ai_color_match_over_the_film_leaves_the_rerun_free_to_recut(page, live, model):
+def test_an_ai_color_match_over_the_film_leaves_the_rerun_free_to_recut(no_line_rule, page, live, model):
     import server
 
     pg = page
@@ -212,8 +228,11 @@ def test_an_accepted_ai_trim_and_speed_change_read_edited_by_the_ai(page, live, 
     a, b, c = (s["id"] for s in segs)
     pg.keyboard.press("Escape")
     # ---- the AI trims shot 2 and slows shot 3; the editor accepts both in the review
+    # (the editor types the 2.75: a number they gave is theirs, never moved to a sentence
+    # edge — assist.finish_op_lines; a model-chosen in inside a line would be)
     _ai_accept(pg, model, [{"op": "trim", "id": b, "in": 2.75},
-                           {"op": "speed", "id": c, "rate": 0.5}])
+                           {"op": "speed", "id": c, "rate": 0.5}],
+               text="Trim shot 2 to start at 2.75 and slow shot 3 to half speed")
     disk = {x["id"]: x for x in _disk(live)["segments"]}
     assert disk[b]["in"] == 2.75 and disk[c].get("speed") == 0.5, disk
     # ---- and a hand trim on shot 1

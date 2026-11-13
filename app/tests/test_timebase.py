@@ -540,16 +540,20 @@ def test_hand_trims_an_ai_op_and_the_export_are_whole_sequence_frames(browser, l
             {"op": "trim", "id": "s2", "in": 4.2222},
             {"op": "slip", "id": "s1", "by": 0.1111},
             {"op": "speed", "id": "s2", "rate": 0.7}]}
-        res = p.js("""async () => {
+        # the editor's own numbers, off any grid (a number the editor types is never moved to
+        # a sentence edge, assist.finish_op_lines): they land on whole 29.97 frames all the same
+        typed = ("insert CLIP_60 from 3.123 to 4.777 at 0.5, trim shot 2 to start at 4.2222, "
+                 "slip shot 1 by 0.1111 and play shot 2 at 0.7")
+        res = p.js("""async (TYPED) => {
           await roughcutFlush();
           const r = await (await fetch('/api/assist', {method: 'POST', headers: {'content-type': 'application/json'},
-            body: JSON.stringify({text: 'tighten it', scope: {kind: 'sequence', playhead: tl.state.playhead}})})).json();
+            body: JSON.stringify({text: TYPED, scope: {kind: 'sequence', playhead: tl.state.playhead}})})).json();
           for (;;) {
             const d = await (await fetch('/api/assist/' + r.job)).json();
             if (d.status !== 'running') return d;
             await new Promise((z) => setTimeout(z, 50));
           }
-        }""")
+        }""", typed)
         assert res["status"] == "done", res
         p.js("(r) => rcActions.review(r)", res)
         p.pg.wait_for_selector("[data-testid=ai-accept-all]")

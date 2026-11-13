@@ -28,7 +28,7 @@ sys.path.insert(0, str(ROOT))
 
 from roughcut import inference  # noqa: E402
 
-from test_firstpass import fp, model, _wait, _wait_indexes  # noqa: E402,F401
+from test_firstpass import fp, fp_lines, model, _wait, _wait_indexes  # noqa: E402,F401
 from test_index_panel import stub_looker  # noqa: E402
 from test_server import _fresh  # noqa: E402
 

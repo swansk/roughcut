@@ -606,6 +606,25 @@ def carry_ids(new: list[dict], current: list[dict]) -> list[dict]:
     return out
 
 
+def rekey_moved(segments: list[dict], current: list[dict]) -> list[dict]:
+    """After the line rule moved cut points: a shot that came out with no id but now
+    continues a shot of the cut no other shot claims takes that shot's id (`carry_ids`'
+    rule). The model's 2.5–4.0, finished to the line, can land on the cut's own 4.75–6.0:
+    the diff calls it kept, and without its id it came back a new shot that had lost its
+    grade and its colour match. (A re-run's locked shots are left out of `current`: the
+    locks put them back themselves.)"""
+    taken = {s.get("id") for s in segments if s.get("id")}
+    free = [c for c in current if c.get("id") and c["id"] not in taken]
+    idless = [i for i, s in enumerate(segments) if not s.get("id")]
+    if not free or not idless:
+        return segments
+    got = carry_ids([segments[i] for i in idless], free)
+    out = list(segments)
+    for i, s in zip(idless, got):
+        out[i] = s
+    return out
+
+
 LOCKED_MARK = "[LOCKED — the editor's own work: keep exactly]"
 
 LOCKED_GUIDANCE = """\
@@ -1438,7 +1457,8 @@ def polish_kept_alone(plan: dict, clips: dict[str, dict],
     keep = {before[i].get("id") for i in echoed if before[i].get("id") in set(hand or ())}
     # a re-run's locked shots come back whatever the plan says: nothing may grow into them
     fixed = [c for c in cur if c.get("id") in set(locked or ())]
-    after = polish(before, clips, keep=keep, echoed=echoed, fixed=fixed)
+    after = rekey_moved(polish(before, clips, keep=keep, echoed=echoed, fixed=fixed),
+                        [c for c in cur if c.get("id") not in set(locked or ())])
     out = dict(plan)
     out["segments"] = after
     if any(sentences.is_line_fix(s.get("polish_why", "")) for s in after):
