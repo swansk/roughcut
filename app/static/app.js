@@ -4886,7 +4886,7 @@ function renderKept(lib) {
     const nKeeps = every.length - picked.length;
     const said = $('#libHint').textContent;
     $('#libHint').textContent = `${said ? `${said} · ` : ''}${picked.length} pick${picked.length === 1 ? '' : 's'} from the first pass`
-      + ` · ${nKeeps ? `${nKeeps} kept by you` : 'none kept yet'} · ✓ keep, ✗ reject, right-click for more`;
+      + `${nKeeps ? ` · ${nKeeps} kept by you` : ''} · ✓ keep, ✗ reject, right-click for more`;
   }
   lib.innerHTML = '';
   // one list: the junk rows first, then the keeps in the bin's order or the column's

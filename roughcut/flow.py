@@ -531,7 +531,7 @@ def render_stage(f: dict) -> dict:
         return _stage("render", "done", "The newest render is this cut", counts=counts)
     # Next presses the film tool's quick look itself: free, on the board, the button
     # the board marks for this stage (M16 C2) — never the final 4K, which is Karl's.
-    sentence = "Make the film — quick look"
+    sentence = "Render this cut — quick look"
     if count:
         summary = ("A render of this cut exists, but newer renders differ"
                    if r.get("matches") else

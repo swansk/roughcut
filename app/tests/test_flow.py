@@ -254,7 +254,7 @@ def test_a_render_goes_stale_after_an_edit():
     # a quick look is free, so Next may press it: the film tool's button the board marks
     # for this stage (M16 C2 — the header's Render button is gone), in the film's words
     assert nxt["click"] == '[data-next-for~="render"]' and nxt["tool"] == "out"
-    assert nxt["sentence"] == "Make the film — quick look"
+    assert nxt["sentence"] == "Render this cut — quick look"
 
 
 def test_the_cut_says_where_it_sits_against_the_target():

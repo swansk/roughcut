@@ -260,7 +260,7 @@ def test_after_the_first_pass_selects_lists_its_5_picks_and_comma_inserts_row_2(
             assert "the first pass's pick · speech" in rows.nth(i).get_attribute("title")
         # the pass's verdicts are on these rows now: said in the hint, no link off the editor
         hint = pg.locator("#libHint")
-        assert "5 picks from the first pass · none kept yet · ✓ keep, ✗ reject" in hint.inner_text()
+        assert "5 picks from the first pass · ✓ keep, ✗ reject" in hint.inner_text()
         assert hint.locator("a[href]").count() == 0
         # the markers: one wherever a pick overlaps a shot of the cut, the why on hover
         assert pg.locator("#tl .tl-pick").count() == _overlapping(picks, _ranges(pg)) == 2
