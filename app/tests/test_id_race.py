@@ -254,7 +254,7 @@ def test_a_grade_set_right_after_a_drop_survives_a_reload_and_nothing_404s(live_
                                   "out": segs[-1]["out"], "why": "dropped"},
                                  {"clip": "CLIP_B.MP4", "in": 2.4, "out": 4.0, "why": "the reply"}],
                     "notes": "Opens on the hello, then the dropped shot and the reply."}
-            _waiting("id-race", plan)
+            _waiting("1dace0", plan)          # a job id as the server makes them (hex): /api/asks/{job} answers it
             pg.reload()
             _loaded(pg)
             pg.wait_for_selector("#proposal", state="visible", timeout=15000)

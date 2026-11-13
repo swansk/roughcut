@@ -207,14 +207,14 @@ def check_undo_title(title: str) -> str:
     return label
 
 
-def ai_then_hand(browser, url, project, ops, hand_js, *, extra=None):
-    """The AI's ops reviewed and accepted, against the same edit made by hand, each on a
-    fresh board on the same seed. Returns (ai, hand, seeded) normalised EDLs and checks
-    that one Ctrl+Z takes the AI's accept back whole."""
+def ai_then_hand(browser, url, project, ops, hand_js, *, extra=None, text="do it"):
+    """The AI's ops (its answer to the editor's `text`) reviewed and accepted, against the
+    same edit made by hand, each on a fresh board on the same seed. Returns (ai, hand,
+    seeded) normalised EDLs and checks that one Ctrl+Z takes the AI's accept back whole."""
     b = Board(browser, url, project)
     try:
         seeded = norm(b.settle())
-        res = b.ask(ops)
+        res = b.ask(ops, text=text)
         assert res["refused"] == [], res["refused"]
         b.review(res)
         assert b.page.locator("[data-testid=ai-op-row]").count() == len(ops)
@@ -267,7 +267,11 @@ def test_timeline_insert_overwrite_and_append(browser, live_server, project):
       tl.overwrite({clip: 'CLIP_B.MP4', in: 3, out: 4}, 5.0);           // Overwrite (.)
       tl.insert({clip: 'CLIP_A.MP4', in: 4, out: 5}, null);             // a drop past the end
     }"""
-    ai, h, _ = ai_then_hand(browser, live_server, project, ops, hand)
+    # the editor gives the seconds, so they are the editor's own cut points and stay where
+    # they are, like the hand's (assist.finish_op_lines); the model's own would finish lines
+    said = ("insert CLIP_C from 0 to 1 at 1, overwrite with CLIP_B 3 to 4 at 5, "
+            "and put CLIP_A 4 to 5 on the end")
+    ai, h, _ = ai_then_hand(browser, live_server, project, ops, hand, text=said)
     assert ai == h
     assert [s["clip"] for s in ai["segments"]][-1] == "CLIP_A.MP4"
 

@@ -130,7 +130,9 @@ def board(browser, live_server, project):
     """A fresh board on the seeded cut, no proposals, no undo history, a quiet model."""
     import server
     _seed(project)
-    for d in (server.STATE["asks"],):
+    # the prompt box's edit records too (Recent proposals lists them): another file's
+    # asks on the suite's shared work dir showed up here as seven more "edits" rows
+    for d in (server.STATE["asks"], server.assist_home()):
         for p in d.glob("*.json"):
             p.unlink()
     server.undo_path().unlink(missing_ok=True)

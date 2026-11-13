@@ -409,14 +409,22 @@ def test_a_pending_proposal_is_a_ghost_lane_you_can_play_either_side_of(page):
         assert page.evaluate("JSON.stringify(segs)") == before
         assert page.locator("#tl .blk").count() == 2
 
-        # ▶ Play it plays the proposal; the monitor's own ▶ plays the cut again
+        # ▶ Play it plays the proposal; the cut still plays from V1 (a click on a shot, Enter),
+        # and while it does the Program's tag and length are the cut's, not the proposal's
+        # (wave 28 PROPOSE made Play / Space / L the proposal's while one waits)
+        tag = page.locator("[data-testid=program-proposal-tag]")
         page.locator("#playProposal").click()
         page.wait_for_function("liveVideo().dataset.src.includes('CLIP_B')", timeout=10000)
         assert page.evaluate("tlLanes.mode()") == "proposal"
         assert not page.evaluate("player.playing")
-        page.evaluate("pauseCut(); playFrom(0)")
+        assert tag.inner_text() == "proposal — not accepted yet"
+        page.evaluate("pauseCut(); playFrom(0)")          # V1's click on shot 1
         page.wait_for_function("player.playing && player.idx === 0", timeout=10000)
+        assert tag.inner_text() == "the cut — a proposal waits"
+        assert page.locator("#playingWhat").inner_text().startswith("1/2 · ")
+        assert page.locator("#total").inner_text() == page.evaluate("tcOf(total())")
         page.evaluate("pauseCut()")
+        assert tag.inner_text() == "proposal — not accepted yet"
 
         # discard: the panel closes, the ghost lane goes, the cut is untouched
         page.locator("#rejectProposal").click()
@@ -424,8 +432,10 @@ def test_a_pending_proposal_is_a_ghost_lane_you_can_play_either_side_of(page):
         assert page.locator("#tl .tl-arrows line.arrow").count() == 0
         assert page.evaluate("JSON.stringify(segs)") == before
 
-        # and a proposal that drops a shot strikes it out on V1
-        page.evaluate("segs.push({clip: 'CLIP_C.MP4', in: 4.5, out: 5.5, why: 'gone soon'}); render()")
+        # and a proposal that drops a shot strikes it out on V1 (CLIP_C's first 0.4 s: the
+        # proposal's C, its line finished to the reply (sentences.py), runs 0.5–6.0 and
+        # would hold a later stretch of C — that shot is kept, not dropped)
+        page.evaluate("segs.push({clip: 'CLIP_C.MP4', in: 0.0, out: 0.4, why: 'gone soon'}); render()")
         page.evaluate("(n) => { ask({note: n}); }", note)
         page.wait_for_selector("#proposal:visible", timeout=30000)
         page.wait_for_function("document.querySelectorAll('#tl .tl-over .strike').length === 1", timeout=8000)

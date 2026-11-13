@@ -215,6 +215,56 @@ def test_assist_ops_land_on_sentence_edges_unless_tight():
     assert len(lines) == 2
 
 
+def test_a_number_the_editor_typed_is_theirs_and_stays():
+    """The rule is for cut points the model chose. "End shot 1 at 1.6" or "add A from 7 to
+    8" are the editor's own cut points, kept to the frame like a hand trim; the same ops
+    with the numbers the model's own ("tighten it") are finished to the line."""
+    state = {"segments": [{"id": "g1", "clip": "A.MP4", "in": 0.25, "out": 4.65}]}
+    ops = [{"op": "trim", "id": "g1", "out": 1.6},
+           {"op": "append", "clip": "A.MP4", "in": 7.0, "out": 8.0}]
+    got, lines = assist.finish_op_lines(ops, state, clips(),
+                                        "end shot 1 at 1.6 and add A from 7 to 8 seconds")
+    assert got[0]["out"] == 1.6 and (got[1]["in"], got[1]["out"]) == (7.0, 8.0) and lines == []
+    # one side typed, the other the model's: only the model's side moves
+    got, lines = assist.finish_op_lines(
+        [{"op": "append", "clip": "A.MP4", "in": 7.0, "out": 8.0}], state, clips(), "start it at 7")
+    assert got[0]["in"] == 7.0 and got[0]["out"] == 9.45 and len(lines) == 1
+    got, _ = assist.finish_op_lines(ops, state, clips(), "tighten it")
+    assert got[0]["out"] == 4.65 and (got[1]["in"], got[1]["out"]) == (5.75, 9.45)
+    # what counts as a typed time, and what counts something
+    assert assist.typed_seconds("trim shot 3 to 1.5 s, row 2 out at 0:12, on V1") == [1.5, 12.0]
+    assert assist.typed_seconds("insert 1:02.5 of CLIP_60, 4 seconds") == [62.5, 4.0]
+
+
+def test_a_tightening_never_comes_back_longer():
+    """"Tighten the intro" moved shot 1's in from 1.0 to 1.5, inside a line that starts at
+    0.5: finishing the line must not open the shot at 0.25, earlier than it was (a
+    tightening that made it longer). The line's edge is looked for inside the shot as it
+    was: the next line's start, or the asked point when there is none."""
+    state = {"segments": [{"id": "g1", "clip": "A.MP4", "in": 1.0, "out": 9.5},
+                          {"id": "g2", "clip": "A.MP4", "in": 1.0, "out": 2.8}]}
+    got, lines = assist.finish_op_lines([{"op": "trim", "id": "g1", "in": 2.0},
+                                         {"op": "trim", "id": "g2", "in": 1.5}], state, clips())
+    assert 1.0 < got[0]["in"] and got[0]["in"] == 3.35 and len(lines) == 1
+    assert got[1]["in"] == 1.5                         # no line starts inside: as asked
+    # a lengthening is free to reach back to the line's start
+    got, _ = assist.finish_op_lines([{"op": "trim", "id": "g1", "in": 0.9}], state, clips())
+    assert got[0]["in"] == 0.25
+
+
+def test_a_shot_the_line_rule_moved_onto_a_cut_shot_keeps_its_id():
+    """A re-run's 2.5–4.0, finished to the line, lands on the cut's own 4.75–6.0: it takes
+    that shot's id (and so its grade), unless a shot of the plan already has it or it is
+    locked (the locks put that one back themselves)."""
+    cur = [{"id": "gB", "clip": "A.MP4", "in": 4.75, "out": 6.0},
+           {"id": "gL", "clip": "A.MP4", "in": 10.0, "out": 11.0}]
+    moved = [{"clip": "A.MP4", "in": 4.75, "out": 6.0}, {"clip": "A.MP4", "in": 10.0, "out": 11.0}]
+    got = revise.rekey_moved(moved, cur)
+    assert [s.get("id") for s in got] == ["gB", "gL"]
+    assert [s.get("id") for s in revise.rekey_moved(moved, cur[1:])] == [None, "gL"]
+    assert revise.rekey_moved([dict(moved[0], id="gX"), moved[0]], cur[:1])[1]["id"] == "gB"
+
+
 def test_a_new_shot_does_not_grow_into_a_rerun_locked_shot_the_plan_left_out():
     """A re-run's locked shots are put back after the answer (enforce_locks), so a new shot
     must not grow over one: it would be dropped as a duplicate of the locked footage."""

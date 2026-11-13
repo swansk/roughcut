@@ -766,7 +766,8 @@ Export presets: {presets}
   timings above), after the line and the reaction to it (the laugh, the reply). A length asked
   for is an aim: to land near it, drop a whole shot or run a little long and say so, never
   trim into a sentence. Only when the editor's words say a hard cut mid-line is fine, add
-  `"tight": true` to that op.
+  `"tight": true` to that op. A time the editor gives as a number ("start shot 2 at 1.5") is
+  the editor's own cut point: use it exactly as given.
 - a dissolve between two shots → transition cross_dissolve (audio_crossfade for the sound);
   fade in / out → fade with dip_to_black at the start / end.
 - a vignette (darker or lighter edges or corners, "draw the eye to the middle") → vignette,
@@ -985,7 +986,7 @@ def run(text: str, scope: dict | None, state: dict, clips: dict,
     out: dict = {"kind": got["kind"], "summary": got.get("summary") or "", "cost": cost}
     fixed_lines: list[str] = []
     if got["kind"] == "ops":
-        got["ops"], fixed_lines = finish_op_lines(got["ops"], state, clips)
+        got["ops"], fixed_lines = finish_op_lines(got["ops"], state, clips, text)
         checked = actions.check(got["ops"], state)
         out.update(checked)
         if not out["summary"]:
@@ -1025,14 +1026,43 @@ def run(text: str, scope: dict | None, state: dict, clips: dict,
 # included. The ops that set a clip range on the cut's sound: their in and out are moved to
 # sentence edges (`sentences.complete_segment`) before they are checked. An op the model
 # marked `"tight": true` (the editor said a hard cut mid-line is fine) is left as it is.
+# The rule is for cut points the MODEL chose: an in or out the editor typed ("trim shot 1
+# to start at 1.5", "insert 0:03 to 0:04 of CLIP_C") is the editor's own cut, kept to the
+# frame like a hand trim. And a trim keeps its direction: a tightening never comes back
+# longer than the shot was ("tighten the intro" that opened earlier).
 RANGE_OPS = ("insert", "overwrite", "append")
 
+# a number the editor typed: 1.5, 12, 0:03, 1:02.5 — not a shot / row / clip number
+_TYPED = re.compile(r"(?<![\w.:])(?:(\d+):(\d{1,2}(?:\.\d+)?)|(\d+(?:\.\d+)?))(?=\s*(?:s|secs?|seconds?)\b|(?![\w:]|\.\d))")
+_COUNTED = re.compile(r"(?:\b(?:shots?|rows?|clips?|tracks?|no\.?)|#)\s*$", re.I)
 
-def finish_op_lines(ops: Any, state: dict, clips: dict) -> tuple[Any, list[str]]:
+
+def typed_seconds(text: str) -> list[float]:
+    """The times the editor's words give as numbers (seconds; m:ss counted out), leaving
+    out the ones that count something ("shot 3", "row 2", "V1")."""
+    got = []
+    for m in _TYPED.finditer(str(text or "")):
+        if _COUNTED.search(text[:m.start()]):
+            continue
+        got.append(int(m.group(1)) * 60 + float(m.group(2)) if m.group(1) else float(m.group(3)))
+    return got
+
+
+def _typed(v: Any, typed: list[float]) -> bool:
+    try:
+        return any(abs(float(v) - t) < 0.005 for t in typed)
+    except (TypeError, ValueError):
+        return False
+
+
+def finish_op_lines(ops: Any, state: dict, clips: dict,
+                    text: str = "") -> tuple[Any, list[str]]:
     """`(ops, lines)`: the ops with every clip range that cuts into a line moved to the
-    line's edges, and one plain line per op moved. Ops it cannot read pass through."""
+    line's edges, and one plain line per op moved. Ops it cannot read pass through. An
+    in or out that is a number in the editor's `text` is theirs and stays where it is."""
     if not isinstance(ops, list):
         return ops, []
+    typed = typed_seconds(text)
     by_id = {s.get("id"): s for s in state.get("segments") or [] if isinstance(s, dict)}
     out, lines = [], []
     for op in ops:
@@ -1047,22 +1077,31 @@ def finish_op_lines(ops: Any, state: dict, clips: dict) -> tuple[Any, list[str]]
         try:
             if kind in RANGE_OPS and op.get("clip") in clips:
                 seg = {"in": float(op["in"]), "out": float(op["out"])}
-                new, why = sentencesmod.complete_segment(seg, clips[op["clip"]])
-                if why:
-                    op["in"], op["out"] = new["in"], new["out"]
-                    lines.append(f"{kind} {clip_name(op['clip'])}: {'; '.join(why)}")
+                check_in, check_out = not _typed(op["in"], typed), not _typed(op["out"], typed)
+                if check_in or check_out:
+                    new, why = sentencesmod.complete_segment(seg, clips[op["clip"]],
+                                                             check_in=check_in, check_out=check_out)
+                    if why:
+                        op["in"], op["out"] = new["in"], new["out"]
+                        lines.append(f"{kind} {clip_name(op['clip'])}: {'; '.join(why)}")
             elif kind == "trim" and op.get("id") in by_id:
                 cur = by_id[op["id"]]
-                if cur.get("clip") in clips and (op.get("in") is not None or op.get("out") is not None):
-                    seg = {"in": float(cur["in"] if op.get("in") is None else op["in"]),
-                           "out": float(cur["out"] if op.get("out") is None else op["out"])}
+                check_in = op.get("in") is not None and not _typed(op["in"], typed)
+                check_out = op.get("out") is not None and not _typed(op["out"], typed)
+                if cur.get("clip") in clips and (check_in or check_out):
+                    c_in, c_out = float(cur["in"]), float(cur["out"])
+                    seg = {"in": c_in if op.get("in") is None else float(op["in"]),
+                           "out": c_out if op.get("out") is None else float(op["out"])}
+                    # a tightening stays a tightening: the line's edge is looked for inside
+                    # the shot as it was, never before its in or after its out
                     new, why = sentencesmod.complete_segment(
-                        seg, clips[cur["clip"]], check_in=op.get("in") is not None,
-                        check_out=op.get("out") is not None)
+                        seg, clips[cur["clip"]], check_in=check_in, check_out=check_out,
+                        floor=c_in if seg["in"] > c_in else 0.0,
+                        ceiling=c_out if seg["out"] < c_out else None)
                     if why:
-                        if op.get("in") is not None:
+                        if check_in:
                             op["in"] = new["in"]
-                        if op.get("out") is not None:
+                        if check_out:
                             op["out"] = new["out"]
                         lines.append(f"trim {clip_name(cur['clip'])}: {'; '.join(why)}")
         except (KeyError, TypeError, ValueError):

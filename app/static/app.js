@@ -3670,7 +3670,8 @@ function paintTotal() {
   if (!el) return;
   const g = window.tlLanes && typeof tlLanes.ghost === 'function' ? tlLanes.ghost() : null;
   // (wave 28 PROPOSE) the proposal's length while one waits on any sequence: it is what the Program plays
-  const t = pendingPlan && g && g.total > 0 && g.plan === pendingPlan ? g.total : total();
+  // (the cut's own while the cut plays from V1 with a proposal waiting: the length of what plays)
+  const t = pendingPlan && g && g.total > 0 && g.plan === pendingPlan && !player.playing ? g.total : total();
   const s = tcOf(t);
   if (el.textContent !== s) el.textContent = s;
 }
@@ -3844,6 +3845,8 @@ function paintTransport() {
   const onProposal = window.tlLanes && typeof tlLanes.following === 'function'
     && (tlLanes.following() || (typeof tlLanes.showsRange === 'function' && tlLanes.showsRange()));
   if (!onProposal && pw.textContent !== what) pw.textContent = what;
+  // (wave 28 GATEFIX) a proposal waits and the cut plays (from V1): the tag and the length say so
+  if ($('#progTag') && pendingPlan) { paintProgramTag(true, player.playing); paintTotal(); }
   // While the Program plays, the board's own fades (the trim handles' grips, which follow
   // the selection the playback moves at every cut) are instant (timeline.css
   // `.rc-playing`): each was a composited opacity animation, and starting one at a cut
@@ -5736,6 +5739,7 @@ const PROPOSAL_CSS = `
 #progTag { margin-left: 8px; padding: 0 6px; border-radius: 3px; font-size: 11px; line-height: 16px; color: #111;
   background: var(--warn); white-space: nowrap; }
 #progTag[hidden] { display: none; }
+#progTag.cut { background: transparent; color: var(--text); box-shadow: inset 0 0 0 1px var(--warn); }
 #askFold { display: none; width: 100%; text-align: left; background: transparent; color: var(--dim);
   border: 1px solid var(--line); border-radius: 3px; padding: 3px 8px; margin: 0 0 8px; font-size: 11.5px;
   white-space: nowrap; overflow: hidden; }
@@ -6223,8 +6227,14 @@ function paintAsked(plan) {
   el.title = note ? `what this proposal answers: ${note}` : '';
 }
 
-/* (wave 28 PROPOSE) The Program's title says when it shows the proposal, not the cut. */
-function paintProgramTag(on) {
+/* (wave 28 PROPOSE) The Program's title says when it shows the proposal, not the cut. While one
+ * waits the cut still plays from V1 (a click on a shot, Enter, the shot's still): then the tag says
+ * the cut is playing, so the two can be compared and the title never names the wrong one. */
+const PROG_TAG = { proposal: ['proposal — not accepted yet',
+  'Play, Space and the playhead show the proposed cut until you Accept or Discard it'],
+cut: ['the cut — a proposal waits',
+  'the cut as it is, from a click on V1; Play, Space and L play the proposal'] };
+function paintProgramTag(on, cut = false) {
   const t = $('#progTitle');
   if (!t) return;
   let tag = $('#progTag');
@@ -6233,11 +6243,12 @@ function paintProgramTag(on) {
     tag.id = 'progTag';
     tag.className = 'progtag';
     tag.dataset.testid = 'program-proposal-tag';
-    tag.textContent = 'proposal — not accepted yet';
-    tag.title = 'Play, Space and the playhead show the proposed cut until you Accept or Discard it';
     const lbl = t.querySelector('.lbl');
     (lbl || t).insertAdjacentElement('afterend', tag);
   }
+  const [words, hover] = PROG_TAG[cut ? 'cut' : 'proposal'];
+  if (tag.textContent !== words) { tag.textContent = words; tag.title = hover; }
+  tag.classList.toggle('cut', !!cut);
   tag.hidden = !on;
 }
 
