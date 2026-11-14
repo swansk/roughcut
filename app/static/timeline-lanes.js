@@ -1186,17 +1186,26 @@
   /* Play one range — a proposal's shot, not necessarily in the cut — in the monitor,
    * paused at its end. The monitor's own play (space, ▶) takes over the moment it
    * starts: `player.playing` flips and this loop stops. */
-  function playRange(seg, filmFrom, onEnd) {
+  function playRange(seg, filmFrom, onEnd, next = null) {
     const a = app();
     const pauseCut = fn('pauseCut'), liveVideo = fn('liveVideo'), arm = fn('arm');
-    const showLive = fn('showLive'), reveal = fn('revealMonitor');
+    const showLive = fn('showLive'), reveal = fn('revealMonitor'), hush = fn('hush');
     if (!a || !pauseCut || !liveVideo || !arm || !seg) return false;
     pauseCut();
     if (reveal) reveal();
-    const v = liveVideo();
+    let v = liveVideo();
     if (!v) return false;
-    arm(v, seg);
+    // (wave 29 CUTHOLD) The buffer parked on this shot while the one before it played (armRange):
+    // it goes on screen with its frame, instead of the live buffer opening the shot's file then
+    // (a new pipeline, metadata, a seek, its bytes: 83-117 ms a cut on localhost, more over a link)
+    const pre = a.player.vids.find((b) => b !== v && b._rangeFor === seg && !b.error
+      && b.dataset.src === proxyFor(seg) && b.readyState >= 2 && !b.seeking);
+    for (const b of a.player.vids) b._rangeFor = null;
+    if (pre) a.player.cur = a.player.vids.indexOf(pre);
+    v = liveVideo();
+    if (!pre) arm(v, seg);
     if (showLive) showLive();
+    if (hush) hush(v, false);
     v.muted = false;
     const token = ++rangeGen;
     const src = v.dataset.src;
@@ -1218,14 +1227,35 @@
     };
     const go = () => {
       if (token !== rangeGen) return;
-      v.currentTime = seg.in;
+      // parked there already (arm, armRange): the same time again is a second seek
+      if (!(Math.abs(v.currentTime - seg.in) < 0.003)) v.currentTime = seg.in;
       v.play().catch(() => {});
       rangeOn = token;
       paintT();
       step();
+      if (next) setTimeout(() => { if (token === rangeGen && rangeOn === token) armRange(next); }, RANGE_ARM_MS);
     };
     if (v.readyState >= 1) go(); else v.addEventListener('loadedmetadata', go, { once: true });
     return true;
+  }
+
+  /* (wave 29 CUTHOLD) The next shot of a proposal, parked in a buffer off screen while this one
+   * plays (silent, unseen; the cut's own lookahead does the same, app.js armUpcoming): one that
+   * has its clip open, else the one used longest ago. A little after the play's start, so the
+   * park's seek does not share the decoder with this shot's first frames. */
+  const RANGE_ARM_MS = 300;
+  const proxyFor = (seg) => ((app() || {}).P && app().P.clips[seg.clip] || {}).proxy || '';
+  function armRange(seg) {
+    const a = app(), liveVideo = fn('liveVideo'), arm = fn('arm');
+    if (!a || !liveVideo || !arm || !seg) return;
+    const lv = liveVideo();
+    const others = a.player.vids.filter((b) => b && b !== lv);
+    if (!others.length) return;
+    const src = proxyFor(seg);
+    const b = others.find((x) => src && x.dataset.src === src && !x.error)
+      || others.slice().sort((x, y) => (x._used || 0) - (y._used || 0))[0];
+    arm(b, seg);
+    b._rangeFor = seg;
   }
 
   /* Park the monitor on a proposal's shot without playing it: its first frame, with
@@ -1345,7 +1375,8 @@
     mode = 'proposal';
     paintMode(null);
     const g = ghost.ghosts[k];
-    return playRange(g.seg, g.start, () => playPlan(k + 1));
+    const n = ghost.ghosts[k + 1];
+    return playRange(g.seg, g.start, () => playPlan(k + 1), n ? n.seg : null);
   }
 
   /* ------------------------------------------------------------ drop slots */
