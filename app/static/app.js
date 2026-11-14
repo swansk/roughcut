@@ -3322,6 +3322,7 @@ function trackFrames(v) {
     v._pf = { mt: md.mediaTime, ed: md.expectedDisplayTime || now, n: md.presentedFrames, src,
               moved: !!p && p.src === src && !v.paused && md.mediaTime > p.mt + 1e-4 };
     keepInFrame(v, md);
+    if (v._cutW) cutSeen(v, now, md);   // (wave 29 CUTHOLD) the cut's hold ends here
     v.requestVideoFrameCallback(cb);
   };
   v.requestVideoFrameCallback(cb);
@@ -3497,22 +3498,30 @@ function cutWatch(nv, nseg, rec) {
   const s = { rs: nv.readyState, seeking: nv.seeking, ahead: bufAhead(nv, shotBase(nseg)) };
   rec.rs = s.rs;
   rec.ahead_s = Math.round(s.ahead * 100) / 100;
-  if (typeof nv.requestVideoFrameCallback !== 'function') return;
-  const g = player.gen, t0 = rec.t;
-  let said = false;
-  const sayT = setTimeout(() => { if (g === player.gen && player.playing) { said = true; bufSay(true); } }, HOLD_SAY_MS);
-  const end = () => { clearTimeout(sayT); if (said) bufSay(false); };
-  const cb = (now, md) => {
-    if (g !== player.gen || playLog.cur !== c) { end(); return; }
-    if (nv.paused || !nv.classList.contains('live') || md.mediaTime < nseg.in - 0.25 * speedOf(nseg)) {
-      nv.requestVideoFrameCallback(cb);
-      return;
-    }
-    end();
-    rec.hold_ms = Math.max(0, Math.round((md.expectedDisplayTime || now) - t0));
-    holdNote('cut', rec.hold_ms, player.idx, s);
-  };
-  nv.requestVideoFrameCallback(cb);
+  // No frame callback of its own in the cut's frame (the one whose callbacks give the grade the
+  // new shot's first frame): trackFrames' callback, which runs anyway, says when it is up (cutSeen)
+  if (nv._cutW) cutDone(nv);
+  const w = nv._cutW = { g: player.gen, t0: rec.t, rec, s, nseg, c, said: false, shot: player.idx };
+  w.sayT = setTimeout(() => {
+    if (nv._cutW === w && w.g === player.gen && player.playing) { w.said = true; bufSay(true); }
+  }, HOLD_SAY_MS);
+}
+/* From trackFrames' callback: buffer v has presented a frame; the cut it waits on (cutWatch) is
+ * over once v is up, playing, on its shot. */
+function cutSeen(v, now, md) {
+  const w = v._cutW;
+  if (w.g !== player.gen || playLog.cur !== w.c) { cutDone(v); return; }
+  if (v.paused || !v.classList.contains('live') || md.mediaTime < w.nseg.in - 0.25 * speedOf(w.nseg)) return;
+  cutDone(v);
+  w.rec.hold_ms = Math.max(0, Math.round((md.expectedDisplayTime || now) - w.t0));
+  holdNote('cut', w.rec.hold_ms, w.shot, w.s);
+}
+function cutDone(v) {
+  const w = v._cutW;
+  v._cutW = null;
+  if (!w) return;
+  clearTimeout(w.sayT);
+  if (w.said) bufSay(false);
 }
 /* A stall of the live buffer mid-play (its `waiting`): held until its next frame. */
 function stallWatch(v) {
