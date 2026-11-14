@@ -318,7 +318,7 @@ Designed Effects
 History
   {{"op":"take_back","n"}}                        take the cut back `n` of the AI's own accepted changes (1 = the latest, listed above as "changes on this cut"); a change by hand made after them is taken back with them. Use it alone for "put it back", "go back to before X"; one Undo cancels it
 Music
-  {{"op":"music","track"?,"level"?,"duck"?,"duck_db"?,"fade_in"?,"fade_out"?,"remove"?}}   the music bed (Audio tab): `track` is one of the "Music tracks" listed above (omit it to change the bed that is set), `level` its loudness in dB against the film's own sound ({MUSIC_LEVEL_MIN:g}..{MUSIC_LEVEL_MAX:g}; default -8, "keep it quiet" -12, "up a bit" -4), `duck` true to dip it under talking (the default) or false, `duck_db` how far it dips ({MUSIC_DUCK_MAX:g} at most, default 12), `fade_in` / `fade_out` seconds (0..20), `remove` true takes the bed off. "Add music … and keep it under the talking" is `track` plus `duck` true
+  {{"op":"music","track"?,"level"?,"duck"?,"duck_db"?,"fade_in"?,"fade_out"?,"remove"?}}   the music bed (Audio tab): `track` is one of the "Music tracks" listed above or a `library/<id>` from "Music library" (omit it to change the bed that is set), `level` its loudness in dB against the film's own sound ({MUSIC_LEVEL_MIN:g}..{MUSIC_LEVEL_MAX:g}; default -8, "keep it quiet" -12, "up a bit" -4), `duck` true to dip it under talking (the default) or false, `duck_db` how far it dips ({MUSIC_DUCK_MAX:g} at most, default 12), `fade_in` / `fade_out` seconds (0..20), `remove` true takes the bed off. "Add music … and keep it under the talking" is `track` plus `duck` true
 Index (a closer look at the footage; it changes no shot and takes no undo step)
   {{"op":"relook","interval_s","clips"}}   look at footage again, a frame every `interval_s` seconds (one of the stops listed under "What the index looked at"); `clips` is a list of clip names from that list, "all" (every clip) or "cut" (the clips the cut uses). The review says how long it takes and what it costs; it runs the Index panel's look as one job. NOT the colour `look` op. Use it only when the editor asks to look closer / more often / again; "what detail did you look at" is answered in words from the list, with no op
 Export
@@ -1560,14 +1560,22 @@ def _c_music(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
         key = str(name).strip().lower()
         hit = next((t for t in sim.music_tracks if key in (str(t["asset"]).lower(), str(t.get("name", "")).lower(),
                                                     str(t["asset"]).lower().split("/", 1)[-1])), None)
+        if hit is None:                      # the shared library (2026-11-14): `library/<id>` or a title
+            from . import musiclib
+            lt = musiclib.get(str(name).strip()) if musiclib.is_library(str(name).strip()) else None
+            if lt is not None:
+                hit = {"asset": musiclib.PREFIX + lt["id"], "name": lt["title"]}
+                sim.music_tracks.append(hit)
         if hit is None:
             have = ", ".join(t.get("name") or t["asset"] for t in sim.music_tracks) or "none"
-            raise Refused(f"no music track {name!r} (the project has: {have})")
+            raise Refused(f"no music track {name!r} (the project has: {have}; or name one from the Music library "
+                          f"as library/<id>)")
         clean["track"] = hit["asset"]
         bed = {**(bed or {}), "asset": hit["asset"]}
     elif bed is None:
         if not sim.music_tracks:
-            raise Refused("the project has no music track yet: the editor adds one with Add music… "
+            raise Refused("the project has no music track yet: name one from the Music library (library/<id>), "
+                          "or the editor adds one with Add music… "
                           "in the Audio tab, then asks again")
         raise Refused("no music bed is set: name a `track` from the list")
     bits = []

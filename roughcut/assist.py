@@ -357,7 +357,8 @@ def sequence_block(state: dict) -> str:
     extra_tracks = sorted(n for n in tr if n not in ("V1", "V2", "A1", "A2"))
     lines.append("Tracks: V1 V2 A1 A2" + (" " + " ".join(extra_tracks) if extra_tracks else ""))
     bed = state.get("music") or {}
-    tr_m = state.get("music_tracks") or []
+    # the shared library's tracks are offered ranked by mood in "Music library", not here
+    tr_m = [t for t in state.get("music_tracks") or [] if not str(t.get("asset", "")).startswith("library/")]
     lines.append("Music bed (A2): " + (
         f"{bed['asset']} at {float(bed.get('bed_lufs', -24.0)) + 16:+g} dB against the film, "
         + (f"dips {float(bed.get('duck_db', 12.0)):g} dB under talking" if bed.get("duck", True) else "no dip under talking")
@@ -732,6 +733,28 @@ def index_block(state: dict) -> str:
             + "Answer \"what did you look at / at what detail\" from this list, in words, with no op.\n\n")
 
 
+def music_library_block(text: str, state: dict, n: int = 12) -> str:
+    """The shared music library's best fits for these words and this film (2026-11-14).
+    Empty when there is no catalogue on this machine; a fault costs the block, never the ask."""
+    try:
+        from . import musiclib
+        film = sum(max(0.0, float(s.get("out", 0)) - float(s.get("in", 0))) / float(s.get("speed") or 1.0)
+                   for s in state.get("segments") or []) or None
+        hits = musiclib.search(text, film, n)
+        if not hits:
+            return ""
+        feels, _ = musiclib.asked_feels(text)
+        why = (f"for the words ({', '.join(sorted(feels))})" if feels
+               else "for a trip film (no mood was named)")
+        return (f"Music library ({len(musiclib.load())} tracks by Kevin MacLeod, free with a credit; "
+                f"the {len(hits)} best fits {why}"
+                + (f", the film is {film:.0f} s" if film else "") + "; id · title · moods · tempo · length · genre · instruments — what it is):\n"
+                + "\n".join("  " + musiclib.row(t) for t in hits) + "\n")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  !! music library block: {exc}", flush=True)
+        return ""
+
+
 def build_prompt(text: str, scope: dict | None, state: dict, clips: dict,
                  history: list[str] | None = None, look_ok: bool = False, ctx: dict | None = None) -> str:
     looks = ", ".join(state.get("looks") or []) or "(none)"
@@ -752,7 +775,7 @@ A clip marked EDITOR'S DESCRIPTION was written or corrected by the editor: it ou
 {index_block(state)}## The library
 Looks: {looks}
 Export presets: {presets}
-
+{music_library_block(text, state)}
 ## The tools you can use (the action vocabulary)
 {actions.schema_text()}
 ## How editors say it
@@ -783,9 +806,14 @@ Export presets: {presets}
 - a title, a graphic, hit markers, an arrow → design_effect with a note saying what and where
   (only what no tool above draws).
 - music under the film ("add music that fits", "turn the music down 4 dB", "keep it under the
-  talking", "no music") → one music op: a `track` from "Music tracks", `level` in dB against the
-  film, `duck`; with none listed, answer that the project has no music and the editor adds a
-  track with Add music… in the Audio tab. Never a volume_db on shots for the bed.
+  talking", "no music", or a style that implies music: "comical", "epic", "a fun travel video")
+  → one music op: a `track` from "Music tracks" (the editor's own come first when they fit), else
+  the best fit from "Music library" (`library/<id>`: match the mood the words and the footage ask
+  for, a length at least the film's, a tempo that suits the cutting); `level` in dB against the
+  film, `duck`. Say in the summary which track and why in a few words, and that a library track
+  is credited in the export ("Music: <title> by Kevin MacLeod, CC BY"). With neither listed,
+  answer that there is no music and the editor adds a track with Add music… in the Audio tab.
+  Never a volume_db on shots for the bed.
 - "look closer at X", "look at everything every quarter second", "look again, more often" → one relook op
   (`interval_s` one of the stops under "What the index looked at": "every second" 1, "every quarter second" 0.25,
   "as fine as it goes" 0.1; `clips` the named clips, "cut" for the clips the cut uses, "all" for everything). It

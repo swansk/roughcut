@@ -97,6 +97,7 @@ from roughcut import tracks as tracksmod  # noqa: E402
 from roughcut import media as mediamod  # noqa: E402
 from roughcut import limiter  # noqa: E402     # wave 23 FILM
 from roughcut import music as musicmod  # noqa: E402     # wave 24 DELIVER: the project's own music
+from roughcut import musiclib  # noqa: E402     # 2026-11-14: the shared library the AI picks from
 from roughcut import verify as verifymod  # noqa: E402
 from roughcut import gpulock, localvlm  # noqa: E402     # wave 20 LOCALGPU: the 3080 as a stage
 from roughcut import speakers as speakersmod  # noqa: E402     # wave 20 DIARIZE: who said what
@@ -12402,6 +12403,7 @@ async def api_render(request: Request) -> JSONResponse:
         "story": (edl.get("story") or "")[:300],
         "note": (body.get("label") or "")[:120],
         "music": (edl.get("effects_music") or {}).get("asset"),
+        "music_credit": musiclib.credit_for((edl.get("effects_music") or {}).get("asset")),
         "profile": profile,
         # Which cut of the bin this came from, now that a bin can have several.
         "cut": cut_name_of(edl, STATE["edl"]),
@@ -12424,6 +12426,12 @@ async def api_render(request: Request) -> JSONResponse:
         custom = custom_record(choice)
         if custom:
             meta["custom"] = custom
+    if export and meta.get("music_credit"):
+        # the library's licence (CC BY 4.0) asks for a credit wherever the film goes
+        try:
+            out_path.with_suffix(".credits.txt").write_text(meta["music_credit"] + "\n", encoding="utf-8")
+        except OSError as exc:
+            print(f"  !! credits file: {exc}", flush=True)
     shots = len(edl["segments"])
     planned = meta["planned_s"]
     RENDERS[job] = progress.Job(
@@ -15108,7 +15116,29 @@ def list_assets() -> dict:
                               "lufs": round(lufs, 1) if lufs is not None else None}
             own.append(cache[key])
         out["music"] = own + out["music"]
+    # the shared library's tracks that are on this machine (2026-11-14): the Audio tab can
+    # pick them and the monitor can play them; the AI sees the whole catalogue by search
+    lib = []
+    for t in musiclib.load():
+        p = musiclib.local_path(t)
+        if not p.is_file():
+            continue
+        key = (str(p), p.stat().st_mtime)
+        if key not in cache:
+            m = musiclib.measured(t, _measure_track)
+            cache[key] = {"name": f"{t['title']} (library)", "asset": musiclib.PREFIX + t["id"],
+                          "kind": "music", "url": f"/media/asset/library/{t['id']}",
+                          "size": p.stat().st_size, "library": True, "duration_s": m.get("duration_s"),
+                          "lufs": m.get("lufs"),
+                          "feel": t["feel"], "bpm": t["bpm"], "credit": musiclib.credit(t)}
+        lib.append(cache[key])
+    out["music"] = out["music"] + lib
     return out
+
+
+def _measure_track(p: Path) -> dict:
+    lufs = effects.integrated_lufs(p)
+    return {"duration_s": probe_duration(p), "lufs": round(lufs, 1) if lufs is not None else None}
 
 
 def camera_wav(clip: str) -> str | None:
@@ -15212,6 +15242,11 @@ def api_assets() -> JSONResponse:
 
 @app.get("/media/asset/{kind}/{name}")
 def media_asset(kind: str, name: str, request: Request) -> Response:
+    if kind == "library":            # the shared library (2026-11-14): only a track that is here
+        t = musiclib.get(name)
+        if t is None or not musiclib.have(t):
+            raise HTTPException(404, f"not found: {Path(name).name}")
+        return ranged_file(musiclib.local_path(t), request)
     if kind == "project":            # a track brought in from the board (wave 24 DELIVER)
         p = musicmod.folder(STATE["work"], STATE["footage"].name) / Path(name).name
         if not p.is_file() or p.name.startswith("."):
@@ -19001,6 +19036,7 @@ def _assist_run(job: str, text: str, scope: dict) -> None:
         entry.finish("failed", detail=msg)
         _assist_write(job, {**record, "status": "failed", "error": msg})
         return
+    _prefetch_library_music(res)
     with ASSIST_LOCK:
         if entry.get("state") == "cancelled":
             return
@@ -19010,6 +19046,17 @@ def _assist_run(job: str, text: str, scope: dict) -> None:
             look_confirm_store(res["looked"]["confirmed"])
         entry.update(result=res, cost=res.get("cost"))
         entry.finish("done", detail=res.get("summary") or res["kind"])
+
+
+def _prefetch_library_music(res: dict) -> None:
+    """A proposal that sets a library track fetches it now, in the ask's own thread, so
+    Accept, the monitor and the export find the file here (2026-11-14)."""
+    for op in (res or {}).get("ops") or []:
+        if isinstance(op, dict) and op.get("op") == "music" and musiclib.is_library(op.get("track") or ""):
+            try:
+                musiclib.path(op["track"])
+            except (musiclib.LibraryError, FileNotFoundError) as exc:
+                print(f"  !! music library fetch: {exc}", flush=True)
 
 
 def _assist_view(job: str) -> dict:

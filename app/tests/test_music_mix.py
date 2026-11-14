@@ -121,3 +121,36 @@ def test_an_exports_download_keeps_the_name_it_was_given(api):
     assert "my%20own%20name.mp4" in got.headers["content-disposition"]
     listed = {x["name"]: x for x in api.get("/api/renders").json()["renders"]}
     assert listed[f.name]["download_name"] == "my own name.mp4"
+
+
+def test_a_library_track_mixes_lists_and_is_credited_beside_the_export(api, proj, monkeypatch):
+    """2026-11-14: a `library/<id>` bed from the shared library (here a fake one-track catalogue)."""
+    from roughcut import musiclib
+    lib = proj["root"] / "musiclib"
+    (lib / "files").mkdir(parents=True)
+    (lib / "catalog.json").write_text(json.dumps({"genres": {}, "pieces": [
+        {"title": "Steady Tone", "filename": "Steady Tone.mp3", "length": "00:00:14", "feel": "Bouncy, Humorous",
+         "bpm": "120", "genre": "", "description": "a test tone", "instruments": "sine"}]}), encoding="utf-8")
+    subprocess.run(["ffmpeg", "-nostdin", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=14",
+                    "-ac", "2", "-af", "volume=-12dB", "-c:a", "libmp3lame", "-b:a", "128k",
+                    str(lib / "files" / "Steady Tone.mp3")], check=True, capture_output=True)
+    monkeypatch.setenv("ROUGHCUT_MUSIC_LIBRARY", str(lib))
+    musiclib._CACHE.clear()
+    listed = [t for t in api.get("/api/assets").json()["music"] if t.get("library")]
+    assert [t["asset"] for t in listed] == ["library/steady-tone"] and listed[0]["lufs"] is not None
+    assert api.get(listed[0]["url"]).status_code == 200
+    assert api.put("/api/project", json={"segments": SEGS, "music": {"asset": "library/steady-tone",
+                                                                      "fade_in": 0.5, "fade_out": 0.5}}).status_code == 200
+    r = api.post("/api/render", json={"segments": SEGS, "preset": "match", "name": "with library"})
+    assert r.status_code == 200, r.text
+    job = r.json()["job"]
+    for _ in range(600):
+        st = api.get(f"/api/render/{job}").json()
+        if st["state"] != "running":
+            break
+        time.sleep(0.3)
+    assert st["state"] == "done", st
+    out = Path(r.json()["path"])
+    assert _lufs(out, 2.0, 1.0) > -40                               # the bed is in the file
+    credit = out.with_suffix(".credits.txt").read_text(encoding="utf-8")
+    assert "Steady Tone" in credit and "Kevin MacLeod" in credit and "4.0" in credit

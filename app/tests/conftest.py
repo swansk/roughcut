@@ -23,6 +23,12 @@ from pathlib import Path as _Path
 # (test_find, test_find_union and test_verify only collected after another file put it there).
 _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 
+# The shared music library (2026-11-14) lives on foxtrot at /mnt/roughcut/music-library; a test
+# board must not see it (or measure its tracks). An empty one, unless a test sets its own.
+import os as _os
+import tempfile as _tempfile
+_os.environ["ROUGHCUT_MUSIC_LIBRARY"] = _tempfile.mkdtemp(prefix="rc-musiclib-")
+
 import json
 import subprocess
 import sys

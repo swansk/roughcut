@@ -68,7 +68,12 @@ def resolve(asset: str, work: Path, bin_name: str, assets_root: Path | None) -> 
     """The file an `effects_music.asset` names. A project track is found only inside the
     project's music folder (a `..` in the name cannot leave it); anything else is the
     effects module's own rule (the repo's assets, or an absolute path)."""
-    from roughcut import effects
+    from roughcut import effects, musiclib
+    if musiclib.is_library(asset):       # the shared library (2026-11-14): fetched on first use
+        try:
+            return musiclib.path(asset)
+        except musiclib.LibraryError as exc:
+            raise FileNotFoundError(str(exc)) from exc
     if is_project(asset):
         name = Path(asset[len(PREFIX):]).name
         p = folder(work, bin_name) / name
