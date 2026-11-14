@@ -2170,6 +2170,7 @@ function playFrom(i, { single = false } = {}) {
   // play opened with an 83 ms hole at load 12 once).
   tl.render();
   player.playing = true;            // before go(), which refuses to start a paused monitor
+  playLogStart();                   // (wave 29 CUTHOLD) this play's holds
   screenMsg(v.readyState >= 2 ? '' : `opening ${stem(seg.clip)}…`);
   if (v.readyState >= 1) go(); else v.addEventListener('loadedmetadata', go, { once: true });
   const filmT = resume ? filmAt(i, v.currentTime) : filmStart(i);
@@ -2214,6 +2215,7 @@ function cueAt(i, clipT) {
 }
 
 function pauseCut() {
+  if (playLog.cur) playLogEnd('stop');
   player.gen++;                     // any shot still opening must not start behind this
   player.off = null;                // a clock playing past a shot stops where it is
   if (prog.tx && prog.tx.outHand) txUnhandOut(prog.tx, liveVideo());
@@ -3432,6 +3434,107 @@ function frameDurOf(seg) {
   return f > 0 ? Math.max(1, Math.ceil(f / 60.5)) / f : 1 / 30;
 }
 
+/* (wave 29 CUTHOLD) What a play held, kept so "it froze" has a number. Per play: every cut's
+ * hold (from the cut to the incoming shot's first frame on screen, by its frame callbacks), every
+ * stall of the picture mid-shot (`waiting` to its next frame), the longest of each with why: the
+ * incoming buffer had too little of its shot loaded ('not loaded': the link), was still seeking
+ * ('seeking'), or had it and still showed no frame ('decode': the viewer's machine). Sent to the
+ * board when the play stops (POST /api/playlog, kept per bin in work/playback); the last plays are
+ * `playLog` here. A wait the editor would see (HOLD_SAY_MS) says "buffering…" under the picture
+ * while it lasts; nothing at all for a hold shorter than that. */
+const HOLD_SAY_MS = 400;
+const HOLD_KEEP_MS = 200;           // holds this long are listed in the play's record
+const playLog = { cur: null, last: [] };
+function playLogStart() {
+  if (playLog.cur) return;
+  playLog.cur = { at: Date.now(), t0: performance.now(), from: player.idx, cuts: 0, longest: null,
+                  stall: null, holds: [] };
+}
+function bufAhead(v, t) {
+  try {
+    for (let k = 0; k < v.buffered.length; k++) {
+      if (v.buffered.start(k) <= t + 0.05 && v.buffered.end(k) >= t) return v.buffered.end(k) - t;
+    }
+  } catch (e) { /* no ranges */ }
+  return 0;
+}
+function holdNote(kind, ms, shot, s) {
+  const c = playLog.cur;
+  if (!c) return;
+  const why = ms < HOLD_KEEP_MS ? 'none' : s.seeking ? 'seeking' : s.rs < 3 || s.ahead < 0.3 ? 'not loaded' : 'decode';
+  const h = { kind, ms: Math.round(ms), shot, why, rs: s.rs, ahead_s: Math.round(s.ahead * 100) / 100,
+              at_s: Math.round((performance.now() - c.t0) / 100) / 10 };
+  const key = kind === 'cut' ? 'longest' : 'stall';
+  if (!c[key] || h.ms > c[key].ms) c[key] = h;
+  if (h.ms >= HOLD_KEEP_MS && c.holds.length < 40) c.holds.push(h);
+}
+function bufSay(on) {
+  const el = $('#monWait span');
+  if (on && el) el.textContent = 'buffering…';
+  if (window.dock && typeof dock.wait === 'function') dock.wait('#monWait', on, 'buffer');
+  else { const w = $('#monWait'); if (w) w.hidden = !on; }
+}
+function playLogEnd(how) {
+  const c = playLog.cur;
+  playLog.cur = null;
+  bufSay(false);
+  if (!c || (!c.cuts && !c.stall)) return;
+  const rec = { at: c.at, how, from: c.from, to: player.idx, cuts: c.cuts,
+                play_s: Math.round((performance.now() - c.t0) / 100) / 10,
+                longest: c.longest, stall: c.stall, holds: c.holds };
+  playLog.last = [...playLog.last.slice(-9), rec];
+  try {
+    fetch('/api/playlog', { method: 'POST', headers: { 'content-type': 'application/json' },
+                            body: JSON.stringify(rec), keepalive: true }).catch(() => {});
+  } catch (e) { /* the record stays in playLog.last */ }
+}
+/* The cut onto `nseg` in buffer nv (advance, `rec` its cutLog entry): its hold, once its first
+ * frame is up after it went live. */
+function cutWatch(nv, nseg, rec) {
+  const c = playLog.cur;
+  if (!c) return;
+  c.cuts++;
+  const s = { rs: nv.readyState, seeking: nv.seeking, ahead: bufAhead(nv, shotBase(nseg)) };
+  rec.rs = s.rs;
+  rec.ahead_s = Math.round(s.ahead * 100) / 100;
+  if (typeof nv.requestVideoFrameCallback !== 'function') return;
+  const g = player.gen, t0 = rec.t;
+  let said = false;
+  const sayT = setTimeout(() => { if (g === player.gen && player.playing) { said = true; bufSay(true); } }, HOLD_SAY_MS);
+  const end = () => { clearTimeout(sayT); if (said) bufSay(false); };
+  const cb = (now, md) => {
+    if (g !== player.gen || playLog.cur !== c) { end(); return; }
+    if (nv.paused || !nv.classList.contains('live') || md.mediaTime < nseg.in - 0.25 * speedOf(nseg)) {
+      nv.requestVideoFrameCallback(cb);
+      return;
+    }
+    end();
+    rec.hold_ms = Math.max(0, Math.round((md.expectedDisplayTime || now) - t0));
+    holdNote('cut', rec.hold_ms, player.idx, s);
+  };
+  nv.requestVideoFrameCallback(cb);
+}
+/* A stall of the live buffer mid-play (its `waiting`): held until its next frame. */
+function stallWatch(v) {
+  if (v !== liveVideo() || !player.playing || player.off || !playLog.cur || v._stall) return;
+  const c = playLog.cur, g = player.gen;
+  const t0 = performance.now();
+  const s = { rs: v.readyState, seeking: v.seeking, ahead: bufAhead(v, v.currentTime) };
+  v._stall = true;
+  let said = false;
+  const sayT = setTimeout(() => { if (g === player.gen && player.playing) { said = true; bufSay(true); } }, HOLD_SAY_MS);
+  const cb = (now, md) => {
+    if (g !== player.gen || playLog.cur !== c) { clearTimeout(sayT); if (said) bufSay(false); v._stall = false; return; }
+    if (v.paused) { v.requestVideoFrameCallback(cb); return; }
+    clearTimeout(sayT);
+    if (said) bufSay(false);
+    v._stall = false;
+    holdNote('stall', (md.expectedDisplayTime || now) - t0, player.idx, s);
+  };
+  if (typeof v.requestVideoFrameCallback === 'function') v.requestVideoFrameCallback(cb);
+  else { clearTimeout(sayT); v._stall = false; }
+}
+
 /* The shot ended: stop, or hand over to the buffer that is holding the next one. */
 function advance() {
   const v = liveVideo();
@@ -3463,6 +3566,7 @@ function advance() {
     cancelAnimationFrame(player.raf);
     progPause();
     screenMsg('');
+    playLogEnd('end');
     if (!wasSingle) { sel = 0; player.idx = -1; paint(); }   // the end: space restarts
     paintTransport();
     return;
@@ -3551,6 +3655,7 @@ function advance() {
   }
   player.cutAt = null;
   player.cutLog = [...(player.cutLog || []).slice(-7), rec];
+  cutWatch(nv, nseg, rec);          // (wave 29 CUTHOLD) its hold, kept for the play's record
   // (wave 17 PLAY8) A rolled buffer at a plain cut goes up when the frame it shows at the next
   // display frame is the in's or later (frameShownAt), never one from before the in.
   const inFrame = (b) => {
@@ -7647,6 +7752,10 @@ async function boot() {
     // dimmed "buffering…" over a black box at a short shot); only a stall long enough to
     // notice gets the calm line under the picture.
     v.addEventListener('waiting', () => {
+      // (wave 29 CUTHOLD) a stall of the picture mid-play, for the play's record; the cut's own
+      // wait is the cut's hold (cutWatch)
+      const lc = (player.cutLog || []).slice(-1)[0];
+      if (!(lc && lc.buf === v.id && lc.hold_ms == null)) stallWatch(v);
       clearTimeout(v._stallT);
       v._stallT = setTimeout(() => {
         if (v === liveVideo() && player.playing && !player.off && (v.readyState < 3 || v.seeking)) monWait(true);

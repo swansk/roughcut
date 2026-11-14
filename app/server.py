@@ -48,6 +48,7 @@ import base64
 import contextlib
 import contextvars
 import ctypes
+import email.utils
 import gc
 import json
 import math
@@ -3246,6 +3247,56 @@ def api_debug_slow(heap: int = 0) -> JSONResponse:
                          "over_budget": list(OVER_BUDGET), "slow": list(SLOW)})
 
 
+PLAYLOG_DIR = "playback"
+PLAYLOG_MAX = 512 * 1024          # bytes kept per bin: the newest half when over
+
+
+def playlog_path() -> Path:
+    return STATE["work"] / PLAYLOG_DIR / f"{STATE['footage'].name}.jsonl"
+
+
+@app.post("/api/playlog")
+async def api_playlog_add(request: Request) -> JSONResponse:
+    """(wave 29 CUTHOLD) One play of the Program monitor, as the viewer's browser saw it
+    (app.js playLogEnd): when, how many cuts, the longest hold at a cut and the longest stall
+    mid-shot with why ('not loaded' / 'seeking' / 'decode'), and the holds over 200 ms. Kept
+    per bin (work/playback/<bin>.jsonl) so that "it froze" has a time and a number; never
+    read by the board itself."""
+    try:
+        rec = await request.json()
+    except ValueError:
+        raise HTTPException(400, "not JSON")
+    if not isinstance(rec, dict):
+        raise HTTPException(400, "not a record")
+    line = json.dumps({**rec, "got": round(time.time(), 1),
+                       "ua": (request.headers.get("user-agent") or "")[:160]})
+    if len(line) > 32_000:
+        raise HTTPException(413, "too long")
+    path = playlog_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(line + "\n")
+    if path.stat().st_size > PLAYLOG_MAX:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        path.write_text("\n".join(lines[len(lines) // 2:]) + "\n", encoding="utf-8")
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/playlog")
+def api_playlog(n: int = 20) -> JSONResponse:
+    """The last `n` plays' records (api_playlog_add), newest last."""
+    path = playlog_path()
+    if not path.exists():
+        return JSONResponse({"plays": []})
+    out = []
+    for line in path.read_text(encoding="utf-8").splitlines()[-max(1, min(200, n)):]:
+        try:
+            out.append(json.loads(line))
+        except ValueError:
+            continue
+    return JSONResponse({"plays": out})
+
+
 MADV_PAGEOUT = 21
 
 
@@ -5697,7 +5748,7 @@ def _json_bytes(content) -> bytes:
 SNAP_LAG_WAIT_S = 0.1
 IMPORT_SETTLE_S = 120.0
 # requests that change nothing a snapshot reads, or are the import itself: never a "write"
-SNAP_NOT_WRITES = ("/api/import", "/api/upload", "/api/playing", "/api/lut/",
+SNAP_NOT_WRITES = ("/api/import", "/api/upload", "/api/playing", "/api/playlog", "/api/lut/",
                    "/api/proxies/toast", "/api/snap", "/api/find", "/api/edits/preview",
                    "/api/assist/preview", "/api/export/sample", "/api/deep/quote",
                    "/api/index/price", "/api/certainty")
@@ -12616,25 +12667,38 @@ def ranged_file(path: Path, request: Request, mime: str | None = None,
     """
     if not path.exists():
         raise HTTPException(404, f"not found: {path.name}")
-    size = path.stat().st_size
+    st = path.stat()
+    size = st.st_size
     mime = mime or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    # (wave 29 CUTHOLD) Validators. `no-cache` stays (a proxy is rebuilt under the same URL:
+    # the range proxy, then the full one, a new rotation), but without an ETag or a
+    # Last-Modified nothing could be revalidated, so every play fetched every shot's bytes
+    # again: measured on Copper, the second play of the film over a throttled link took the
+    # same ~250 media answers and bytes as the first, none from the cache. With them a cached
+    # range comes back as a 304 (one round trip, no body), and a rebuilt file has a new tag.
+    tag = f'"{st.st_ino:x}-{st.st_mtime_ns:x}-{size:x}"'
+    base = {"accept-ranges": "bytes", "cache-control": "no-cache", "etag": tag,
+            "last-modified": email.utils.formatdate(st.st_mtime, usegmt=True)}
+    inm = request.headers.get("if-none-match")
+    if inm and (inm.strip() == "*" or tag in [t.strip() for t in inm.split(",")]):
+        return Response(status_code=304, headers=base)
     rng = request.headers.get("range")
+    if_range = request.headers.get("if-range")
+    if rng and if_range and if_range.strip() != tag and if_range.strip() != base["last-modified"]:
+        rng = None                                    # the cached part is of another file: all of it
     if not rng:
-        return FileResponse(path, media_type=mime,
-                            headers={"accept-ranges": "bytes", "cache-control": "no-cache"})
+        return FileResponse(path, media_type=mime, headers=base)
     span = parse_range(rng, size)
     if span is None:
         # An unparseable or unsatisfiable range: answer with the whole file rather than
         # a 416, which a media element treats as the file being broken.
-        return FileResponse(path, media_type=mime,
-                            headers={"accept-ranges": "bytes", "cache-control": "no-cache"})
+        return FileResponse(path, media_type=mime, headers=base)
     start, end = span
     if cap and re.fullmatch(r"\s*bytes=\s*\d+\s*-\s*", rng):
         end = min(end, start + cap - 1)               # open-ended: the element asks again
     return StreamingResponse(
         iter_range(path, start, end), status_code=206, media_type=mime, headers={
-            "content-range": f"bytes {start}-{end}/{size}",
-            "accept-ranges": "bytes", "cache-control": "no-cache",
+            **base, "content-range": f"bytes {start}-{end}/{size}",
             "content-length": str(end - start + 1),
         })
 

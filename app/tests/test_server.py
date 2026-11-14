@@ -8,6 +8,7 @@ degrades to streaming-from-zero — rather than toward coverage for its own sake
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -233,6 +234,32 @@ def test_media_plain_get_advertises_ranges(client):
     r = client.get("/media/proxy/CLIP_A.mp4")
     assert r.status_code == 200
     assert r.headers["accept-ranges"] == "bytes"
+
+
+def test_a_proxy_can_be_revalidated_and_a_rebuilt_one_is_new(client, project):
+    """(wave 29 CUTHOLD) Every answer carries an ETag and a Last-Modified, so the browser can
+    keep a proxy's bytes between plays (`no-cache` stays: a 304 is one round trip, no body);
+    a matching If-None-Match is a 304, a rebuilt file (new bytes under the same URL) a new tag,
+    and an If-Range naming another file's tag answers the whole new file, never a range of it."""
+    r = client.get("/media/proxy/CLIP_A.mp4", headers={"Range": "bytes=0-1023"})
+    assert r.status_code == 206
+    tag = r.headers["etag"]
+    assert tag and r.headers["last-modified"] and r.headers["cache-control"] == "no-cache"
+    assert client.get("/media/proxy/CLIP_A.mp4").headers["etag"] == tag
+    again = client.get("/media/proxy/CLIP_A.mp4", headers={"Range": "bytes=0-1023", "If-None-Match": tag})
+    assert again.status_code == 304 and again.content == b"" and again.headers["etag"] == tag
+    import server
+    path = server.STATE["proxy_dir"] / "CLIP_A.mp4"
+    old = path.read_bytes()
+    path.write_bytes(old + b"\0" * 16)                    # rebuilt under the same URL
+    os.utime(path, ns=(path.stat().st_atime_ns, path.stat().st_mtime_ns + 10**9))
+    try:
+        new = client.get("/media/proxy/CLIP_A.mp4", headers={"Range": "bytes=0-1023", "If-None-Match": tag})
+        assert new.status_code == 206 and new.headers["etag"] != tag
+        whole = client.get("/media/proxy/CLIP_A.mp4", headers={"Range": "bytes=10-20", "If-Range": tag})
+        assert whole.status_code == 200 and len(whole.content) == len(old) + 16
+    finally:
+        path.write_bytes(old)
 
 
 def test_media_range_past_end_is_clamped(client):
