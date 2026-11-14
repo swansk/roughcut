@@ -645,6 +645,7 @@ def _cut_out_facts(rec: dict) -> dict:
             "skipped": skipped, "ends": ends, "pattern": pattern, "draws": len(drawn)}
 
 
+@pytest.mark.timing
 @pytest.mark.parametrize("size", [(1440, 900), (1920, 1080)], ids=["1440", "1920"])
 def test_a_cut_out_of_a_half_speed_shot_holds_no_frame(slow_proj, slow_live, size):
     slow_proj["edl"].write_text(json.dumps(_cut_out_edl(), indent=1), encoding="utf-8")

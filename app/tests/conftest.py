@@ -43,6 +43,11 @@ def pytest_configure(config):
     # There is no pyproject/pytest.ini, so the marker for tests that need a real model
     # (skipped unless ROUGHCUT_LIVE=1) is registered here rather than warned about.
     config.addinivalue_line("markers", "live: needs the real model; run with ROUGHCUT_LIVE=1")
+    # 2026-11-14 (test tiers): frame-timing measurements in the software browser. They have
+    # flipped red/green with box load since Oct 20; a failure of one alone makes the gate's
+    # suite AMBER and named, never RED. A real playback regression still shows: by name, every run.
+    config.addinivalue_line("markers", "timing: frame-timing measurement in the software browser; "
+                                       "a failure alone is AMBER in the gate")
 
 
 @pytest.fixture(autouse=True)

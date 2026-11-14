@@ -519,6 +519,7 @@ def test_playing_through_an_ungraded_dissolve_has_no_hole(tx_project, tx_server)
     _check(rec)
 
 
+@pytest.mark.timing
 def test_playing_through_a_graded_dissolve_has_no_hole(tx_project, tx_server):
     rec, plain = _play(tx_project, tx_server, graded=True, plain=True)
     # the incoming shot's LUT was in before the window: none fetched while it played

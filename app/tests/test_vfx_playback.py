@@ -271,6 +271,7 @@ def _ps() -> str:
                           capture_output=True, text=True).stdout
 
 
+@pytest.mark.timing
 def test_a_sharpened_and_a_blurred_shot_play_with_no_hold(vp_server):
     """Verdict 12 punch 2's done: a graded shot with Sharpen 60, and one with Gaussian Blur 12,
     play with no hold over 67 ms on the frame clock at 1440 and 1920; the canvas wears no CSS

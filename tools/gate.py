@@ -12,7 +12,9 @@ Checks (each one line in summary.md, exit 0 only if all are green):
   browser  `playwright install chromium` with the suite's own Playwright, then one launch,
            so a Playwright bump never shows up as dozens of "flaky" browser tests. Red
            here means suite and screens are not run (they would only measure the box).
-  suite    pytest app/tests (API + real Chromium). A test that fails in the full run is
+  suite    pytest app/tests (API + real Chromium) on $ROUGHCUT_GATE_WORKERS processes (default 4,
+           pytest-xdist; 1 = serial). Tests marked @pytest.mark.timing that fail alone make it AMBER,
+           not RED (2026-11-14, test tiers). A test that fails in the full run is
            re-run alone; it counts as flaky (green, but named) only if it passes alone.
            The perf test (test_perf_latency::test_latency_under_load) is not in that run:
            it runs alone BEFORE the suite and again AFTER it (verdict 7 punch 3), each
@@ -91,6 +93,9 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = Path(os.environ.get("ROUGHCUT_LOOP", Path.home() / "roughcut-loop"))
 UV = ["uv", "run", "--with", "pytest", "--with", "fastapi", "--with", "uvicorn", "--with", "httpx",
       "--with", "numpy", "--with", "playwright", "pytest"]
+
+
+WORKERS = int(os.environ.get("ROUGHCUT_GATE_WORKERS", "4"))   # 2026-11-14: the suite in parallel
 
 
 def sh(*cmd: str, **kw) -> str:
@@ -397,6 +402,26 @@ def perf_after(snap: Path, run_dir: Path, env: dict, before: dict | None) -> tup
     return perf_run(snap, run_dir, env, "post"), waited
 
 
+def timing_tests(snap: Path) -> set[str]:
+    """`file::name` of every test marked @pytest.mark.timing in the frozen copy (2026-11-14,
+    test tiers): a failure of these alone makes the suite AMBER and named, not RED."""
+    out: set[str] = set()
+    for f in sorted((snap / "app" / "tests").glob("test_*.py")):
+        lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+        for i, line in enumerate(lines):
+            if line.strip() == "@pytest.mark.timing":
+                for nxt in lines[i + 1:i + 6]:
+                    m = re.match(r"\s*def\s+(test_\w+)", nxt)
+                    if m:
+                        out.add(f"app/tests/{f.name}::{m.group(1)}")
+                        break
+    return out
+
+
+def is_timing(tid: str, timing: set[str]) -> bool:
+    return tid.split("[")[0] in timing
+
+
 def run_status(results: list[tuple[str, bool, str]], amber: set[str]) -> tuple[str, int]:
     """GREEN (exit 0) only when every check is green and none is amber; AMBER (exit 2) when
     every check passed but one is not proven; else RED (exit 1)."""
@@ -563,9 +588,12 @@ def main() -> int:
         perf_before = perf_run(snap, run_dir, env, "pre")
         junit = run_dir / "suite.xml"
         suite = os.environ.get("ROUGHCUT_GATE_SUITE", "app/tests")
-        rc, suite_timed_out = run_soft(UV + [suite, "-q", "-p", "no:cacheprovider", f"--junitxml={junit}",
-                                          "--deselect", PERF_ID], snap, run_dir / "suite.log", env,
-                                       timeout=SUITE_TIMEOUT_S)
+        # 2026-11-14 (test tiers): the suite on WORKERS processes (pytest-xdist). Measured on 19 of
+        # the slowest files: 1,575 s serial, 580 s on 4, all 658 passing. 1 runs it serially.
+        par = (["--with", "pytest-xdist"] if WORKERS > 1 else [])
+        cmd = UV[:-1] + par + ["pytest", suite, "-q", "-p", "no:cacheprovider", f"--junitxml={junit}",
+                               "--deselect", PERF_ID] + (["-n", str(WORKERS)] if WORKERS > 1 else [])
+        rc, suite_timed_out = run_soft(cmd, snap, run_dir / "suite.log", env, timeout=SUITE_TIMEOUT_S)
         try:
             c = counts(junit) if junit.exists() else {"passed": 0, "failed": -1, "skipped": 0}
         except ET.ParseError:                     # a killed run leaves a half-written XML
@@ -585,6 +613,9 @@ def main() -> int:
             [("before the suite", perf_before), (after_label, perf_after_rec)], os.cpu_count() or 4)
         if not perf_ok and PERF_ID not in broken:
             broken.append(PERF_ID)
+        timing = timing_tests(snap)
+        timing_broken = [t for t in broken if is_timing(t, timing)]
+        broken = [t for t in broken if not is_timing(t, timing)]
         green = c["failed"] >= 0 and not broken and (rc == 0 or c["failed"] > 0) and not suite_timed_out
         line = (f"{c['passed']} passed, {c['failed']} failed in the full run, {c['skipped']} skipped"
                 f" · {len(flaky)} flaky (pass alone) · {len(broken)} broken · {time.time() - t0:.0f} s")
@@ -599,8 +630,11 @@ def main() -> int:
             line += "\n    flaky: " + ", ".join(flaky)
         if broken:
             line += "\n    BROKEN: " + ", ".join(broken)
+        if timing_broken:
+            line += ("\n    TIMING (frame-timing tests, AMBER not RED since 2026-11-14; look if the same one "
+                     "fails twice running): " + ", ".join(timing_broken))
         results.append(("suite", green, line))
-        if green and (perf_amber or suite != "app/tests"):
+        if green and (perf_amber or suite != "app/tests" or timing_broken):
             amber.add("suite")
 
     # ---- screens ----

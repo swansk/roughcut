@@ -219,6 +219,7 @@ def _fps(page, shot: int, window_ms: int, first_frames: int = 1) -> dict:
             "behind_after": b["behind"], "rate": a["rate"]}
 
 
+@pytest.mark.timing
 def test_full_draws_every_frame_of_a_59_94_shot_and_auto_caps_it_while_the_canvas_is_behind(res_server):
     import os
     cores = os.cpu_count() or 4

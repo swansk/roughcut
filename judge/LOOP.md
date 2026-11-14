@@ -36,6 +36,25 @@ STICKFIGHT loops (`Karl OS/sites/kswans-noita`, `kswans-stickfight/judge/`).
   verdict makes it count.
 - Budget: the box is shared with NOITA and STICKFIGHT loops; one judge at a time; heavy runs detached.
 
+## Test tiers (Karl, 2026-11-14: "Yes, tier the tests")
+
+Why: the full suite is 2,624 tests run one after another, ~75 min (4,394-4,487 s on 2026-11-13; ~32 h
+of full runs since Oct 13). Its time is spread flat (the slowest file is 157 s of 4,121), so nothing
+is cut out of it; it is run less often, and each change runs only what it can reach. The full
+suite stays: on 2026-11-13 it caught 11 real breaks from wave 28 that the quick gate missed.
+
+1. **Every change, by a lane or by hand: `python3 tools/fast.py`** (commit first). It picks the test
+   files the change reaches (a module's importers and its namesake tests, the server routes a changed
+   handler or helper serves, a static file's UI tests), runs them, then `tools/gate.py HEAD --quick`
+   (screens, journey, boot, understanding, hygiene, ~2 min). `--list` shows the pick and why; `-n 4`
+   runs it on 4 workers. A lane reports its `fast` result, not a full gate.
+2. **Once per wave, after the merges: the full gate** (`python3 tools/gate.py HEAD`, detached). Also
+   before a build is handed to Karl, before the preview restarts on a wave that touched the plan or
+   proposal flow, and always before main moves. Never more than one full gate at a time.
+3. **Timing tests** (`@pytest.mark.timing`: four frame-timing measurements in the software browser
+   that have flipped with box load since Oct 20) make the suite AMBER and named when they fail,
+   never RED. The same one failing on two full gates in a row is looked at as a real regression.
+
 ## Cadence (the 30-minute tick)
 
 A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a mandate:
@@ -44,7 +63,8 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 3. Otherwise: `python3 tools/gate.py HEAD --quick`; if green and no lane is in flight, launch the next
    judge (an Agent with `judge/JUDGE.md` as its brief and its verdict number), in the background.
 4. When a verdict lands: commit it, read its punch list, plan the next wave (lanes by file ownership,
-   top items first), launch the lanes, merge as they return, full gate, then the next tick judges it.
+   top items first), launch the lanes (each checks itself with `tools/fast.py`), merge as they return,
+   one full gate for the wave, then the next tick judges it.
 5. Stop when two consecutive verdicts PASS, or when Karl says stop. Update the State section every wave.
 
 ## State (newest first)
