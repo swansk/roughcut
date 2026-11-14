@@ -861,3 +861,13 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
   alone. NOT investigated: whether the 54 → 47 fps drop between Nov 9 and Nov 11 is a real slowdown (wave 23–25
   colour work) and whether any of it shows in a real Chrome with a GPU. foxtrot rebooted 07:31; `roughcut-redesign`
   is not enabled at boot, started by hand.
+
+- **2026-11-14 ~13:20 (wave 29 CUTHOLD, `7f17cc2`).** Karl: "sometimes playback freezes up between clips". Measured on
+  his 18-shot Copper cut: the cut's own player holds no cut on localhost, at 20 Mbit/s, under CPU load or a busy GPU
+  encoder. Two board faults found and fixed: the PROPOSAL player held 0.2–0.6 s with the sound stopped at every cut
+  over a 20 Mbit/s link (no preroll; wave 28 had just made Play use it whenever a proposal waits), and proxies could
+  not be cached (no validators; 151 MB re-fetched per play). Below ~10 Mbit/s the picture stalls mid-shot: Copper's
+  proxies are 4–7 Mbit/s; smaller proxies NOT built. The 54 → 47 fps "slowdown" is the Playwright Chromium update of
+  Nov 9 20:51 (1248 → 1254), no merge. Plays now log their longest hold and reason: `GET /api/playlog`,
+  `work/playback/<bin>.jsonl`. Not measured: his real Chrome over the real tunnel. Quick gate green; no full gate on
+  this tip.
