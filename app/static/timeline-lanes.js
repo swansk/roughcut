@@ -1213,13 +1213,23 @@
     const what = q('#playingWhat');
     const s = spd(seg);
     if (what) what.textContent = `proposal · ${nameOf(seg.clip)} ${tl.fmt(seg.in)}–${tl.fmt(seg.out)}${s === 1 ? '' : ` · ${round2(s)}×`}`;
+    const pbed = window.proposalBed;
     const step = () => {
-      if (token !== rangeGen || a.player.playing || v.dataset.src !== src) { if (rangeOn === token) rangeOn = 0; paintT(); return; }
-      setHead(filmFrom + Math.max(0, v.currentTime - seg.in) / s);
+      if (token !== rangeGen || a.player.playing || v.dataset.src !== src) {
+        if (rangeOn === token) rangeOn = 0;
+        // the bed: a newer range has it by now; else it goes back to the cut's play, or stops
+        if (pbed && token === rangeGen) pbed.stop(a.player.playing);
+        paintT();
+        return;
+      }
+      const filmT = filmFrom + Math.max(0, v.currentTime - seg.in) / s;
+      setHead(filmT);
+      if (pbed) pbed.tick(filmT, v.currentTime, seg);
       if (v.currentTime >= seg.out - 0.04 || v.ended) {
         v.pause();
         if (onEnd) onEnd();
         if (rangeOn === token) rangeOn = 0;      // (the next shot of a plan has its own token)
+        if (pbed && token === rangeGen) pbed.stop(false);   // nothing followed: the bed stops too
         paintT();
         return;
       }
@@ -1231,6 +1241,8 @@
       if (!(Math.abs(v.currentTime - seg.in) < 0.003)) v.currentTime = seg.in;
       v.play().catch(() => {});
       rangeOn = token;
+      // (2026-11-20) the proposal plays with its music: the cut's bed, or the one it brings
+      if (pbed) pbed.start(filmFrom, ghost ? ghost.ghosts.reduce((n, g) => n + tl.dur(g.seg), 0) : tl.total());
       paintT();
       step();
       if (next) setTimeout(() => { if (token === rangeGen && rangeOn === token) armRange(next); }, RANGE_ARM_MS);
@@ -1362,6 +1374,7 @@
   function stopRange() {
     rangeGen++;
     rangeOn = 0;
+    if (window.proposalBed) { const a0 = app(); window.proposalBed.stop(!!(a0 && a0.player && a0.player.playing)); }
     const liveVideo = fn('liveVideo');
     const a = app();
     const v = liveVideo ? liveVideo() : null;

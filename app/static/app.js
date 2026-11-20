@@ -5434,9 +5434,49 @@ function bindMusicAdd() {
   $('#musicPath').onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); musicAddPath(); } };
 }
 
-function trackInfo() {
-  return music ? tracks.find((t) => t.asset === music.asset) : undefined;
+function trackInfo(m = bedSpec()) {
+  return m ? tracks.find((t) => t.asset === m.asset) : undefined;
 }
+
+/* (2026-11-20) The bed the monitor plays: the cut's, or — while a proposal that brings its own
+ * bed plays from the Proposal lane — the proposal's, on the proposal's length. */
+let bedPreview = null;           // { spec, total } while the proposal's player has the bed
+function bedSpec() { return bedPreview ? bedPreview.spec : music; }
+
+window.proposalBed = {
+  /* the proposal's shot at film time `filmT` starts: the bed is there too */
+  start(filmT, totalS) {
+    const keep = $('#proposalMusicKeep');
+    const own = pendingPlan && pendingPlan.music && pendingPlan.music.asset && !music
+      && (!keep || keep.checked) ? pendingPlan.music : null;
+    const spec = own || music;
+    if (!spec || !bed.el) { bedPreview = null; return; }
+    bedPreview = { spec, total: totalS };
+    const go = () => {
+      const t = trackInfo();
+      if (!t || !bedPreview) return;
+      const el = bed.el;
+      const want = t.duration_s ? filmT % t.duration_s : filmT;
+      // the shot before ran into this one: no fade up again. The player ends each shot a
+      // frame early, so the bed is put back on the film's clock at the cut, where a
+      // 40 ms step is not heard, and the next cut still lands on its beat.
+      if (el.dataset.src === t.url && Math.abs(el.currentTime - want) < 0.5) {
+        if (Math.abs(el.currentTime - want) > 0.02) el.currentTime = want;
+        if (el.paused) el.play().catch(() => {});
+        return;
+      }
+      cueBed(filmT);
+    };
+    if (!tracks.some((t) => t.asset === spec.asset)) loadAssets().then(go); else go();
+  },
+  tick(filmT, clipT, seg) { if (bedPreview) bedTick(filmT, clipT, seg); },
+  /* the proposal's play ended or was stopped; `toCut`: the cut's own play took over */
+  stop(toCut) {
+    if (!bedPreview) return;
+    bedPreview = null;
+    if (toCut) cueBed(); else if (bed.el) bed.el.pause();
+  },
+};
 
 function paintMusic() {
   const sel = $('#musicTrack');
@@ -5462,7 +5502,7 @@ function paintMusic() {
   }
   // One status line (INTAKE M16 I16.4): what the track does under the cut when that is
   // worth knowing — it loops where it is shorter — and nothing when it is not.
-  const t = trackInfo();
+  const t = trackInfo(music);
   const len = total();
   let line = '';
   if (musicNote) line = musicNote;
@@ -5517,24 +5557,25 @@ function speechRegions(clip) {
  * down by the asked depth while anyone is talking, faded at the ends of the film. */
 function bedGainAt(filmT, clipT, seg) {
   const t = trackInfo();
-  if (!music || !t || !seg) return 0;
+  const m = bedSpec();
+  if (!m || !t || !seg) return 0;
   const clipLufs = ((P.clips[seg.clip] || {}).summary || {}).integrated_lufs ?? -16;
   const trackLufs = t.lufs ?? -14;
-  let db = ((music.bed_lufs ?? -24) - trackLufs) - (-16 - clipLufs);
-  if (music.duck && speechRegions(seg.clip).some(([lo, hi]) => clipT >= lo && clipT <= hi)) {
-    db -= music.duck_db;
+  let db = ((m.bed_lufs ?? -24) - trackLufs) - (-16 - clipLufs);
+  if (m.duck && speechRegions(seg.clip).some(([lo, hi]) => clipT >= lo && clipT <= hi)) {
+    db -= m.duck_db;
   }
   let g = Math.pow(10, db / 20);
-  const tot = total();
-  if (music.fade_in > 0) g *= Math.min(1, filmT / music.fade_in);
-  if (music.fade_out > 0) g *= Math.min(1, Math.max(0, tot - filmT) / music.fade_out);
+  const tot = bedPreview ? bedPreview.total : total();
+  if (m.fade_in > 0) g *= Math.min(1, filmT / m.fade_in);
+  if (m.fade_out > 0) g *= Math.min(1, Math.max(0, tot - filmT) / m.fade_out);
   return Math.max(0, Math.min(1, g));
 }
 
 /* Called every frame while the monitor plays. Fast down, slow up — 80ms / 900ms, the
  * render's envelope — so the bed reads as mixed rather than pumping. */
 function bedTick(filmT, clipT, seg) {
-  if (!bed.el || !music) return;
+  if (!bed.el || !bedSpec()) return;
   const target = bedGainAt(filmT, clipT, seg);
   const now = performance.now();
   const dt = Math.min(0.2, bed.last ? (now - bed.last) / 1000 : 0.016);
@@ -5542,6 +5583,26 @@ function bedTick(filmT, clipT, seg) {
   const tau = target < bed.gain ? 0.08 / 3 : 0.9 / 3;
   bed.gain += (target - bed.gain) * (1 - Math.exp(-dt / tau));
   bed.el.volume = Math.max(0, Math.min(1, bed.gain));
+  bedSync(filmT);
+}
+
+/* (2026-11-20) The bed kept on the film's clock. The <audio> runs on its own clock and every
+ * cut costs the picture a few milliseconds it does not cost the bed: measured on a 13-shot
+ * cut, 31 ms behind at the start and 118 ms by the seventh shot, where the export (one
+ * clock) has none. A cut made on a beat has to be heard on it. Past 30 ms the bed plays 4 %
+ * faster or slower until it is back within 10 (pitch kept, not heard); past 0.4 s it seeks. */
+function bedSync(filmT) {
+  const el = bed.el, t = trackInfo();
+  if (!el || !t || el.paused || el.seeking || el.readyState < 2) return;
+  const len = t.duration_s || 0;
+  const want = len ? filmT % len : filmT;
+  let d = el.currentTime - want;
+  if (len && Math.abs(d) > len / 2) d -= Math.sign(d) * len;     // either side of the loop
+  if (Math.abs(d) > 0.4) { el.currentTime = want; bed.fix = false; el.playbackRate = 1; return; }
+  if (!bed.fix && Math.abs(d) > 0.03) bed.fix = true;
+  else if (bed.fix && Math.abs(d) < 0.01) bed.fix = false;
+  const rate = bed.fix ? (d > 0 ? 0.96 : 1.04) : 1;
+  if (el.playbackRate !== rate) el.playbackRate = rate;
 }
 
 /* Start (or re-point) the bed at a film time. With no argument, at wherever the monitor
@@ -5550,7 +5611,7 @@ function cueBed(filmT) {
   const el = bed.el;
   if (!el) return;
   const t = trackInfo();
-  if (!music || !t) {
+  if (!bedSpec() || !t) {
     el.pause();
     if (el.dataset.src) { delete el.dataset.src; el.removeAttribute('src'); el.load(); }
     return;
@@ -6243,6 +6304,12 @@ function showProposal(plan) {
     ? `<div class="proposalColour" style="margin-bottom:8px"><span class="hint">colour</span>${
       (plan.colour_lines || ['a change to the grade']).map((l) => `<div style="color:var(--good)">± ${escapeHtml(l)}</div>`).join('')}</div>`
     : '';
+  // (2026-11-20) the bed a first cut brings with it, and how many cuts sit on its beats
+  const bedLine = plan.music && plan.music.asset
+    ? `<div class="proposalMusic" style="margin-bottom:8px"><span class="hint">music</span>${
+      (plan.music_lines || ['a music bed']).map((l) => `<div style="color:var(--good)">+ ${escapeHtml(l)}</div>`).join('')}${
+      `<label class="hint" style="display:block;margin-top:3px"><input type="checkbox" id="proposalMusicKeep" checked> add this music when I accept</label>`}</div>`
+    : '';
   const head = plan.unchanged
     ? `the cut unchanged — ${segs.length} shots ${fmt(oldTotal)}; only the colour changes`
     : `${segs.length} shots ${fmt(oldTotal)} → ${plan.segments.length} shots ${fmt(newTotal)}`;
@@ -6254,7 +6321,7 @@ function showProposal(plan) {
   if (window.tlLanes && tlLanes.redraw) tlLanes.redraw();     // the ghost lane, now
   // a cut's counts ride the title's line (.phead.up), so the table starts a line higher;
   // a colour-only proposal has no table and says it in full, in the flow
-  $('#proposalDiff').innerHTML = `<div class="phead${plan.unchanged ? '' : ' up'}">${head}</div>` + graded
+  $('#proposalDiff').innerHTML = `<div class="phead${plan.unchanged ? '' : ' up'}">${head}</div>` + graded + bedLine
     + (plan.unchanged ? '' : proposalTableHtml(plan, reviewable));
   const toggle = (k) => { if (window.tlLanes) tlLanes.setVerdict(k, !tlLanes.verdict(k)); };
   $('#proposalDiff').onclick = (e) => {
@@ -6631,6 +6698,10 @@ function acceptProposal(everything) {
   proposalStale = null;
   paintStale();
   const graded = !!(pendingPlan.colour && Object.keys(pendingPlan.colour).length);
+  // (2026-11-20) the proposal's own bed, unless its box was unticked or the cut has one by now
+  const keepBed = $('#proposalMusicKeep');
+  const bedToo = !!(pendingPlan.music && pendingPlan.music.asset && !music && (!keepBed || keepBed.checked))
+    ? { ...pendingPlan.music } : null;
   const cutToo = !pendingPlan.unchanged;
   const r = everything !== true && cutToo && window.tlLanes && tlLanes.reviewed
     ? tlLanes.reviewed(pendingPlan) : null;
@@ -6645,6 +6716,11 @@ function acceptProposal(everything) {
   if (graded) {
     colour = mergeColour(colour, pendingPlan.colour);
     tidyColour();
+  }
+  if (bedToo) {                    // inside the proposal's undo entry: the bed rides each entry
+    music = bedToo;
+    if (!tracks.some((t) => t.asset === music.asset)) loadAssets();
+    paintMusic();
   }
   pendingPlan = null;
   $('#proposal').style.display = 'none';

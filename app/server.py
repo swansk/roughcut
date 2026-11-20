@@ -99,6 +99,7 @@ from roughcut import media as mediamod  # noqa: E402
 from roughcut import limiter  # noqa: E402     # wave 23 FILM
 from roughcut import music as musicmod  # noqa: E402     # wave 24 DELIVER: the project's own music
 from roughcut import musiclib  # noqa: E402     # 2026-11-14: the shared library the AI picks from
+from roughcut import beats as beatsmod  # noqa: E402  # 2026-11-20: a first cut lands its cuts on the bed's beats
 from roughcut import verify as verifymod  # noqa: E402
 from roughcut import gpulock, localvlm  # noqa: E402     # wave 20 LOCALGPU: the 3080 as a stage
 from roughcut import speakers as speakersmod  # noqa: E402     # wave 20 DIARIZE: who said what
@@ -3397,7 +3398,8 @@ def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
              target: tuple[float, float], ranked: list[dict] | None = None,
              focus: int | None = None, *, locked: list[str] | None = None,
              finish: Callable[[dict], dict] | None = None,
-             originate: bool = False, new_clips: list[str] | None = None) -> None:
+             originate: bool = False, new_clips: list[str] | None = None,
+             music: bool | None = None) -> None:
     """The Ask's work, on its thread. The first pass (`/api/firstpass`) runs the same
     call: `locked` marks the shots a re-run must return exactly, `finish` turns the plan
     into the re-run's proposal (locks enforced, the per-shot diff) before it is checked
@@ -3409,7 +3411,7 @@ def _ask_job(job: str, segments: list[dict], clips: dict, story: str, note: str,
         with procscope.active(scope):      # Stop kills the `claude -p` writing the cut
             _ask_run(entry, job, segments, clips, story, note, target, ranked, focus,
                      locked=locked, finish=finish, originate=originate,
-                     new_clips=new_clips)
+                     new_clips=new_clips, music=music)
     finally:
         ASK_SCOPES.pop(job, None)
 
@@ -3418,7 +3420,8 @@ def _ask_run(entry, job: str, segments: list[dict], clips: dict, story: str, not
              target: tuple[float, float], ranked: list[dict] | None = None,
              focus: int | None = None, *, locked: list[str] | None = None,
              finish: Callable[[dict], dict] | None = None,
-             originate: bool = False, new_clips: list[str] | None = None) -> None:
+             originate: bool = False, new_clips: list[str] | None = None,
+             music: bool | None = None) -> None:
     # Step one is not the edit, it is the estimate. Karl: *"the first step the AI must
     # complete is an estimate of how long it will take to apply the changes. This will
     # (when estimate is complete) start a progress bar."* It is one cheap call on the
@@ -3514,6 +3517,14 @@ def _ask_run(entry, job: str, segments: list[dict], clips: dict, story: str, not
     plan = revise.to_sequence(plan, segments, rate,
                               {k: (v or {}).get("duration") for k, v in (clips or {}).items()
                                if isinstance(v, dict)})
+    # (2026-11-20) a first cut gets a bed and its cuts on the bed's beats; a line is never
+    # clipped for one. Before `finish`, so a re-run's diff is of the cut as proposed.
+    if focus is None:
+        try:
+            plan = plan_music(plan, segments, clips, story, note, hand, rate,
+                              first=bool(originate or not segments), pick=music)
+        except Exception as exc:  # noqa: BLE001: music never costs the editor the cut
+            print(f"  !! ask {job}: music step skipped: {type(exc).__name__}: {exc}", flush=True)
     if finish is not None:
         plan = finish(plan)
     over = sentencesmod.over_aim_line(sum(actionsmod.dur(x) for x in plan.get("segments") or []),
@@ -3565,6 +3576,90 @@ def _ask_run(entry, job: str, segments: list[dict], clips: dict, story: str, not
 # The model's own notes already say the cut runs past the target ("well over the project's
 # 108-132 s target"): the board does not say it a second time.
 _SAYS_OVER = re.compile(r"\b(over|past|beyond|longer than)\b[^.]{0,60}\b(target|aim)\b", re.I)
+
+
+# The bed the page's own "music" op starts from (app.js `bedAI.apply`): dips 12 dB under
+# talking, 8 dB under the film, a fade at each end.
+AUTO_BED = {"duck": True, "duck_db": 12, "bed_lufs": -24, "fade_in": 1.5, "fade_out": 4}
+_BEAT_ASK = re.compile(r"\b(on|to|with)\s+the\s+(beat|music|rhythm)\b|\bbeat[- ]?(sync|synced|match|matched)\b", re.I)
+_NO_MUSIC_ASK = re.compile(r"\b(no|without|don'?t (?:add|use)|skip the)\s+(any\s+)?music\b", re.I)
+BEAT_MIN_CONFIDENCE = 0.2          # under this the track has no steady beat to cut to
+
+
+def auto_music_on() -> bool:
+    return os.environ.get("ROUGHCUT_AUTO_MUSIC", "1").strip().lower() not in ("0", "off", "false", "no")
+
+
+def pick_bed(words: str, film_s: float) -> dict | None:
+    """The library track that best fits the film's own words and length, on this machine
+    (fetched if it is not yet): the catalogue row. None when the library has nothing."""
+    for t in musiclib.search(words, film_s, 6):
+        try:
+            musiclib.fetch(t)
+            return t
+        except (musiclib.LibraryError, OSError):
+            continue
+    return next((t for t in musiclib.search(words, film_s, 200) if musiclib.have(t)), None)
+
+
+def plan_music(plan: dict, current: list[dict] | None, clips: dict, story: str, note: str,
+               hand: set[str] | None, rate: float | None, *, first: bool,
+               pick: bool | None = None) -> dict:
+    """A plan with its music: on a FIRST cut of a film that has no bed, one from the
+    library (`plan["music"]`, the bed as the cut will carry it once accepted, and
+    `music_lines` for the proposal); and, on a first cut or when the note asks for it,
+    each cut moved onto a beat of the bed where no line is clipped by it
+    (`roughcut.beats.snap`; `plan["beats"]` says how many). Returns a new plan."""
+    segs = [s for s in plan.get("segments") or [] if isinstance(s, dict) and "in" in s and "out" in s]
+    if plan.get("unchanged") or len(segs) < 2 or len(segs) != len(plan.get("segments") or []):
+        return plan
+    film = sum(actionsmod.dur(x) for x in segs)
+    bed = (read_edl().get("effects_music") or None)
+    out = dict(plan)
+    words = " ".join(str(x or "") for x in (story, note))
+    may_pick = (first if pick is None else bool(pick)) and auto_music_on()
+    if not (bed and bed.get("asset")) and may_pick and not _NO_MUSIC_ASK.search(words):
+        t = pick_bed(" ".join((words, str(plan.get("notes") or ""))), film)
+        if t is not None:
+            bed = {"asset": musiclib.PREFIX + t["id"], **AUTO_BED}
+            out["music"] = bed
+            feel = ", ".join(t.get("feel") or [])
+            out["music_lines"] = [f"{t['title']} by Kevin MacLeod, from the music library"
+                                  + (f" ({feel.lower()})" if feel else "")
+                                  + ": under the film, dipping when people talk. "
+                                  "Change or remove it in the Audio tab."]
+    if not (bed and bed.get("asset")) or not (first or _BEAT_ASK.search(note or "")):
+        return out
+    try:
+        path = musicmod.resolve(bed["asset"], STATE["work"], STATE["footage"].name, STATE["assets"])
+    except (ValueError, FileNotFoundError):
+        return out
+    lib = musiclib.get(bed["asset"]) if musiclib.is_library(bed["asset"]) else None
+    try:
+        found = beatsmod.cached(path, (lib or {}).get("bpm") or None)
+    except (beatsmod.BeatError, OSError):
+        return out
+    if float(found.get("confidence") or 0.0) < BEAT_MIN_CONFIDENCE:
+        return out
+    grid = beatsmod.grid(found, film)
+
+    def problems(cut: list[dict]) -> set:
+        return {(p["shot"], p["kind"], tuple(p.get("sentence") or ()))
+                for p in sentencesmod.measure(cut, clips)["problems"]}
+    before = beatsmod.measure(segs, grid)
+    snapped, moved = beatsmod.snap(
+        segs, grid, hand=set(hand or ()), problems=problems, fps=rate,
+        durations={k: float(v["duration"]) for k, v in (clips or {}).items()
+                   if isinstance(v, dict) and v.get("duration")})
+    after = beatsmod.measure(snapped, grid)
+    out["beats"] = {"bpm": found.get("bpm"), "cuts": after["cuts"], "on": after["on"],
+                    "was": before["on"], "moved": len(moved)}
+    if moved:
+        out["segments"] = snapped
+    line = beatsmod.words(before, after, found.get("bpm"))
+    if line and (moved or _BEAT_ASK.search(note or "")):
+        out["notes"] = "\n\n".join(x for x in (str(out.get("notes") or "").strip(), line) if x)
+    return out
 
 
 def _hand_ids(segments: list[dict]) -> set[str]:
@@ -7065,7 +7160,9 @@ async def api_firstpass_post(request: Request) -> JSONResponse:
             "started": time.time(), "ask": None, "picks": None,
             "steps": {k: {"state": "pending"} for k in ("index", "picks", "cut")},
             "scope": procscope.Scope(f"first pass {job}"), "index_job": None,
-            "look_s": look_iv, "redo": redo}
+            "look_s": look_iv, "redo": redo,
+            # (2026-11-20) false: this pass adds no music; absent: a first cut gets a bed
+            "music": None if body.get("music") is None else bool(body.get("music"))}
     threading.Thread(target=_firstpass_job, args=(job,), daemon=True).start()
     return JSONResponse({"job": job, "mode": would["mode"], "keep": would["locked"],
                          "would": would, "target": would.get("target"),
@@ -7420,7 +7517,7 @@ def _firstpass_walk(job: str, fp: dict) -> None:
         _ask_job(ask, segments, clips, payload.get("story", ""), note,
                  (float(target[0]), float(target[1])), payload["events"], None,
                  locked=locked, finish=finish, originate=originate,
-                 new_clips=offered)
+                 new_clips=offered, music=fp.get("music"))
         entry = ASKS[ask]
         with FIRSTPASS_LOCK:
             if fp.get("cancel"):
