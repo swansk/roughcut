@@ -331,3 +331,26 @@ def test_to_the_beat_on_a_cut_already_there_changes_nothing_and_says_so():
 def test_the_prompt_tells_the_model_about_to_the_beat():
     from roughcut import actions
     assert '{"op":"to_the_beat"}' in actions.schema_text()
+
+
+def test_two_projects_do_not_get_the_same_music(tmp_path, monkeypatch):
+    """Among tracks that fit equally, the project's name settles which: stable per project."""
+    import server
+    from roughcut import musiclib
+    lib = tmp_path / "lib"
+    (lib / "files").mkdir(parents=True)
+    names = ["Alpha Hop", "Bravo Hop", "Charlie Hop", "Delta Hop"]
+    (lib / "catalog.json").write_text(json.dumps({"genres": {}, "pieces": [
+        {"title": n, "filename": f"{n}.mp3", "length": "00:03:00", "feel": "Bouncy, Bright", "bpm": "120",
+         "genre": "", "description": "", "instruments": ""} for n in names]}), encoding="utf-8")
+    for n in names:
+        (lib / "files" / f"{n}.mp3").write_bytes(b"ID3")
+    monkeypatch.setenv("ROUGHCUT_MUSIC_LIBRARY", str(lib))
+    musiclib._CACHE.clear()
+    try:
+        got = {salt: server.pick_bed("a bright film", 100.0, salt)["title"] for salt in
+               ("copper-02-2026", "killington-01-2026", "rogers", "chapel", "steamboat", "palisades")}
+        assert len(set(got.values())) >= 3, got
+        assert server.pick_bed("a bright film", 100.0, "copper-02-2026")["title"] == got["copper-02-2026"]
+    finally:
+        musiclib._CACHE.clear()

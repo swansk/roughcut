@@ -3590,10 +3590,23 @@ def auto_music_on() -> bool:
     return os.environ.get("ROUGHCUT_AUTO_MUSIC", "1").strip().lower() not in ("0", "off", "false", "no")
 
 
-def pick_bed(words: str, film_s: float) -> dict | None:
-    """The library track that best fits the film's own words and length, on this machine
-    (fetched if it is not yet): the catalogue row. None when the library has nothing."""
-    for t in musiclib.search(words, film_s, 6):
+PICK_WITHIN = 0.6                  # a track this close to the best fit is as good a choice
+
+
+def pick_bed(words: str, film_s: float, salt: str = "") -> dict | None:
+    """A library track that fits the film's own words and length, on this machine (fetched
+    if it is not yet): the catalogue row. Among the tracks that fit about as well as the
+    best one (`PICK_WITHIN`), which one is settled by `salt` (the project's name): the same
+    project always gets the same track, and two trips do not get the same music. None
+    when the library has nothing."""
+    ranked = musiclib.search(words, film_s, 8)
+    if not ranked:
+        return None
+    feels, genres = musiclib.asked_feels(words)
+    top = musiclib.score(ranked[0], feels, genres, film_s, words)
+    close = [t for t in ranked if musiclib.score(t, feels, genres, film_s, words) >= top - PICK_WITHIN]
+    k = int(hashlib.sha1(salt.encode("utf-8")).hexdigest(), 16) % len(close) if salt else 0
+    for t in close[k:] + close[:k] + [t for t in ranked if t not in close]:
         try:
             musiclib.fetch(t)
             return t
@@ -3633,7 +3646,7 @@ def plan_music(plan: dict, current: list[dict] | None, clips: dict, story: str, 
     words = " ".join(str(x or "") for x in (story, note))
     may_pick = (first if pick is None else bool(pick)) and auto_music_on()
     if not (bed and bed.get("asset")) and may_pick and not _NO_MUSIC_ASK.search(words):
-        t = pick_bed(" ".join((words, str(plan.get("notes") or ""))), film)
+        t = pick_bed(" ".join((words, str(plan.get("notes") or ""))), film, STATE["footage"].name)
         if t is not None:
             bed = {"asset": musiclib.PREFIX + t["id"], **AUTO_BED}
             out["music"] = bed
