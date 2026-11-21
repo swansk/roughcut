@@ -110,6 +110,9 @@ THE OPS (each maps to the human path named after the arrow)
                                                  (Add music…) or the repo's, its level in dB
                                                  against the film, "dip under talk" and its
                                                  depth, the fades; `remove` takes it off
+    to_the_beat   {}                         → each cut moved onto a beat of the bed (2026-11-20):
+                                                 written out as `roll` / `trim` ops before the
+                                                 review (assist.expand_beats), never into a line
   Export
     export        {preset, range: all|in_out, name?, size?, fps?, bitrate?}  → the Export
                                                  dialog's Export, its Frame Size / Frame
@@ -319,6 +322,7 @@ History
   {{"op":"take_back","n"}}                        take the cut back `n` of the AI's own accepted changes (1 = the latest, listed above as "changes on this cut"); a change by hand made after them is taken back with them. Use it alone for "put it back", "go back to before X"; one Undo cancels it
 Music
   {{"op":"music","track"?,"level"?,"duck"?,"duck_db"?,"fade_in"?,"fade_out"?,"remove"?}}   the music bed (Audio tab): `track` is one of the "Music tracks" listed above or a `library/<id>` from "Music library" (omit it to change the bed that is set), `level` its loudness in dB against the film's own sound ({MUSIC_LEVEL_MIN:g}..{MUSIC_LEVEL_MAX:g}; default -8, "keep it quiet" -12, "up a bit" -4), `duck` true to dip it under talking (the default) or false, `duck_db` how far it dips ({MUSIC_DUCK_MAX:g} at most, default 12), `fade_in` / `fade_out` seconds (0..20), `remove` true takes the bed off. "Add music … and keep it under the talking" is `track` plus `duck` true
+  {{"op":"to_the_beat"}}                          move every cut onto the nearest beat of the music bed (each cut by under half a second, never into a line; it arrives as ordinary roll / trim ops the editor reviews). Needs a bed: put a `music` op before it when the cut has none. Use it when the editor asks to cut to the beat / to the music / on the rhythm
 Index (a closer look at the footage; it changes no shot and takes no undo step)
   {{"op":"relook","interval_s","clips"}}   look at footage again, a frame every `interval_s` seconds (one of the stops listed under "What the index looked at"); `clips` is a list of clip names from that list, "all" (every clip) or "cut" (the clips the cut uses). The review says how long it takes and what it costs; it runs the Index panel's look as one job. NOT the colour `look` op. Use it only when the editor asks to look closer / more often / again; "what detail did you look at" is answered in words from the list, with no op
 Export
@@ -1617,6 +1621,12 @@ def _c_music(raw: dict, sim: _Sim, ph: str | None) -> tuple[dict, str]:
     return clean, head + (f" — {', '.join(bits)}" if bits else "")
 
 
+# `to_the_beat` is not an op the page applies: it is written out as rolls and trims before
+# the check (assist.expand_beats, roughcut/beats.py). One that reaches the check could not
+# be, and is refused with its own reason.
+WRITTEN_OUT = {"to_the_beat": "there is no music bed to cut to: add music first, then ask again"}
+
+
 CHECK = {
     "insert": _c_insert, "overwrite": _c_insert, "append": _c_append, "move": _c_move,
     "razor": _c_razor, "ripple_delete": _c_ripple_delete, "trim": _c_trim, "roll": _c_roll,
@@ -1651,6 +1661,8 @@ def _run(ops: Any, state: dict) -> tuple[list[dict], list[dict], list[str], _Sim
         try:
             if not isinstance(raw, dict):
                 raise Refused("not an op object")
+            if name in WRITTEN_OUT:
+                raise Refused(str(raw.get("why") or WRITTEN_OUT[name]))
             if name not in CHECK:
                 raise Refused(f"unknown op {name!r}")
             if len(accepted) >= MAX_OPS:

@@ -3602,6 +3602,20 @@ def pick_bed(words: str, film_s: float) -> dict | None:
     return next((t for t in musiclib.search(words, film_s, 200) if musiclib.have(t)), None)
 
 
+def bed_beats(asset: str, film_s: float) -> dict | None:
+    """`{"grid", "bpm"}` for a bed on a film `film_s` long (roughcut.beats.grid), or None
+    when the track is not here, cannot be read or has no steady beat."""
+    try:
+        path = musicmod.resolve(asset, STATE["work"], STATE["footage"].name, STATE["assets"])
+        lib = musiclib.get(asset) if musiclib.is_library(asset) else None
+        found = beatsmod.cached(path, (lib or {}).get("bpm") or None)
+    except (ValueError, FileNotFoundError, OSError, musiclib.LibraryError, beatsmod.BeatError):
+        return None
+    if float(found.get("confidence") or 0.0) < BEAT_MIN_CONFIDENCE:
+        return None
+    return {"grid": beatsmod.grid(found, film_s), "bpm": found.get("bpm"), "found": found}
+
+
 def plan_music(plan: dict, current: list[dict] | None, clips: dict, story: str, note: str,
                hand: set[str] | None, rate: float | None, *, first: bool,
                pick: bool | None = None) -> dict:
@@ -3630,18 +3644,10 @@ def plan_music(plan: dict, current: list[dict] | None, clips: dict, story: str, 
                                   "Change or remove it in the Audio tab."]
     if not (bed and bed.get("asset")) or not (first or _BEAT_ASK.search(note or "")):
         return out
-    try:
-        path = musicmod.resolve(bed["asset"], STATE["work"], STATE["footage"].name, STATE["assets"])
-    except (ValueError, FileNotFoundError):
+    got = bed_beats(bed["asset"], film)
+    if got is None:
         return out
-    lib = musiclib.get(bed["asset"]) if musiclib.is_library(bed["asset"]) else None
-    try:
-        found = beatsmod.cached(path, (lib or {}).get("bpm") or None)
-    except (beatsmod.BeatError, OSError):
-        return out
-    if float(found.get("confidence") or 0.0) < BEAT_MIN_CONFIDENCE:
-        return out
-    grid = beatsmod.grid(found, film)
+    found, grid = got["found"], got["grid"]
 
     def problems(cut: list[dict]) -> set:
         return {(p["shot"], p["kind"], tuple(p.get("sentence") or ()))
@@ -18775,6 +18781,7 @@ def assist_state(payload: dict | None = None) -> dict:
     looks = [k for k, v in looks_library().items() if v.get("kind") != "broken"]
     st = actionsmod.state_from(payload, looks=looks, presets=presets,
                                 tracks=list_assets().get("music") or [])
+    st["beats"] = bed_beats               # (2026-11-20) `to_the_beat`: the bed's beats on the film's clock
     try:
         st["relook"] = relook_state()
     except Exception as exc:  # noqa: BLE001 — an index that cannot be read costs the AI its relook, never the ask

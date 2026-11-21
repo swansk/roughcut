@@ -1015,6 +1015,7 @@ def run(text: str, scope: dict | None, state: dict, clips: dict,
     fixed_lines: list[str] = []
     if got["kind"] == "ops":
         got["ops"], fixed_lines = finish_op_lines(got["ops"], state, clips, text)
+        got["ops"], beat_line = expand_beats(got["ops"], state, clips)
         checked = actions.check(got["ops"], state)
         out.update(checked)
         if not out["summary"]:
@@ -1030,6 +1031,11 @@ def run(text: str, scope: dict | None, state: dict, clips: dict,
         out["text"] = got["text"]
     if out["kind"] == "ops" and out.get("ops"):
         out = honest_summary(out, text, bool(got.get("from_picture")), looked)
+        if beat_line:
+            said = out["summary"].rstrip()
+            said = said if not said or said.endswith((".", "!", "?")) else said + "."
+            out["summary"] = f"{said} {beat_line}".strip()
+            out["beats"] = beat_line
         if fixed_lines:
             out["line_fixes"] = fixed_lines
             n = len(fixed_lines)
@@ -1081,6 +1087,75 @@ def _typed(v: Any, typed: list[float]) -> bool:
         return any(abs(float(v) - t) < 0.005 for t in typed)
     except (TypeError, ValueError):
         return False
+
+
+def expand_beats(ops: Any, state: dict, clips: dict) -> tuple[Any, str | None]:
+    """`(ops, line)`: each `to_the_beat` written out as the `roll` / `trim` ops that put the
+    cut's edits on the beats of its bed (roughcut/beats.py `snap`, under the line rule), and
+    one line saying how many now are. The cut and the bed are the ones the ops before it
+    leave (a `music` op in the same answer counts). One that cannot be written out stays,
+    carrying `why`, and is refused with it. `state["beats"](asset, film_s)` is the server's:
+    the bed's beats on the film's clock as `{"grid", "bpm"}`, or None."""
+    if not isinstance(ops, list) or not any(isinstance(o, dict) and o.get("op") == "to_the_beat" for o in ops):
+        return ops, None
+    from . import beats as beatsmod
+    finder = state.get("beats")
+    out: list = []
+    line = None
+    for op in ops:
+        if not (isinstance(op, dict) and op.get("op") == "to_the_beat"):
+            out.append(op)
+            continue
+
+        def cannot(why: str) -> None:
+            out.append({"op": "to_the_beat", "why": why})
+        before, _ = actions.validate(out, state)
+        asset = (state.get("music") or {}).get("asset")
+        for o in before:
+            if o.get("op") == "music":
+                asset = None if o.get("remove") else o.get("track") or asset
+        segs = [s for s in actions.simulate(out, state)["segments"]
+                if isinstance(s, dict) and "in" in s and "out" in s]
+        if not asset:
+            cannot("there is no music bed to cut to: add music first, then ask again")
+            continue
+        if len(segs) < 2:
+            cannot("the film has no cut to move yet")
+            continue
+        film = sum(actions.dur(s) for s in segs)
+        try:
+            found = finder(asset, film) if callable(finder) else None
+        except Exception:  # noqa: BLE001: a bed that cannot be read is said, not raised
+            found = None
+        if not found or not found.get("grid"):
+            cannot("that music has no steady beat to cut to (or its file could not be read)")
+            continue
+
+        def problems(cut: list[dict]) -> set:
+            return {(p["shot"], p["kind"], tuple(p.get("sentence") or ()))
+                    for p in sentencesmod.measure(cut, clips)["problems"]}
+        was = beatsmod.measure(segs, found["grid"])
+        snapped, moved = beatsmod.snap(
+            segs, found["grid"], problems=problems, fps=state.get("fps") or None,
+            durations={k: float(v["duration"]) for k, v in (state.get("clips") or {}).items()
+                       if isinstance(v, dict) and v.get("duration")})
+        room = max(0, actions.MAX_OPS - len(before))
+        left = moved[room:]
+        moved = moved[:room]
+        if not moved:
+            cannot(f"{was['on']} of {was['cuts']} cuts are already on a beat; the others cannot move "
+                   "without clipping a line or running out of footage")
+            continue
+        for m in moved:
+            if m["how"] == "roll":
+                out.append({"op": "roll", "a": m["a"], "b": m["b"], "by": m["by"]})
+            else:
+                out.append({"op": "trim", "id": m["a"], "out": snapped[m["cut"]]["out"]})
+        now = was["on"] + len(moved)
+        line = (f"Cut to the music ({found.get('bpm') or 0:.0f} bpm): {now} of {was['cuts']} cuts land on a beat "
+                f"(was {was['on']}); none is moved into a line."
+                + (f" {len(left)} more can move: ask again." if left else ""))
+    return out, line
 
 
 def finish_op_lines(ops: Any, state: dict, clips: dict,

@@ -269,3 +269,65 @@ def test_the_line_rule_outranks_the_beat(client, library):
     plan = server.plan_music(json.loads(json.dumps(plan0)), [], clips, "", "", set(), 24.0, first=True)
     after = {(p["shot"], p["kind"]) for p in sentences.measure(plan["segments"], clips)["problems"]}
     assert after <= before
+
+
+# ------------------------------------------------------------------ the ask box's op
+
+def _state(**over) -> dict:
+    st = {
+        "segments": [{"id": "s1", "clip": "CLIP_A.MP4", "in": 1.0, "out": 4.2},
+                     {"id": "s2", "clip": "CLIP_B.MP4", "in": 1.0, "out": 3.9},
+                     {"id": "s3", "clip": "CLIP_C.MP4", "in": 1.0, "out": 5.1}],
+        "clips": {c: {"duration": 20.0} for c in ("CLIP_A.MP4", "CLIP_B.MP4", "CLIP_C.MP4")},
+        "fps": 24.0, "markers": [], "in": None, "out": None, "tracks": {}, "overlays": [],
+        "transitions": [], "colour": {}, "looks": [], "presets": {},
+        "music": {"asset": "music/bed.wav"},
+        "music_tracks": [{"asset": "music/bed.wav", "name": "bed.wav"}, {"asset": "music/other.wav", "name": "other.wav"}],
+        "beats": lambda asset, film: {"grid": GRID, "bpm": 120.0} if asset == "music/bed.wav" else None,
+    }
+    st.update(over)
+    return st
+
+
+QUIET = {c: {"transcript": [], "duration": 20.0} for c in ("CLIP_A.MP4", "CLIP_B.MP4", "CLIP_C.MP4")}
+
+
+def test_to_the_beat_arrives_as_rolls_the_editor_reviews():
+    from roughcut import actions, assist
+    st = _state()
+    ops, line = assist.expand_beats([{"op": "to_the_beat"}], st, QUIET)
+    assert [o["op"] for o in ops] == ["roll", "roll"] and "2 of 2 cuts land on a beat (was 0)" in line
+    checked = actions.check(ops, st)
+    assert checked["refused"] == [] and len(checked["ops"]) == 2
+    assert beats.measure(checked["preview"]["segments"], GRID)["on"] == 2
+    assert checked["lines"][0].startswith("Roll the edit between")
+
+
+def test_to_the_beat_without_a_bed_or_a_beat_says_why():
+    from roughcut import actions, assist
+    for st, word in ((_state(music=None), "no music bed"), (_state(music={"asset": "music/other.wav"}), "no steady beat")):
+        ops, line = assist.expand_beats([{"op": "to_the_beat"}], st, QUIET)
+        checked = actions.check(ops, st)
+        assert line is None and checked["ops"] == [] and word in checked["refused"][0]["why"]
+
+
+def test_to_the_beat_uses_the_bed_a_music_op_before_it_sets():
+    from roughcut import actions, assist
+    st = _state(music={"asset": "music/other.wav"})
+    ops, line = assist.expand_beats([{"op": "music", "track": "bed.wav"}, {"op": "to_the_beat"}], st, QUIET)
+    assert [o["op"] for o in ops] == ["music", "roll", "roll"] and line
+    assert actions.check(ops, st)["refused"] == []
+
+
+def test_to_the_beat_on_a_cut_already_there_changes_nothing_and_says_so():
+    from roughcut import actions, assist
+    st = _state(segments=[{"id": "s1", "clip": "CLIP_A.MP4", "in": 1.0, "out": 4.0},
+                          {"id": "s2", "clip": "CLIP_B.MP4", "in": 1.0, "out": 4.0}])
+    ops, _ = assist.expand_beats([{"op": "to_the_beat"}], st, QUIET)
+    why = actions.check(ops, st)["refused"][0]["why"]
+    assert "1 of 1 cuts are already on a beat" in why
+
+
+def test_the_prompt_tells_the_model_about_to_the_beat():
+    from roughcut import actions
+    assert '{"op":"to_the_beat"}' in actions.schema_text()
