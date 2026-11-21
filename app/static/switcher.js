@@ -469,7 +469,11 @@
     if (!path) return Promise.resolve({ ok: false, error: 'give the folder that holds your clips' });
     return move(() => send('/api/projects/open', { footage: path }),
                 (r) => `opened ${r.name}${r.edl_created ? ' · new film' : ''}`
-                  + (r.cut && !r.edl_created ? ` · ${r.cut}` : ''), { land: opts.land !== false });
+                  + (r.cut && !r.edl_created ? ` · ${r.cut}` : '')
+                  // (2026-11-20) a new film takes its subfolders' clips too, and says so
+                  + (r.nested ? ` · with ${r.nested.clips} clip${r.nested.clips === 1 ? '' : 's'} from ${
+                    r.nested.folders.length === 1 ? `the folder ${r.nested.folders[0]}` : `${r.nested.folders.length} folders inside it`}` : ''),
+                { land: opts.land !== false });
   }
 
   /* A place row (`footage`, `pass` or `cut`): its panel, in the editor (wave 17: the

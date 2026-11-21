@@ -399,3 +399,44 @@ def test_a_cut_named_on_the_command_line_stays_listed(tmp_path, project):
         == f"{bin_name}-tighter-2shots-preview.mp4"
     assert server.download_name({"cut": "main", "segments": 2}, Path("x.mp4"), None) \
         == f"{bin_name}-2shots-preview.mp4"
+
+
+def test_a_new_film_takes_the_clips_in_its_subfolders_and_says_so(tmp_path, project):
+    """2026-11-20, found on the first folder nobody had tuned on (`rogers`, Aug 2020: 11
+    clips beside a `toedit/` holding 19 more, the phone's two among them): the film was
+    started on 11 of 30 without a word. A NEW film takes its subfolders' clips as imports
+    referenced in place; a folder whose clips are all one level down (a camera's
+    DCIM/100GOPRO) opens; a film that already exists is not touched on reopening."""
+    import server
+
+    bin_ = project["footage"].parent / "nested-bin"
+    (bin_ / "toedit" / "deeper").mkdir(parents=True, exist_ok=True)
+    (bin_ / ".hidden").mkdir(exist_ok=True)
+    for p in (bin_ / "CLIP_A.MP4", bin_ / "toedit" / "CLIP_N.MP4", bin_ / "toedit" / "deeper" / "CLIP_A.MP4",
+              bin_ / ".hidden" / "CLIP_H.MP4"):
+        if not p.exists():
+            _make_clip(p)
+    only_sub = project["footage"].parent / "dcim-bin"
+    (only_sub / "100GOPRO").mkdir(parents=True, exist_ok=True)
+    if not (only_sub / "100GOPRO" / "CLIP_G.MP4").exists():
+        _make_clip(only_sub / "100GOPRO" / "CLIP_G.MP4")
+    with _fresh(tmp_path, project) as c:
+        r = c.post("/api/projects/open", json={"footage": str(bin_)})
+        assert r.status_code == 200, r.text
+        got = r.json()
+        assert got["edl_created"] is True and got["nested"]["clips"] == 2 and got["nested"]["folders"] == ["toedit"]
+        names = server.footage_clips()
+        assert len(names) == 3 and "CLIP_A.MP4" in names and "CLIP_N.MP4" in names
+        assert not any("CLIP_H" in n for n in names)                 # hidden folders stay out
+        # the same stem one level down keeps both: the second is named after its folder
+        assert any(n != "CLIP_A.MP4" and n.startswith("CLIP_A") for n in names), names
+        assert server.clip_path("CLIP_N.MP4") == bin_ / "toedit" / "CLIP_N.MP4"     # in place, not copied
+
+        r = c.post("/api/projects/open", json={"footage": str(only_sub)})
+        assert r.status_code == 200, r.text
+        assert r.json()["nested"] == {"clips": 1, "folders": ["100GOPRO"], "skipped": 0}
+        assert server.footage_clips() == ["CLIP_G.MP4"]
+
+        # reopening the first: its film exists, nothing is imported again
+        r = c.post("/api/projects/open", json={"footage": str(bin_)})
+        assert r.status_code == 200 and "nested" not in r.json() and len(server.footage_clips()) == 3

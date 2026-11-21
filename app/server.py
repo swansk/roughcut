@@ -19793,6 +19793,20 @@ def _count_videos(folder: Path) -> int:
         return 0
 
 
+def _nested_videos(folder: Path) -> list[Path]:
+    """The folder's own subfolders (not hidden) that hold a video somewhere under them."""
+    out = []
+    try:
+        kids = sorted(q for q in folder.iterdir() if q.is_dir() and not q.name.startswith("."))
+    except OSError:
+        return out
+    for d in kids:
+        files, _skipped = mediamod.scan([d], limit=1)
+        if files:
+            out.append(d)
+    return out
+
+
 def list_projects() -> dict:
     """The bins this board knows: every one it has opened (the registry) and every
     folder of video next to the current one (a trip's footage usually sits in one
@@ -19879,7 +19893,7 @@ async def api_projects_open(request: Request) -> JSONResponse:
     if not folder.is_dir():
         raise HTTPException(400, f"no such folder: {folder} — check the spelling, or pick it "
                                  "in the folder browser")
-    if not _count_videos(folder):
+    if not _count_videos(folder) and not _nested_videos(folder):
         raise HTTPException(400, f"no video files in {folder} — pick the folder that holds your "
                                  "clips ("
                                  + " ".join(sorted(VIDEO_SUFFIXES)) + ")")
@@ -19902,8 +19916,21 @@ async def api_projects_open(request: Request) -> JSONResponse:
         reg.clear()
     configure(edl, folder, None, STATE["work"],
               proxies=STATE.get("proxies_enabled", True), orient="auto")
+    # (2026-11-20) A folder's footage is everything under it. A NEW film takes the clips in its
+    # subfolders too (a camera's DCIM/100GOPRO, a "toedit" folder, the phone's own folder),
+    # as imports referenced in place, and says so; before, 19 of a 30-clip folder's clips were
+    # left out without a word. A film that already exists is left as its editor has it.
+    nested = None
+    if STATE["edl_created"]:
+        subs = _nested_videos(folder)
+        if subs:
+            got = await asyncio.to_thread(_import_paths, [str(d) for d in subs])
+            if got.get("added"):
+                nested = {"clips": len(got["added"]), "folders": [d.name for d in subs],
+                          "skipped": len(got.get("skipped") or [])}
     return JSONResponse({**list_projects()["current"],
-                         "edl_created": STATE["edl_created"]})
+                         "edl_created": STATE["edl_created"],
+                         **({"nested": nested} if nested else {})})
 
 
 # ---------------------------------------------------------------- the folder browser
