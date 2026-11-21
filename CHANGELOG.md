@@ -8,6 +8,7 @@ Every commit that changes behavior or documentation adds an entry under [Unrelea
 same commit. Releases move entries into a dated version section.
 
 ## [Unreleased]
+- docs: LOOP state, the first pass on a folder nobody tuned on (`rogers`, Aug 2020).
 - A new film takes the clips in its folder's subfolders (2026-11-20; found on the first folder nobody had tuned on, `rogers`, Aug 2020: 11 clips beside a `toedit/` with 19 more, both phone videos among them, and the film started on 11 of 30 without a word). POST /api/projects/open on a NEW film imports every video under the folder's (non-hidden) subfolders, referenced in place, answers `nested: {clips, folders}` and the page says "with 19 clips from the folder toedit"; a folder whose clips are all one level down (a camera's DCIM/100GOPRO) is no longer refused as "no video files"; an existing film is untouched on reopening. Test: `test_a_new_film_takes_the_clips_in_its_subfolders_and_says_so`.
 - docs: LOOP state for 2026-11-20 (cut to the music; the full gate's result on `095766a`).
 - The monitor's bed follows a J / L shuttle (2026-11-20): `bedSync` plays the bed at the film's pace (the live buffer's shuttle rate) before its small re-sync nudge, so a 2× shuttle no longer leaves the music at 1× (it would have been seeked every 0.4 s by the new re-sync).

@@ -92,6 +92,15 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
     (baseline), hygiene green. The three commits after `095766a` ran their own test files only.
   - The export is on the beat too: `Karl OS/Builds/Roughcut/copper-first-pass-with-music-2026-11-20.mp4` (2:06, 13
     shots, "Meatball Parade"); its picture cuts, found by scene detection in the file, sit 1-53 ms from a beat.
+  - **The folder nobody tuned on (FOR-KARL's "honest test"): `rogers`, Aug 2020, canoe + rock climbing above a
+    lake, 28 GoPro clips and 2 phone clips, no telemetry events, no brief given.** Found and fixed (`73e3740`): 19 of
+    its 30 clips sit in `toedit/` and the film started on 11 without a word; a new film now takes its subfolders'
+    clips and says so. Then index + first pass in about 10 minutes: 13 shots, 2:26 for a 2:00 aim (lines finished),
+    a story it stated ("the banter more than the climbing", Ethan's name as the spine, a callback ending on the
+    phone clip), "Chipper Doodle v2" with 11 of 12 cuts on a beat, six honest "things to check" (it flagged its own
+    weakest shot, 8: rope and rock). Frames looked at by the lead: every shot is in focus and on subject; no ski
+    heuristic leaked in. Film: `Karl OS/Builds/Roughcut/rogers-2020-first-pass-untuned-2026-11-20.mp4`. Not judged
+    by a person yet; the names it guessed (Max, Carl, Ethan, Sam) are from the transcript.
   - Not done, on purpose: a revision / re-run does not re-snap unless the note asks (typed times are exact; ask
     "cut it to the beat" after edits); no downbeat-only mode; the bed has no start offset; the first pass's
     panel has no "no music" tick (the proposal's box and the note are the ways).
