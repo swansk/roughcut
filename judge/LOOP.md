@@ -69,6 +69,32 @@ A cron tick every ~30 minutes runs this. A tick is an evaluation window, NOT a m
 
 ## State (newest first)
 
+- **2026-11-20 evening (Fable session; Karl: "tackle some of the harder problems… work closed loop, I am stepping
+  away").** Picked the one-shot film's missing piece from the 11-14 note (the first pass never picks music; no
+  beat-synced cutting). Built by hand, no lanes, on a private board (8780, `--work
+  /mnt/roughcut/space/roughcut-loop/fable/work`, a copy of the preview's Copper project; 8765 and 8766 untouched):
+  - `095766a` **a first cut picks its bed and lands its cuts on the beat, never in a line.** `roughcut/beats.py`
+    (numpy beat tracker: tempo right on 43 of 44 library tracks; `snap` = roll, else ripple, ≤ 0.45 s, under the
+    line rule, never a hand shot), `server.plan_music` (pick from the library by the film's words + length, snap,
+    say so in the notes), the proposal names the track with a box to leave it out, ▶ Play it plays the proposal
+    WITH its bed, Accept applies it in the same undo entry, `bedSync` keeps the monitor's bed on the film's clock
+    (it slipped 118 ms by the seventh shot). Karl's 18-shot Copper cut: 1/17 → 16/17 cuts on a beat, 0 new clipped
+    lines; a fresh Copper first pass: 11/12 with "Meatball Parade".
+  - `328598c` **"cut it to the beat" in the ask box**: op `to_the_beat`, written out as roll / trim ops before the
+    review (`assist.expand_beats`). Live: "add some upbeat fun music and cut the film to the beat" → 17 s, 17/17.
+  - Off switches: `ROUGHCUT_AUTO_MUSIC=0`, "no music" in the note, `music: false` on POST /api/firstpass.
+  - `b485a7e` the picked track is settled by the project's name (two trips differ); `fd62db6` the bed follows a
+    J / L shuttle.
+  - **Full gate on `095766a`: RED on paper, nothing new** (`~/roughcut-loop/gate-095766a-20261120T1859/summary.md`,
+    2257 s at load 9-14 with Screek's loop on the box): 2622 passed; 19 flaky that pass alone; 1 broken,
+    `test_preview_building::test_play_plays_past_a_building_shot_and_reaches_the_next`, which fails the same way on
+    the old snapshot `snap-7f17cc2` (pre-existing, not looked into); screens, journey, boot, understanding
+    (baseline), hygiene green. The three commits after `095766a` ran their own test files only.
+  - The export is on the beat too: `Karl OS/Builds/Roughcut/copper-first-pass-with-music-2026-11-20.mp4` (2:06, 13
+    shots, "Meatball Parade"); its picture cuts, found by scene detection in the file, sit 1-53 ms from a beat.
+  - Not done, on purpose: a revision / re-run does not re-snap unless the note asks (typed times are exact; ask
+    "cut it to the beat" after edits); no downbeat-only mode; the bed has no start offset; the first pass's
+    panel has no "no music" tick (the proposal's box and the note are the ways).
 - 2026-11-11 ~18:30: **Karl asked for the Copper project on a board he can open.** The Premiere editor's (`hands`)
   round-two project was copied into the preview's work folder as `copper-02-2026` (14 shots, 81.9 s, two titles, a
   grade on four shots; index, proxies, asks, renders with it) and 8766 now opens on it; Killington there is
