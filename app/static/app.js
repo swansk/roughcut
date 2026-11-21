@@ -5601,8 +5601,11 @@ function bedSync(filmT) {
   if (Math.abs(d) > 0.4) { el.currentTime = want; bed.fix = false; el.playbackRate = 1; return; }
   if (!bed.fix && Math.abs(d) > 0.03) bed.fix = true;
   else if (bed.fix && Math.abs(d) < 0.01) bed.fix = false;
-  const rate = bed.fix ? (d > 0 ? 0.96 : 1.04) : 1;
-  if (el.playbackRate !== rate) el.playbackRate = rate;
+  // the film's own pace first (a J / L shuttle plays it faster or slower), then the nudge
+  const lv = liveVideo();
+  const pace = Math.max(0.1, Math.min(4, (lv && lv.defaultPlaybackRate) || 1));
+  const rate = pace * (bed.fix ? (d > 0 ? 0.96 : 1.04) : 1);
+  if (Math.abs(el.playbackRate - rate) > 1e-3) el.playbackRate = rate;
 }
 
 /* Start (or re-point) the bed at a film time. With no argument, at wherever the monitor
@@ -5625,6 +5628,7 @@ function cueBed(filmT) {
   if (el.readyState >= 1) seek(); else el.addEventListener('loadedmetadata', seek, { once: true });
   bed.gain = 0;
   bed.last = 0;
+  bed.fix = false;
   el.volume = 0;
   el.play().catch(() => {});
 }
